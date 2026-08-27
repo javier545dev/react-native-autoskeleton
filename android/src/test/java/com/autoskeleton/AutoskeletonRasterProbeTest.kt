@@ -178,6 +178,25 @@ class AutoskeletonRasterProbeTest {
         assertEquals(0, probe.attemptedProbeCount)
     }
 
+    // MARK: - task 4.3's on-device validation gate (config flip)
+
+    @Test
+    fun refineWithDefaultArgumentsDoesNotTouchTheRasterProbeEither() {
+        // AutoskeletonRadiusLadderConfig.rasterProbeEnabledByDefault is false
+        // (task 4.3's on-device suite found R2 can never fire against a real RN
+        // view) — refine()'s own default must therefore behave identically to
+        // measure()'s R0->R1->R3 resolution, not merely "structurally able to"
+        // reach R2 if asked.
+        val fixture = SyntheticHierarchyBuilder.loadFixture("container-rule-no-leaves")
+        val root = SyntheticHierarchyBuilder.build(fixture)
+        val sensor = AutoskeletonSensor()
+        val probe = AutoskeletonRasterProbe()
+
+        val refined = sensor.refine(root, AutoskeletonSensorOptions.defaults.copy(budgetMs = 1000.0), probe)!!
+        assertEquals(0, probe.attemptedProbeCount)
+        assertTrue(refined.shapes.none { it.radiusSource == AutoskeletonRadiusSource.RASTER_PROBE })
+    }
+
     @Test
     fun refineRecoversRasterProbeSourcedRadiusForAConstantStateHavingBackground() {
         // NOT `gradientBackground`: `GradientDrawable.getOutline()` is well-behaved
@@ -196,7 +215,12 @@ class AutoskeletonRasterProbeTest {
         val sensor = AutoskeletonSensor()
         val probe = AutoskeletonRasterProbe()
 
-        val refined = sensor.refine(view, AutoskeletonSensorOptions.defaults.copy(budgetMs = 1000.0), probe)!!
+        val refined = sensor.refine(
+            view,
+            AutoskeletonSensorOptions.defaults.copy(budgetMs = 1000.0),
+            probe,
+            enableRasterProbe = true, // task 4.3's on-device gate defaults this to false
+        )!!
         assertTrue(probe.attemptedProbeCount > 0)
         assertTrue(refined.shapes.any { it.radiusSource == AutoskeletonRadiusSource.RASTER_PROBE })
     }

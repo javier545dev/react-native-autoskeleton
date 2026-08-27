@@ -130,3 +130,27 @@ class AutoskeletonRasterProbe(
         private val RADIUS_SCALE: Float = (2.0 + sqrt(2.0)).toFloat()
     }
 }
+
+/** Task 4.3's on-device validation gate (plan.md §6 ADR-2, §7.2b, §10).
+ *
+ * `rasterProbeEnabledByDefault = false`: the instrumented on-device suite
+ * (`AutoskeletonRadiusLadderInstrumentedTest`, run on a real emulator against real
+ * mounted RN views) confirmed `CompositeBackgroundDrawable.getConstantState()`
+ * returns `null` on-device exactly as it does under Robolectric (task 4.2's
+ * finding) — for EVERY tested radius case (0, 4, 12, 24, 9999/pill). R2's own
+ * documented skip condition ("Skipped when getConstantState() returns null...
+ * raise radius-probe-failed and fall to R3") therefore applies to every real
+ * production shape, every time: R2 cannot be validated as recovering any radius
+ * because it never gets to attempt a probe at all against RN's real background
+ * drawable on this RN version.
+ *
+ * Per plan.md §10's already-defined fallback, this is a config flip, not a
+ * redesign: the ladder collapses to R0 -> R1 -> R3, identical to what task 4.2
+ * shipped and to `measure()`'s own resolution — degraded but honest, the library
+ * still ships. Flip this back to `true` (or pass `enableRasterProbe = true`
+ * directly to `AutoskeletonSensor.refine()`) only after a future RN version is
+ * re-validated against the instrumented suite and found to expose a
+ * `ConstantState`-having background drawable. */
+object AutoskeletonRadiusLadderConfig {
+    const val rasterProbeEnabledByDefault: Boolean = false
+}

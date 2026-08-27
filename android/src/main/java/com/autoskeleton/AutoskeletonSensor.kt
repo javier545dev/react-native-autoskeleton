@@ -61,12 +61,19 @@ class AutoskeletonSensor(
         root: View,
         options: AutoskeletonSensorOptions = AutoskeletonSensorOptions.defaults,
         rasterProbe: AutoskeletonRasterProbe = AutoskeletonRasterProbe(),
+        enableRasterProbe: Boolean = AutoskeletonRadiusLadderConfig.rasterProbeEnabledByDefault,
     ): AutoskeletonSensorResult? {
-        rasterProbe.beginTraversal()
-        val refinedOptions = options.copy(
-            radiusResolver = AutoskeletonFullLadderRadiusResolver(rasterProbe, options.defaultRadius),
-        )
-        return measure(root, refinedOptions)
+        val resolver = if (enableRasterProbe) {
+            rasterProbe.beginTraversal()
+            AutoskeletonFullLadderRadiusResolver(rasterProbe, options.defaultRadius)
+        } else {
+            // ADR-2's documented fallback (plan.md §6/§10), a real tested config
+            // flip, not a paragraph: R2 disabled -> the ladder collapses to
+            // R0 -> R1 -> R3, identical to `measure()`'s own resolution. See
+            // `AutoskeletonRadiusLadderConfig`'s doc for why `false` is the default.
+            AutoskeletonPublicApiRadiusResolver(options.defaultRadius)
+        }
+        return measure(root, options.copy(radiusResolver = resolver))
     }
 
     /** Orientation / font-scale invalidation channel (REQ-NAV-1). RTL is
