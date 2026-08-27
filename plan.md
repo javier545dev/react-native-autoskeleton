@@ -744,6 +744,25 @@ sees the transport.
 
 ### ADR-2 — Android corner radius → **public-API degradation ladder; internal-class access rejected**
 
+> **OUTCOME, measured on a real device 2026-08-27 (API 36, RN 0.87.1).** R2 is DEAD and ships
+> disabled: `CompositeBackgroundDrawable.getConstantState()` returns `null` on a real device, so
+> the raster probe attempted zero probes across radii 0/4/12/24/9999. R1 resolves ONLY the square
+> case (exact 0.0); every rounded radius fell through to R3 `default`. The ladder therefore
+> operates as R0 -> R1 -> R3 in practice, flipped via
+> `AutoskeletonRadiusLadderConfig.rasterProbeEnabledByDefault = false` with a tested opt-in.
+>
+> Two literal details of this ADR were wrong and are corrected in the shipped code:
+> R1's "operate on a copy" is unreachable (`getConstantState()` is null), so R1 reads the live
+> drawable through the read-only `getOutline()` query — the same way `View`'s own default
+> implementation does; and `Outline.RADIUS_UNDEFINED` is `Float.NEGATIVE_INFINITY`, not `-1`, so
+> all code checks `>= 0` rather than comparing a sentinel.
+>
+> **Product consequence:** the typed `radius` hint is the PRIMARY Android mechanism for rounded
+> content, not a fallback. Recorded in `spec.md` §1.1 as a measured limitation, and it is why
+> REQ-OBS-BUDGET-2 (radius-fallback share warning) exists — on Android the `default` rung covers
+> essentially every rounded shape, so that warning is the only thing that makes the degradation
+> visible rather than silent.
+
 **Context.** The brief (§2) verified against RN 0.87.1 that the originally planned mechanism does not
 exist as usable API: `CSSBackgroundDrawable` was removed; `CompositeBackgroundDrawable` and
 `BackgroundDrawable` are Kotlin `internal` (`…Drawable.kt:27`), so a third-party Kotlin library cannot

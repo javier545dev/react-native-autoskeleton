@@ -40,14 +40,52 @@ render shimmer placeholders matching the detected frames before the first paint 
 - THEN the leaves are rendered as individual shapes and the container's own shape is omitted
 - AND if the subtree contains no detectable leaves, the container's own shape is rendered instead
 
-#### Scenario: Android corner radius — observable requirement, mechanism unresolved
+#### Scenario: Android corner radius — RESOLVED BY ON-DEVICE MEASUREMENT (2026-08-27)
 - GIVEN a native Android view with a rounded background
 - WHEN the sensor detects that view as a shape
 - THEN the rendered skeleton rect MUST use the view's actual corner radius when the runtime can
-  determine it, through whichever mechanism `plan.md`'s ADR selects
-- AND WHEN the radius cannot be determined, the system MUST degrade to a defined fallback radius
-  (typed `radius` hint or `SkeletonProvider.defaultRadius`) and MUST emit probe-miss telemetry
-  identifying the affected shape — silent radius-0 degradation with no signal is a defect
+  determine it, via the ADR-2 ladder R0 (typed `radius` hint) -> R1 (`Outline.getRadius()`) ->
+  R3 (`SkeletonProvider.defaultRadius`)
+- AND WHEN the radius cannot be determined, the system MUST degrade to the defined fallback and
+  MUST record the rung in `radiusSourceHistogram` — silent radius-0 degradation with no signal
+  is a defect
+
+**MEASURED LIMITATION — Android cannot recover the radius of a rounded RN view through any
+public API.** Instrumented on a real device (API 36, density 2.625, RN 0.87.1) against the
+production `BackgroundStyleApplicator`:
+
+| requested radius | rung that resolved | value |
+|---|---|---|
+| 0 | R1 `Outline` | 0.0 exact |
+| 4 | R3 `default` | 0.0 |
+| 12 | R3 `default` | 0.0 |
+| 24 | R3 `default` | 0.0 |
+| 9999 (pill) | R3 `default` | 0.0 |
+
+R1 succeeds ONLY for the square case: `getOutline()` calls `outline.setPath(...)` for rounded
+views, leaving `Outline.getRadius()` at `RADIUS_UNDEFINED` (`Float.NEGATIVE_INFINITY`) with no
+public path getter. R2 (raster corner probe) attempted zero probes because
+`CompositeBackgroundDrawable.getConstantState()` returns `null` on a real device; it ships
+DISABLED by default with a tested opt-in.
+
+- Scenario: rounded Android view WITHOUT a `radius` hint
+  - GIVEN an Android view with a 12 dp corner radius and no `radius` hint
+  - WHEN the sensor measures it
+  - THEN the shape resolves through R3 to `SkeletonProvider.defaultRadius`
+  - AND `radiusSourceHistogram.default` is incremented for that shape
+  - AND a development warning fires once the `default` rung exceeds the configured share of a
+    screen's shapes (REQ-OBS-BUDGET-2)
+- Scenario: rounded Android view WITH a `radius` hint
+  - GIVEN the same view with `radius={12}`
+  - WHEN the sensor measures it
+  - THEN the shape resolves through R0 with the exact hinted radius
+  - AND `radiusSourceHistogram.hint` is incremented
+
+**CONSEQUENCE FOR THE PRODUCT PROMISE:** "faithful shapes with no manual annotation" holds fully
+on web and iOS. On Android it is DEGRADED for rounded content unless the developer supplies a
+`radius` hint or sets a global `SkeletonProvider.defaultRadius`. The typed `radius` hint is
+therefore the PRIMARY radius mechanism on Android for rounded content, not a fallback. This
+asymmetry MUST be documented prominently in the README, not buried in an API table.
 
 ### 1.2 Virtualized lists — sub-case 1: initial load (empty list)
 
@@ -361,6 +399,27 @@ the outline of every detected shape, annotated with its index, source type
 **REQ-OBS-BUDGET-1**: In development builds, the system MUST emit a warning with an actionable
 suggestion when traversal exceeds the configured time budget (default 2 ms) or when shape count
 exceeds the configured budget (default 60 shapes per screen). Budgets MUST be configurable.
+
+The warning MUST be emitted from the real measurement path. A formatter that is unit-tested in
+isolation but never invoked by a sensor does NOT satisfy this requirement: the acceptance
+criterion is that a developer running the example app actually sees the warning.
+
+**REQ-OBS-BUDGET-2** (added 2026-08-27, driven by the Android measurement in §1.1): In
+development builds, the system MUST emit a warning with an actionable suggestion when the
+`default` rung of `radiusSourceHistogram` exceeds a configurable share of a screen's shapes
+(default 30%). The suggestion MUST name the remedy — supply `radius` hints, or set
+`SkeletonProvider.defaultRadius` to match the design.
+
+This is not a nice-to-have. On Android the `default` rung will account for essentially every
+rounded shape, so this warning is the only mechanism that turns an invisible visual degradation
+into something the developer can see and act on.
+
+#### Scenario: radius fallback exceeds the configured share
+- GIVEN an Android screen where 18 of 20 detected shapes resolve through the `default` rung
+- WHEN traversal completes in a development build
+- THEN a development-only warning is logged citing 18/20 (90%), the 30% threshold, and the
+  actionable remedy
+- AND the warning does NOT fire when the share is at or below the threshold
 
 #### Scenario: Traversal exceeds the default time budget
 - GIVEN a screen traversal takes 3.4 ms with default budgets
