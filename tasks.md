@@ -144,13 +144,13 @@ plan.md §7 preamble).
       directly; underlies `onMetrics.cacheHit` correctness downstream. **Performance**: NFR-4
       (<0.2 ms p95 sync lookup) — a Vitest micro-benchmark (1000-iteration p95) as a fast local
       guard; authoritative gate is 9.1. Deps: 1.2. Complexity: L. Example app: none/unit-only.
-- [ ] **1.4** RED→GREEN `src/core/lines.ts` — collapsed-text line synthesis (N rects, height =
+- [x] **1.4** RED→GREEN `src/core/lines.ts` — collapsed-text line synthesis (N rects, height =
       lineHeight, width 60–85% variance, `lines` hint honored).
       **Tests**: `lines.test.ts` — no-hint default, hinted count, width bounds, height equality.
       **Observability**: tags synthesized shapes `source:'synthetic-line'` in the dev sidecar
       (§4.4). **Performance**: N/A standalone; folded into traversal budget once called from
       sensors (Phase 2–4). Deps: 1.2. Complexity: S. Example app: none/unit-only.
-- [ ] **1.5** RED→GREEN `src/core/clip-path.ts` — union-of-rounded-rects → SVG `path()` string,
+- [x] **1.5** RED→GREEN `src/core/clip-path.ts` — union-of-rounded-rects → SVG `path()` string,
       reused by the web renderer (2.2) and the capture CLI (8.1).
       **Tests**: `clip-path.test.ts` — single rect, overlapping rects, `r=-1`→`defaultRadius`
       substitution, RTL mirroring. **Observability**: N/A, pure geometry. **Performance**: N/A
