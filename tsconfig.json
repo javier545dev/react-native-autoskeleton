@@ -12,7 +12,12 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "jsx": "react-jsx",
-    "lib": ["ESNext"],
+    // "DOM"/"DOM.Iterable" are required by `src/web/**` (task 2.1+): the DOM
+    // sensor and CSS renderer are real browser-DOM code by design (ADR-4
+    // scopes the "zero platform imports" rule to `src/core/` only, not the
+    // whole tree). `src/core/**` never references a DOM global, so adding
+    // these ambient types repo-wide is inert for it.
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "noEmit": true,
