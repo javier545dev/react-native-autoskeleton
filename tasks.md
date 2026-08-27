@@ -235,12 +235,28 @@ plan.md §7 preamble).
       "missed node" diagnostic scenario. **Observability**: this task IS REQ-OBS-OVERLAY-1's web
       deliverable. **Performance**: N/A, dev-only, tree-shaken from production (verified by 2.5).
       Deps: 2.3. Complexity: M. Example app: Vite.
-- [ ] **2.5** PARTIAL — RED→GREEN web packaging — Vite consumer bundle build, `<5 kB gzip` assertion
-      (NFR-6, spec Open Question 5 assumption: **failing gate**) measured on the built bundle;
-      extend 0.6's packaging test to assert `index.web.js`'s transitive graph excludes native/Skia
-      /Reanimated specifiers (closes the web-entry portion of the RISK-5 detector).
-      **Tests**: `test/packaging/web-bundle.test.ts` (Vitest, reads Vite build output).
-      **Observability**: N/A, packaging test. **Performance**: NFR-6, hard failing CI gate.
+- [x] **2.5** RED→GREEN web packaging — Vite consumer bundle build, `<8 kB gzip` assertion (NFR-6,
+      **REVISED 2026-08-27 from 5 kB to 8 kB by maintainer decision** — the 5 kB figure was never
+      validated against an implementation; measured reality is 7566 B, dominated by product code,
+      not bloat — spec.md NFR-6, plan.md §11 item 5) measured on the built bundle; extends 0.6's
+      packaging test to assert `index.web.js`'s transitive graph excludes native/Skia/Reanimated
+      specifiers (closes the web-entry portion of the RISK-5 detector).
+      Closed in two parts: (a) the NFR-6 gate itself, now GREEN at the revised 8 kB budget
+      (measured 7566 B before, 7421 B after part (b)); (b) `ShapeStore.export()`/`.import()` split
+      out of `MemoryShapeStore`'s hot-path class into opt-in free functions
+      (`src/core/snapshot-io.ts`'s `exportShapeStore`/`importIntoShapeStore`) — correct regardless
+      of the budget, since a bundler cannot tree-shake individual class methods and this was riding
+      SSR-only serialization code into every web bundle. `plan.md` §3.3's `ShapeStore` contract
+      updated to match, documented as a Phase 2 revision.
+      Also fixed, orchestrator-found packaging defect: `npm pack` shipped 52 compiled test
+      artifacts (`.test.js`/`.test.d.ts`) because `package.json`'s `files` key excluded
+      `**/__tests__` but Phase 1 co-located tests as `src/core/*.test.ts`. Fixed via additional
+      `files` glob exclusions; verified 0 test artifacts in the tarball. Added a RISK-5 assertion
+      (`test/packaging/entries.test.ts`) covering this, taken RED against the broken state first.
+      **Tests**: `test/packaging/web-bundle.test.ts` (Vitest, reads Vite build output);
+      `test/packaging/entries.test.ts`'s new "no test artifacts" assertion.
+      **Observability**: N/A, packaging test. **Performance**: NFR-6, hard failing CI gate — GREEN
+      at 8 kB (measured 7421 B gzip).
       Deps: 2.4, 0.6. Complexity: M. Example app: Vite.
       **Status**: transitive-graph extension DONE and GREEN (`lib/module` + `lib/commonjs`
       `index.web.js`, real recursive walk, not just the entry file). The NFR-6 gzip assertion itself
