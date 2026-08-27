@@ -138,13 +138,16 @@ describe('RISK-5 packaging detector (entries.test.ts) — RED until 5.6', () => 
   });
 
   describe('web-facing transitive import graph excludes native/Skia/Reanimated specifiers', () => {
-    const bannedSpecifiers = [
-      'react-native',
-      '@shopify/react-native-skia',
-      'react-native-reanimated',
-    ];
+    // Task 2.5 (tasks.md Phase 2): "extend 0.6's packaging test to assert
+    // index.web.js's transitive graph excludes native/Skia/Reanimated
+    // specifiers". A single entry file's OWN specifiers are not its
+    // transitive graph — `index.web.js` re-exports from `./web/AutoSkeleton`,
+    // which itself imports `../core/*` and further `./web/*` files. This
+    // walks every relative import reachable from the entry, across the whole
+    // resolved file set, which is what "transitive" actually requires.
+    const bannedSpecifiers = ['react-native', '@shopify/react-native-skia', 'react-native-reanimated'];
 
-    function collectRequireSpecifiers(filePath: string): string[] {
+    function collectSpecifiers(filePath: string): string[] {
       const source = readFileSync(filePath, 'utf8');
       const specifiers: string[] = [];
       const importRe = /(?:require\(|from\s+)['"]([^'"]+)['"]/g;
@@ -153,6 +156,41 @@ describe('RISK-5 packaging detector (entries.test.ts) — RED until 5.6', () => 
         specifiers.push(match[1]!);
       }
       return specifiers;
+    }
+
+    /** Resolves a relative specifier to a real file within `dir`, trying
+     *  every shape builder-bob's per-file transpile output uses: the
+     *  specifier as-is (it already includes `.js`, e.g. `./web/AutoSkeleton.
+     *  js`), `<path>.js`, and `<path>/index.js`. Returns `undefined` for a
+     *  bare (non-relative) specifier — those are exactly what the
+     *  banned-specifier check below inspects directly, without trying to
+     *  resolve them on disk. */
+    function resolveRelative(fromFile: string, specifier: string): string | undefined {
+      if (!specifier.startsWith('.')) {
+        return undefined;
+      }
+      const base = path.resolve(path.dirname(fromFile), specifier);
+      const candidates = [base, `${base}.js`, path.join(base, 'index.js')];
+      return candidates.find((c) => existsSync(c));
+    }
+
+    function walkTransitiveSpecifiers(entryFile: string): { allSpecifiers: Set<string>; visitedFiles: number } {
+      const visited = new Set<string>();
+      const allSpecifiers = new Set<string>();
+      const queue = [entryFile];
+      while (queue.length > 0) {
+        const file = queue.shift()!;
+        if (visited.has(file)) continue;
+        visited.add(file);
+        for (const specifier of collectSpecifiers(file)) {
+          allSpecifiers.add(specifier);
+          const resolved = resolveRelative(file, specifier);
+          if (resolved && !visited.has(resolved)) {
+            queue.push(resolved);
+          }
+        }
+      }
+      return { allSpecifiers, visitedFiles: visited.size };
     }
 
     it('lib/module/index.web.js exists so its import graph can be inspected', () => {
@@ -165,9 +203,26 @@ describe('RISK-5 packaging detector (entries.test.ts) — RED until 5.6', () => 
       ).toBe(true);
       if (!existsSync(entry)) return;
 
-      const specifiers = collectRequireSpecifiers(entry);
+      const { allSpecifiers, visitedFiles } = walkTransitiveSpecifiers(entry);
+      // A real transitive walk over a non-trivial component graph (sensor +
+      // renderer + component + several core modules) MUST visit more than
+      // just the single entry file — this guards against the walk silently
+      // degrading back into a same-file-only check.
+      expect(visitedFiles).toBeGreaterThan(1);
       for (const banned of bannedSpecifiers) {
-        expect(specifiers).not.toContain(banned);
+        expect(Array.from(allSpecifiers)).not.toContain(banned);
+      }
+    });
+
+    it('lib/commonjs/index.web.js transitive graph also excludes them', () => {
+      const entry = tarballPath('lib/commonjs/index.web.js');
+      expect(existsSync(entry), 'lib/commonjs/index.web.js does not exist yet (created in task 2.3)').toBe(true);
+      if (!existsSync(entry)) return;
+
+      const { allSpecifiers, visitedFiles } = walkTransitiveSpecifiers(entry);
+      expect(visitedFiles).toBeGreaterThan(1);
+      for (const banned of bannedSpecifiers) {
+        expect(Array.from(allSpecifiers)).not.toContain(banned);
       }
     });
   });
