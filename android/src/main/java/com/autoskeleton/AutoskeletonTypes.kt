@@ -115,12 +115,15 @@ object AutoskeletonNoRadiusResolver : AutoskeletonRadiusResolver {
  *  because neither needs a degradation ladder at all). */
 data class AutoskeletonSensorOptions(
     val hints: AutoskeletonHintRegistry = AutoskeletonEmptyHintRegistry(),
-    val budgetMs: Double = 2.0,
-    val maxShapes: Int = 60,
+    val budgetMs: Double = AUTOSKELETON_DEFAULT_BUDGET_MS,
+    val maxShapes: Int = AUTOSKELETON_DEFAULT_MAX_SHAPES,
     val defaultRadius: Float = 0f,
     val defaultLineHeight: Float = 20f,
     val collectDebugSidecars: Boolean = true,
     val radiusResolver: AutoskeletonRadiusResolver = AutoskeletonNoRadiusResolver,
+    /** REQ-OBS-BUDGET-2: mirrors `SkeletonProvider.radiusFallbackShare` on web —
+     *  see `AutoskeletonObservability.kt`. */
+    val radiusFallbackShare: Float = AUTOSKELETON_DEFAULT_RADIUS_FALLBACK_SHARE,
 ) {
     companion object {
         val defaults = AutoskeletonSensorOptions()

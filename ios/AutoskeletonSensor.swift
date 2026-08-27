@@ -25,13 +25,21 @@ import UIKit
 // count, exactly as the TS contract already provides.
 final class AutoskeletonSensor {
     private let tracing: AutoskeletonTracing
+    private let warnings: AutoskeletonWarningEmitter
 
-    init(tracing: AutoskeletonTracing = AutoskeletonSignpostTracing()) {
+    init(tracing: AutoskeletonTracing = AutoskeletonSignpostTracing(), warnings: AutoskeletonWarningEmitter = AutoskeletonSystemWarningEmitter()) {
         self.tracing = tracing
+        self.warnings = warnings
     }
 
     /// COLD PATH. Synchronous. Returns `nil` when `root` has zero size (not laid out
     /// yet) — mirrors `Sensor.measure`'s "target is not laid out yet" contract.
+    ///
+    /// Task G.3 (tasks.md, observability gap closure, post-Phase-4) / spec.md
+    /// REQ-OBS-BUDGET-1/2: `measure()` is the REAL traversal path on iOS — dev
+    /// warnings are emitted from here, gated by `#if DEBUG` (the same
+    /// compile-time mechanism established for `AutoskeletonDebugOverlay`, task
+    /// 3.3), not merely produced by a formatter unit-tested in isolation.
     func measure(root: UIView, options: AutoskeletonSensorOptions = .defaults) -> AutoskeletonSensorResult? {
         guard root.bounds.width > 0, root.bounds.height > 0 else {
             return nil
@@ -44,12 +52,51 @@ final class AutoskeletonSensor {
         let traversalMs = (CACurrentMediaTime() - startedAt) * 1000
         tracing.end("AutoskeletonTraversal", token: token)
 
+        #if DEBUG
+        emitDevWarnings(shapes: shapes, traversalMs: traversalMs, degraded: ctx.degraded, options: options)
+        #endif
+
         return AutoskeletonSensorResult(
             shapes: shapes,
             traversalMs: traversalMs,
             degraded: Array(ctx.degraded)
         )
     }
+
+    #if DEBUG
+    /// REQ-OBS-BUDGET-1/2, dev-only. `AutoskeletonTraversalContext.reserveCapacity`
+    /// truncates AT `maxShapes`, so a completed traversal's own `shapes.count`
+    /// can never literally exceed `maxShapes` — the real `.shapeCapReached`
+    /// degradation flag (set exactly when a shape beyond the cap was genuinely
+    /// rejected) is the authoritative trigger instead, feeding a
+    /// `maxShapes + 1` lower-bound count — a real, honest "at least" fact
+    /// derived from the real rejection, not fabricated data. Exactly mirrors
+    /// the web (G.1/G.2) and Android (G.3) wiring.
+    private func emitDevWarnings(
+        shapes: [AutoskeletonShapeInfo],
+        traversalMs: Double,
+        degraded: Set<AutoskeletonDegradationFlag>,
+        options: AutoskeletonSensorOptions
+    ) {
+        let shapeCountForBudgetCheck = degraded.contains(.shapeCapReached) ? options.maxShapes + 1 : shapes.count
+        autoskeletonEmitWarnings(
+            autoskeletonCheckBudgets(
+                traversalMs: traversalMs,
+                shapeCount: shapeCountForBudgetCheck,
+                budgetMs: options.budgetMs,
+                maxShapes: options.maxShapes
+            ).warnings,
+            to: warnings
+        )
+        autoskeletonEmitWarnings(
+            autoskeletonCheckRadiusFallback(
+                radiusSources: shapes.map(\.radiusSource),
+                threshold: options.radiusFallbackShare
+            ).warnings,
+            to: warnings
+        )
+    }
+    #endif
 
     /// Orientation / Dynamic Type (font scale) invalidation channel (REQ-NAV-1).
     /// RTL is intentionally NOT observed here: iOS does not re-run the app in a new

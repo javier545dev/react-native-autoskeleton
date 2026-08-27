@@ -336,7 +336,12 @@ plan.md §7 preamble).
       RN behavior so a future RN fix is caught, plan.md §7.2b); R3 fallback + flag emission;
       `radiusSourceHistogram` correctness for every rung — **mandatory in every rung** per this
       session's brief. **Observability**: `radiusSourceHistogram` for `hint`/`outline`/`default`;
-      dev warning when `default` exceeds 30% of a screen's shapes. **Performance**: N/A directly —
+      dev warning when `default` exceeds 30% of a screen's shapes. **CORRECTED (session
+      2026-08-27, G.3)**: that dev-warning claim was NOT actually delivered by this task — only the
+      `radiusSourceHistogram` DATA existed; no `Log.w`/warning-emission code path existed anywhere
+      in `android/` until task G.3 implemented and wired `AutoskeletonObservability.kt` into the
+      real `AutoskeletonSensor.measure()` traversal. See G.3 below for the real deliverable, its
+      in-context tests, and why this line went unnoticed for three phases. **Performance**: N/A directly —
       resolution runs inside 4.1's already-budgeted traversal. Deps: 4.1. Complexity: M. Example
       app: bare RN + Expo.
 - [x] **4.3** **R2 on-device validation task (gated, proposal not fact).** Raster corner probe
@@ -419,26 +424,56 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       layer capable of exercising it on this platform. **Observability**: this task IS the
       REQ-OBS-BUDGET-2 deliverable on web. **Performance**: N/A, dev-only. Deps: G.1, 4.2.
       Complexity: S. Example app: Vite (any web consumer).
-- [ ] **G.3** (tracked, NOT implemented this session — scope boundary) Wire the equivalent
-      REQ-OBS-BUDGET-1/REQ-OBS-BUDGET-2 warnings on iOS and Android. **Investigated and
-      confirmed**: neither native platform has ANY warning-emission mechanism today — no
-      `Log.w`/`println` anywhere under `android/src/main/java/com/autoskeleton/`, no
-      `os_log`/`NSLog`/`print` anywhere under `ios/`. Both platforms already compute the
-      equivalent degradation data (`budgetMs`/`maxShapes` truncation with
-      `budget-exceeded`/`shape-cap-reached` flags; Android's per-shape `radiusSource` feeding what
-      would be a `radiusSourceHistogram`) but never emit a developer-facing warning from it — the
-      SAME dead-code failure mode as REQ-OBS-BUDGET-1's original JS-side gap, just never wired on
-      native either. **This does NOT require the Phase 5 Turbo Module bridge** — a same-process
-      native log write (`Log.w`/`os_log`) needs no JS round-trip, unlike an `onMetrics` JS
-      callback. Left unimplemented this session because (a) the requesting brief scoped exactly
-      two items and explicitly said not to start Phase 5, and (b) a correct implementation needs
-      new Kotlin/Swift logic plus JUnit/XCTest coverage under strict TDD across two platforms —
-      real, non-trivial new work, not a wiring fix. **Corrects task 4.2's Observability claim**
-      ("dev warning when default exceeds 30% of a screen's shapes") — no such warning exists in
-      the shipped Android code; only the histogram-feeding data does. Deps: 4.2, 3.1 (iOS radius
-      data — iOS resolves radius exactly via `layer.cornerRadius`, so `'default'` is likewise
-      expected to be rare/absent there; unverified this session). Complexity: S–M (a native log
-      line + threshold check per platform, plus tests). Example app: bare RN (both platforms).
+- [x] **G.3** RED→GREEN wire the equivalent REQ-OBS-BUDGET-1/REQ-OBS-BUDGET-2 warnings on iOS and
+      Android, from the REAL traversal path on each platform — `AutoskeletonSensor.measure()` is
+      that path on both (no higher-level JS-triggered call site exists yet; that is Phase 5's job,
+      and this task does NOT need it, confirmed: a same-process `Log.w`/`os_log` write needs no JS
+      round-trip). New `AutoskeletonObservability.kt`/`AutoskeletonObservability.swift` — pure
+      `checkBudgets`/`checkRadiusFallback`/formatters ported 1:1 from `src/core/metrics.ts`'s
+      thresholds and `>`-not-`>=` semantics (2ms budget, 60-shape cap, 30% radius-fallback share),
+      plus an injectable `AutoskeletonWarningEmitter` seam (mirrors `AutoskeletonTracing`'s
+      pattern: `Log.w`/`Logger.warning` in production, a recording double in tests). Wired into
+      `AutoskeletonSensor.measure()` on both platforms, reusing the SAME `shape-cap-reached`-flag
+      -> `maxShapes+1` lower-bound trick G.1 established on web (a completed, capped traversal can
+      never literally report a count `>` maxShapes).
+      **Android dev-gate**: runtime `ApplicationInfo.FLAG_DEBUGGABLE` check inside `measure()`
+      (the mechanism task 4.5 established for the debug overlay — a published AAR is a single
+      already-compiled variant, so a compile-time strip is not available to it).
+      **iOS dev-gate**: `#if DEBUG` around the emission call site in `measure()` (task 3.3's
+      mechanism). Scoped narrower than 3.3's whole-type strip: the warning logic is a lightweight
+      logging seam like `AutoskeletonTracing` (always compiled, always testable), not a full UI
+      subsystem — only the call site inside `measure()` is compile-time-gated, so a Release build
+      never invokes it.
+      **iOS radius-fallback claim VERIFIED this session (previously stated as unverified)**:
+      inspected `AutoskeletonSensor.swift` directly — `radiusSource` is unconditionally `.measured`
+      in `leafShapes` (there is no ladder; `layer.cornerRadius` always returns a concrete value).
+      There is NO code path anywhere in the iOS sensor that ever assigns `.defaultValue`. The
+      REQ-OBS-BUDGET-2 positive-fire branch is therefore PROVABLY UNREACHABLE via any real `UIView`
+      traversal on iOS — not "rare", genuinely impossible by construction, same category of finding
+      as web's G.2 result. The iOS wiring is DEFENSIVE (matches ADR-2: "iOS reports the same
+      histogram so consumers see Android degradation instead of guessing"); its positive-fire
+      branch is validated at the pure-function layer only, the sole layer that can exercise it here.
+      **Tests, all driving the REAL sensor through a REAL traversal, never a formatter in
+      isolation** (the brief's explicit acceptance criterion): Android —
+      `AutoskeletonSensorObservabilityTest.kt` (5 cases: real time-budget trip via `budgetMs=-1`;
+      real shape-cap trip via `maxShapes=1`; a REAL radius-fallback positive fire built from 10 real
+      `View`s through the REAL `AutoskeletonPublicApiRadiusResolver` R0/R1/R3 ladder — 8 rounded
+      unhinted leaves resolve `DEFAULT`, 2 hinted leaves resolve `HINT`, genuinely 80% > 30%; a
+      no-false-positive case with real square-background `OUTLINE` leaves; a dev-gate suppression
+      case proving `FLAG_DEBUGGABLE=false` silences a real trip) plus
+      `AutoskeletonObservabilityTest.kt` (10 pure-function cases mirroring `metrics.test.ts`,
+      including the exactly-at-30%-does-NOT-fire edge case). iOS —
+      `AutoskeletonSensorObservabilityTests.swift` (4 cases: real time-budget and shape-cap trips;
+      a real-traversal radius-fallback silence proof even at an aggressive `radiusFallbackShare: 0`,
+      mirroring web G.2's Playwright case; a no-false-positive case) plus
+      `AutoskeletonObservabilityTests.swift` (10 pure-function cases, the ONLY layer that exercises
+      the positive radius-fallback branch on iOS). **Corrects task 4.2's Observability claim**
+      ("dev warning when default exceeds 30% of a screen's shapes") in place, above — no such
+      warning existed in the shipped Android code before this task; only the histogram-feeding data
+      did. **Observability**: this task IS the REQ-OBS-BUDGET-1/2 deliverable on iOS and Android —
+      a developer running either native example app now genuinely sees the warning.
+      **Performance**: N/A, dev-only, gated out of Release/non-debuggable builds on both platforms.
+      Deps: 4.2, 3.1. Complexity: S–M. Example app: bare RN (both platforms).
 
 ## Phase 5: Bridge (`getShapes` Turbo Module, ADR-1) + Skia/Reanimated tier-2 renderer
 

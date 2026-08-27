@@ -1,6 +1,7 @@
 package com.autoskeleton
 
 import android.content.ComponentCallbacks2
+import android.content.pm.ApplicationInfo
 import android.content.res.Configuration
 import android.graphics.Rect
 import android.view.View
@@ -25,8 +26,18 @@ import com.facebook.react.views.textinput.ReactEditText
 // specific piece of complexity — independently testable and independently
 // degradable per plan.md §10 ("removing a rung is a config change, not a
 // redesign").
+//
+// Task G.3 (tasks.md, observability gap closure, post-Phase-4) / spec.md
+// REQ-OBS-BUDGET-1/2: `measure()` is the REAL traversal path on Android — there
+// is no higher-level JS-triggered call site yet (that is Phase 5's Turbo Module
+// bridge job), so this IS the equivalent of web's `useColdMeasurement` for the
+// purpose of "a developer running the example app actually sees the warning".
+// Dev-gated by the RUNTIME `ApplicationInfo.FLAG_DEBUGGABLE` check (established
+// task 4.5, `AutoskeletonDebugOverlayFactory.isDebugBuild`), not a compile-time
+// flag — a published AAR is a single already-compiled variant.
 class AutoskeletonSensor(
     private val tracing: AutoskeletonTracing = AutoskeletonSystemTracing(),
+    private val warnings: AutoskeletonWarningEmitter = AutoskeletonSystemWarningEmitter(),
 ) {
     /** COLD PATH. Synchronous. Returns `null` when `root` has zero size (not laid
      *  out yet) — mirrors `Sensor.measure`'s "target is not laid out yet"
@@ -43,7 +54,40 @@ class AutoskeletonSensor(
         val traversalMs = (System.nanoTime() - startedAtNanos) / 1_000_000.0
         tracing.end(TRAVERSAL_TRACE_SECTION)
 
+        if ((root.context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            emitDevWarnings(shapes, traversalMs, ctx.degraded, options)
+        }
+
         return AutoskeletonSensorResult(shapes, traversalMs, ctx.degraded.toList())
+    }
+
+    /** REQ-OBS-BUDGET-1/2, dev-only. `dom-sensor.ts`'s `pushShape`-equivalent here
+     *  is [TraversalContext.reserveCapacity]: it truncates AT `maxShapes`, so a
+     *  completed traversal's own `shapes.size` can never literally exceed
+     *  `maxShapes` — the real [AutoskeletonDegradationFlag.SHAPE_CAP_REACHED] flag
+     *  (set exactly when a shape beyond the cap was genuinely rejected) is the
+     *  authoritative trigger instead, feeding a `maxShapes + 1` lower-bound count
+     *  — a real, honest "at least" fact derived from the real rejection, not
+     *  fabricated data. Exactly mirrors the web wiring (G.1/G.2). */
+    private fun emitDevWarnings(
+        shapes: List<AutoskeletonShapeInfo>,
+        traversalMs: Double,
+        degraded: Set<AutoskeletonDegradationFlag>,
+        options: AutoskeletonSensorOptions,
+    ) {
+        val shapeCountForBudgetCheck = if (degraded.contains(AutoskeletonDegradationFlag.SHAPE_CAP_REACHED)) {
+            options.maxShapes + 1
+        } else {
+            shapes.size
+        }
+        autoskeletonEmitWarnings(
+            autoskeletonCheckBudgets(traversalMs, shapeCountForBudgetCheck, options.budgetMs, options.maxShapes).warnings,
+            warnings,
+        )
+        autoskeletonEmitWarnings(
+            autoskeletonCheckRadiusFallback(shapes.map { it.radiusSource }, options.radiusFallbackShare).warnings,
+            warnings,
+        )
     }
 
     /** Task 4.3 / plan.md ADR-2 rung R2, §7.2b: the off-interaction-frame

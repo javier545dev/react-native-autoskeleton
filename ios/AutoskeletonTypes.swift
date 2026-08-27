@@ -88,6 +88,15 @@ struct AutoskeletonSensorOptions {
     let defaultRadius: CGFloat
     let defaultLineHeight: CGFloat
     let collectDebugSidecars: Bool
+    /// REQ-OBS-BUDGET-2: mirrors `SkeletonProvider.radiusFallbackShare` on web —
+    /// see `AutoskeletonObservability.swift`. `var` (not `let`) is load-bearing
+    /// here: Swift's synthesized memberwise initializer only accepts an
+    /// argument for a stored property with an inline default value when that
+    /// property is mutable — a `let` with an inline default is baked in and
+    /// excluded from the initializer's parameter list entirely. `var` keeps
+    /// every existing call site compiling unchanged (the default still
+    /// applies) while allowing tests to override it.
+    var radiusFallbackShare: Double = autoskeletonDefaultRadiusFallbackShare
 
     static let defaults = AutoskeletonSensorOptions(
         hints: AutoskeletonEmptyHintRegistry(),
