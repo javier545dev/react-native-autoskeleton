@@ -1,0 +1,82 @@
+# OSX
+.DS_Store
+
+# node.js
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# Xcode
+build/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata
+*.xccheckout
+*.moved-aside
+DerivedData
+*.hmap
+*.ipa
+*.xcuserstate
+project.xcworkspace
+**/.xcode.env.local
+
+# CocoaPods
+Pods/
+*.podspec.lock
+
+# Android / IJ
+.classpath
+.cxx
+.gradle
+.idea
+.project
+.settings
+local.properties
+android.iml
+*.iml
+android/app/libs
+android/keystores/debug.keystore
+
+# React Native Codegen
+ios/generated
+android/generated
+**/ios/generated
+**/android/generated
+
+# Expo
+.expo/
+.expo-shared/
+
+# Next.js
+.next/
+
+# Vite
+dist/
+
+# bob build output
+lib/
+
+# packaging artifacts
+.tarball/
+*.tgz
+
+# Playwright
+test-results/
+playwright-report/
+playwright/.cache/
+
+# Vitest / coverage
+coverage/
+
+# Turborepo (unused, kept only if reintroduced later)
+.turbo/
+
+# Local agent skill-registry cache (machine-specific)
+.atl/

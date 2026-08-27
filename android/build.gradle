@@ -1,0 +1,74 @@
+buildscript {
+  ext.Autoskeleton = [
+    kotlinVersion: "2.0.21",
+    minSdkVersion: 24,
+    compileSdkVersion: 36
+  ]
+
+  ext.getExtOrDefault = { prop ->
+    if (rootProject.ext.has(prop)) {
+      return rootProject.ext.get(prop)
+    }
+
+    return Autoskeleton[prop]
+  }
+
+  repositories {
+    google()
+    mavenCentral()
+  }
+
+  dependencies {
+    classpath "com.android.tools.build:gradle:8.7.2"
+    // noinspection DifferentKotlinGradleVersion
+    classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:${getExtOrDefault('kotlinVersion')}"
+  }
+}
+
+
+apply plugin: "com.android.library"
+apply plugin: "kotlin-android"
+
+apply plugin: "com.facebook.react"
+
+android {
+  namespace "com.autoskeleton"
+
+  compileSdkVersion getExtOrDefault("compileSdkVersion")
+
+  defaultConfig {
+    minSdkVersion getExtOrDefault("minSdkVersion")
+    // task 0.4: instrumented androidTest module needs its own runner.
+    testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+  }
+
+  // task 0.4 / plan.md §7.2a: Robolectric does not run a real layout pass, so the
+  // sensor traversal tests set frames explicitly with view.layout(l,t,r,b). This
+  // flag only controls resource loading, not layout — kept on because Robolectric
+  // needs it to resolve @layout/@style resources some fixtures may reference.
+  testOptions {
+    unitTests {
+      includeAndroidResources = true
+    }
+  }
+}
+
+dependencies {
+  implementation "com.facebook.react:react-android"
+
+  // task 0.4: JUnit + Robolectric — traversal/coordinate algebra, no device
+  // (plan.md §7.2a). Fast, runs on every PR.
+  testImplementation "junit:junit:4.13.2"
+  testImplementation "org.robolectric:robolectric:4.14.1"
+
+  // task 0.4: instrumented androidTest — radius-ladder R2 raster-probe validation
+  // on a real emulator/device (plan.md §7.2b); Robolectric shadows Canvas/Bitmap
+  // so R2 cannot be validated there.
+  androidTestImplementation "androidx.test.ext:junit:1.2.1"
+  androidTestImplementation "androidx.test.runner:runner:1.6.2"
+}

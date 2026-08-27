@@ -1,0 +1,126 @@
+{
+  "name": "autoskeleton",
+  "version": "0.1.0",
+  "description": "Automatic skeleton loaders for React Native and web",
+  "main": "./lib/module/index.js",
+  "types": "./lib/typescript/module/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/typescript/module/src/index.d.ts",
+      "react-native": "./lib/module/index.native.js",
+      "browser": "./lib/module/index.web.js",
+      "default": "./lib/module/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "lib",
+    "android",
+    "ios",
+    "cpp",
+    "*.podspec",
+    "react-native.config.js",
+    "expo-module.config.json",
+    "!ios/build",
+    "!android/build",
+    "!android/gradle",
+    "!android/gradlew",
+    "!android/gradlew.bat",
+    "!android/local.properties",
+    "!**/__tests__",
+    "!**/__fixtures__",
+    "!**/__mocks__",
+    "!**/.*"
+  ],
+  "scripts": {
+    "prepare": "bob build",
+    "typecheck": "tsc && tsc -p tsconfig.tests.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:web": "playwright test",
+    "pack:tarball": "npm pack --pack-destination ./.tarball",
+    "clean": "del-cli android/build ios/build lib .tarball"
+  },
+  "keywords": [
+    "react-native",
+    "ios",
+    "android",
+    "skeleton",
+    "loading"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/javier545dev/react-native-autoskeleton.git"
+  },
+  "author": "Javier Fuentes <javierfuentes545@gmail.com> (https://github.com/javier545dev)",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/javier545dev/react-native-autoskeleton/issues"
+  },
+  "homepage": "https://github.com/javier545dev/react-native-autoskeleton#readme",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@react-native/babel-preset": "0.85.0",
+    "@types/react": "^19.2.0",
+    "del-cli": "^7.0.0",
+    "react": "19.2.3",
+    "react-native": "0.85.0",
+    "react-native-builder-bob": "^0.43.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "peerDependencies": {
+    "react": "*",
+    "react-native": "*"
+  },
+  "engines": {
+    "node": ">= 22.11.0"
+  },
+  "react-native-builder-bob": {
+    "source": "src",
+    "output": "lib",
+    "targets": [
+      [
+        "commonjs",
+        {
+          "esm": true
+        }
+      ],
+      [
+        "module",
+        {
+          "esm": true
+        }
+      ],
+      [
+        "typescript",
+        {
+          "project": "tsconfig.build.json"
+        }
+      ],
+      "codegen"
+    ]
+  },
+  "codegenConfig": {
+    "name": "AutoskeletonSpec",
+    "type": "modules",
+    "jsSrcsDir": "src",
+    "outputDir": {
+      "ios": "ios/generated",
+      "android": "android/generated"
+    },
+    "android": {
+      "javaPackageName": "com.autoskeleton"
+    }
+  },
+  "create-react-native-library": {
+    "type": "turbo-module",
+    "languages": "kotlin-objc",
+    "note": "kotlin-swift is only offered by create-react-native-library 0.63.0 for the type:nitro-module/nitro-view templates, which pull in react-native-nitro-modules — rejected by plan.md ADR-1's zero-dependency requirement. Scaffolded with the turbo-module/kotlin-objc template instead; ios/AutoskeletonSensor.swift (task 3.1) will be authored directly as Swift conforming to the codegen'd Objective-C protocol, which RN turbo modules support natively.",
+    "version": "0.63.0"
+  }
+}
