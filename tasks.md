@@ -178,7 +178,7 @@ plan.md §7 preamble).
       control. Deps: 1.6. Complexity: L. Example app: none/unit-only. **Resolves spec Open
       Question 6** (image pipeline hand-off) at the type/state-machine level; behavioral no-flash
       proof is Phase 8.4/9.
-- [ ] **1.8** RED→GREEN `src/core/contracts.ts` — finalize `Sensor<TTarget>`,
+- [x] **1.8** RED→GREEN `src/core/contracts.ts` — finalize `Sensor<TTarget>`,
       `Renderer<TSurface>`, `ShimmerClock`, `HintRegistry`, `SensorOptions`/`SensorResult` (types
       only; platform layers implement in Phases 2–5). Add `assembleMetrics(...)` in `metrics.ts`
       composing all `onMetrics` fields from the other core modules.

@@ -33,6 +33,18 @@ export type ShapeSource =
 /** Where a shape's corner radius actually came from. Mandatory telemetry (ADR-2). */
 export type RadiusSource = 'measured' | 'outline' | 'raster-probe' | 'hint' | 'default';
 
+/** Canonical index<->RadiusSource mapping for the `radiusSources` dev sidecar
+ *  (a `Uint8Array`, index-aligned with shape index — see §4.4). A sensor
+ *  writes `RADIUS_SOURCES.indexOf(source)` per shape; `assembleMetrics`
+ *  (task 1.8) reads it back to tally `radiusSourceHistogram`. */
+export const RADIUS_SOURCES: readonly RadiusSource[] = [
+  'measured',
+  'outline',
+  'raster-probe',
+  'hint',
+  'default',
+];
+
 /** Every silent-degradation mode must be nameable. Task 1.9 asserts this union
  *  enumerates exactly these 8 documented flags (drift guard). */
 export type DegradationFlag =
