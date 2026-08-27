@@ -1,0 +1,165 @@
+import QuartzCore
+import UIKit
+
+// Task 3.2 (tasks.md Phase 3) / plan.md §3.5, brief §4 "Renderers > Default":
+// the iOS tier-1 (zero-dependency) `Renderer` implementation. ONE `CAShapeLayer`
+// masked with the combined rounded-rect path of every detected shape, plus a
+// `CAGradientLayer` band swept across it. The shimmer is a single
+// `CABasicAnimation` configured once at mount, with a `beginTime` derived from the
+// shared `AutoskeletonShimmerClock`'s absolute origin (ADR-8) — NOT anything ticked
+// per frame from JS or even from native Swift code. This is what makes NFR-2
+// (shimmer keeps animating while the JS thread is blocked ≥500 ms) true by
+// construction: CoreAnimation animations run on the render server, decoupled from
+// both the JS thread and the main run loop, once added to the layer tree.
+struct AutoskeletonSkeletonTheme {
+    let baseColor: CGColor
+    let highlightColor: CGColor
+    let defaultRadius: CGFloat
+    let speedMs: Double
+}
+
+protocol AutoskeletonRendererHandle: AnyObject {
+    /// Geometry-only update. MUST NOT restart the shimmer phase and MUST NOT
+    /// allocate per frame — only the mask path is recomputed and reassigned.
+    func update(shapes: [AutoskeletonShapeInfo])
+    func setReducedMotion(_ reducedMotion: Bool)
+    func destroy()
+}
+
+final class AutoskeletonRendererTier1 {
+    static let kind = "native"
+    let supportsRadius = true
+
+    private let tracing: AutoskeletonTracing
+
+    init(tracing: AutoskeletonTracing = AutoskeletonSignpostTracing()) {
+        self.tracing = tracing
+    }
+
+    func isAvailable() -> Bool { true }
+
+    /// Combines every shape's rounded rect into one union `CGPath`, in the same
+    /// coordinate space the shapes were measured in. Pure and independently
+    /// testable — task 3.2's DoD requires asserting this geometry directly rather
+    /// than only through a mounted layer.
+    static func unionPath(for shapes: [AutoskeletonShapeInfo]) -> CGPath {
+        let path = CGMutablePath()
+        for shape in shapes {
+            let rect = CGRect(x: shape.x, y: shape.y, width: shape.w, height: shape.h)
+            let radius = min(shape.r, min(shape.w, shape.h) / 2)
+            if radius > 0 {
+                path.addRoundedRect(in: rect, cornerWidth: radius, cornerHeight: radius)
+            } else {
+                path.addRect(rect)
+            }
+        }
+        return path
+    }
+
+    @discardableResult
+    func mount(
+        on surface: UIView,
+        shapes: [AutoskeletonShapeInfo],
+        theme: AutoskeletonSkeletonTheme,
+        clock: AutoskeletonShimmerClock,
+        reducedMotion: Bool
+    ) -> AutoskeletonRendererHandle {
+        let token = tracing.begin("AutoskeletonRendererMount")
+
+        let maskLayer = CAShapeLayer()
+        maskLayer.path = Self.unionPath(for: shapes)
+
+        let gradientLayer = CAGradientLayer()
+        gradientLayer.frame = surface.bounds
+        gradientLayer.mask = maskLayer
+        configureGradientColors(gradientLayer, theme: theme)
+        surface.layer.addSublayer(gradientLayer)
+
+        let handle = Handle(surface: surface, maskLayer: maskLayer, gradientLayer: gradientLayer, theme: theme, clock: clock)
+        handle.setReducedMotion(reducedMotion)
+
+        tracing.end("AutoskeletonRendererMount", token: token)
+        return handle
+    }
+
+    private func configureGradientColors(_ layer: CAGradientLayer, theme: AutoskeletonSkeletonTheme) {
+        layer.colors = [theme.baseColor, theme.highlightColor, theme.baseColor]
+        layer.locations = [0, 0.5, 1]
+        layer.startPoint = CGPoint(x: 0, y: 0.5)
+        layer.endPoint = CGPoint(x: 1, y: 0.5)
+    }
+
+    /// The mounted handle. A plain class (not a struct) because `RendererHandle`'s
+    /// contract is reference/lifecycle-based (`destroy()`).
+    final class Handle: AutoskeletonRendererHandle {
+        static let shimmerAnimationKey = "autoskeleton.shimmer"
+        private static let pulseAnimationKey = "autoskeleton.pulse"
+
+        private weak var surface: UIView?
+        private let maskLayer: CAShapeLayer
+        private let gradientLayer: CAGradientLayer
+        private let theme: AutoskeletonSkeletonTheme
+        private let clock: AutoskeletonShimmerClock
+
+        init(surface: UIView, maskLayer: CAShapeLayer, gradientLayer: CAGradientLayer, theme: AutoskeletonSkeletonTheme, clock: AutoskeletonShimmerClock) {
+            self.surface = surface
+            self.maskLayer = maskLayer
+            self.gradientLayer = gradientLayer
+            self.theme = theme
+            self.clock = clock
+        }
+
+        func update(shapes: [AutoskeletonShapeInfo]) {
+            // Geometry only — reassigning `path` does NOT touch the running
+            // shimmer animation (a separate animation on `gradientLayer`, not on
+            // `maskLayer`), so the phase never restarts on a data update.
+            maskLayer.path = AutoskeletonRendererTier1.unionPath(for: shapes)
+        }
+
+        func setReducedMotion(_ reducedMotion: Bool) {
+            gradientLayer.removeAnimation(forKey: Self.shimmerAnimationKey)
+            gradientLayer.removeAnimation(forKey: Self.pulseAnimationKey)
+            if reducedMotion {
+                applyPulse()
+            } else {
+                applyShimmer()
+            }
+        }
+
+        func destroy() {
+            gradientLayer.removeFromSuperlayer()
+        }
+
+        /// REQ-A11Y-3 / NFR-1 default path: one `CABasicAnimation` translating the
+        /// gradient band across the mask, `beginTime` derived from the shared
+        /// clock's absolute origin (ADR-8) so every instance stays in phase and no
+        /// per-frame tick is required to keep it running.
+        private func applyShimmer() {
+            let width = gradientLayer.bounds.width > 0 ? gradientLayer.bounds.width : (surface?.bounds.width ?? 0)
+            let animation = CABasicAnimation(keyPath: "transform.translation.x")
+            animation.fromValue = -width
+            animation.toValue = width
+            animation.duration = clock.periodMs / 1000
+            animation.repeatCount = .infinity
+            animation.isRemovedOnCompletion = false
+            animation.fillMode = .forwards
+            let nowMs = Date().timeIntervalSince1970 * 1000
+            let offsetSeconds = clock.phaseOffsetMs(now: nowMs) / 1000
+            animation.beginTime = CACurrentMediaTime() + offsetSeconds
+            gradientLayer.add(animation, forKey: Self.shimmerAnimationKey)
+        }
+
+        /// REQ-A11Y-3 reduced-motion degradation: a slow opacity pulse — explicitly
+        /// NOT a `transform`-based sweep (ADR-6's ban applies to the shimmer path;
+        /// reduced motion must not reintroduce directional movement at all).
+        private func applyPulse() {
+            let animation = CABasicAnimation(keyPath: "opacity")
+            animation.fromValue = 0.6
+            animation.toValue = 1.0
+            animation.duration = max(clock.periodMs / 1000, 1.0)
+            animation.autoreverses = true
+            animation.repeatCount = .infinity
+            gradientLayer.add(animation, forKey: Self.pulseAnimationKey)
+        }
+    }
+}
