@@ -156,7 +156,7 @@ plan.md §7 preamble).
       substitution, RTL mirroring. **Observability**: N/A, pure geometry. **Performance**: N/A
       here; contributes to NFR-6, verified in 2.5. Deps: 1.2. Complexity: M. Example app:
       none/unit-only.
-- [ ] **1.6** RED→GREEN `src/core/metrics.ts` — budget checks (`budgetMs` default 2,
+- [x] **1.6** RED→GREEN `src/core/metrics.ts` — budget checks (`budgetMs` default 2,
       `maxShapes` default 60, both configurable), dev-warning formatter with actionable
       suggestion text, `onMetrics` payload shape per spec §2.1/§3.7.
       **Tests**: `metrics.test.ts` — REQ-OBS-BUDGET-1 scenarios (3.4 ms/2 ms warning text,

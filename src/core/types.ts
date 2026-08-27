@@ -97,3 +97,33 @@ export interface SerializedShapeSnapshot {
   readonly radiusSources?: readonly number[];
   readonly degraded?: readonly DegradationFlag[];
 }
+
+/** Phase-1 -> phase-2 handoff outcome (ADR-16). Declared here, rather than in
+ *  `handoff.ts` (task 1.7), so `SkeletonMetrics` below can reference it
+ *  without `types.ts` depending on a later-numbered core module — the same
+ *  pattern already used for `DegradationFlag` (needed by `wire.ts`, task 1.2)
+ *  and `ShapeCacheKey` (needed by `ShapeSnapshot` above). */
+export type HandoffReason = 'successor-painted' | 'timeout' | 'no-successor' | 'error';
+
+export type RadiusSourceHistogram = Readonly<Record<RadiusSource, number>>;
+
+/** `onMetrics` payload. Spec §2.1 (REQ-OBS-METRICS-1) defines the base 7
+ *  fields (`traversalMs` through `renderer`); plan.md §3.7 extends it with
+ *  the handoff split, radius histogram, degraded flags and cache key
+ *  (ADR-2, ADR-16). Assembled end-to-end by `assembleMetrics` (task 1.8). */
+export interface SkeletonMetrics {
+  traversalMs: number;
+  shapeCount: number;
+  cacheHit: boolean;
+  ttfsMs: number;
+  displayDurationMs: number;
+  handoffMs: number;
+  handoffReason: HandoffReason;
+  platform: Platform;
+  renderer: RendererKind;
+  radiusSourceHistogram: RadiusSourceHistogram;
+  degraded: readonly DegradationFlag[];
+  cacheKey: string;
+}
+
+export type OnMetrics = (m: SkeletonMetrics) => void;
