@@ -46,6 +46,29 @@ class AutoskeletonSensor(
         return AutoskeletonSensorResult(shapes, traversalMs, ctx.degraded.toList())
     }
 
+    /** Task 4.3 / plan.md ADR-2 rung R2, §7.2b: the off-interaction-frame
+     *  refinement pass. Re-runs the SAME traversal as [measure] but with
+     *  `options.radiusResolver` replaced by [AutoskeletonFullLadderRadiusResolver]
+     *  (R0 -> R1 -> R2 -> R3) — this is the ENTIRE mechanism that keeps R2
+     *  structurally unable to run inside [measure]'s budget: nothing in [measure]'s
+     *  own traversal code references [AutoskeletonRasterProbe] at all, so R2 can
+     *  only ever execute via this explicitly separate call. Mirrors the TS
+     *  `Sensor.refine?(target, options): Promise<SensorResult>` contract; thread
+     *  dispatch (running this off the interaction frame) is the CALLER's
+     *  responsibility — matching how the TS contract itself is just a `Promise`,
+     *  not a scheduler. */
+    fun refine(
+        root: View,
+        options: AutoskeletonSensorOptions = AutoskeletonSensorOptions.defaults,
+        rasterProbe: AutoskeletonRasterProbe = AutoskeletonRasterProbe(),
+    ): AutoskeletonSensorResult? {
+        rasterProbe.beginTraversal()
+        val refinedOptions = options.copy(
+            radiusResolver = AutoskeletonFullLadderRadiusResolver(rasterProbe, options.defaultRadius),
+        )
+        return measure(root, refinedOptions)
+    }
+
     /** Orientation / font-scale invalidation channel (REQ-NAV-1). RTL is
      *  intentionally not observed here for the same reason as iOS: a live
      *  layout-direction flip mid-session is not a case Android (or iOS) needs to
