@@ -17,6 +17,13 @@ end
 target 'AutoskeletonBareRn' do
   config = use_native_modules!
 
+  # Task 3.0 (Phase 3 hard prerequisite, tasks.md/plan.md §7.1): explicitly declare the
+  # Autoskeleton pod with its `Tests` test_spec so CocoaPods generates a shared,
+  # test-actionable scheme (`Autoskeleton-Unit-Tests`) for `xcodebuild test`. Autolinking
+  # alone (`use_native_modules!`) discovers the pod for the app target but does not
+  # request test specs or generate a test scheme.
+  pod 'Autoskeleton', :path => '../node_modules/autoskeleton', :testspecs => ['Tests']
+
   use_react_native!(
     :path => config[:reactNativePath],
     # An absolute path to your application root.
