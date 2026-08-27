@@ -29,6 +29,10 @@
     "!android/gradlew.bat",
     "!android/local.properties",
     "!**/__tests__",
+    "!**/*.test.js",
+    "!**/*.test.js.map",
+    "!**/*.test.d.ts",
+    "!**/*.test.d.ts.map",
     "!**/__fixtures__",
     "!**/__mocks__",
     "!**/.*"

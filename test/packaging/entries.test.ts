@@ -61,6 +61,20 @@ function tarballPath(...segments: string[]): string {
   return path.join(packageDir, ...segments);
 }
 
+/** Recursively lists every file (not directory) under `dir`, as paths relative to `dir`. */
+function walkFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const abs = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...walkFiles(abs).map((f) => path.join(entry.name, f)));
+    } else {
+      out.push(entry.name);
+    }
+  }
+  return out;
+}
+
 describe('RISK-5 packaging detector (entries.test.ts) — RED until 5.6', () => {
   describe('entry files (ADR-3): index.web.js / index.native.js / index.js', () => {
     it.each(['lib/module', 'lib/commonjs'])(
@@ -250,6 +264,22 @@ describe('RISK-5 packaging detector (entries.test.ts) — RED until 5.6', () => 
     it('peerDependencies contains no expo-* entry', () => {
       const peerDeps = Object.keys(packageJson.peerDependencies ?? {});
       expect(peerDeps.filter((d) => d.startsWith('expo'))).toEqual([]);
+    });
+  });
+
+  describe('no test artifacts in the published tarball (packaging defect, orchestrator-found)', () => {
+    // Root cause: package.json's `files` key excludes `**/__tests__`, but
+    // Phase 1 co-located tests as `src/core/*.test.ts` (never in a
+    // `__tests__/` directory), so builder-bob's per-file transpile compiles
+    // them into `lib/**` and `npm pack` ships them — 52 artifacts as of this
+    // writing, e.g. `lib/module/core/cache-key.test.js`. Those compiled
+    // files `import 'vitest'`, a devDependency the published package never
+    // declares, so a consumer bundler that resolves one fails on a missing
+    // dependency. Co-location itself is fine; only the packaging is broken.
+    it('the packed tarball contains zero .test.js / .test.d.ts artifacts', () => {
+      const files = walkFiles(packageDir);
+      const testArtifacts = files.filter((f) => f.endsWith('.test.js') || f.endsWith('.test.d.ts'));
+      expect(testArtifacts).toEqual([]);
     });
   });
 });
