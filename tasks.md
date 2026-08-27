@@ -378,6 +378,68 @@ plan.md §7 preamble).
       announcement verified via `AccessibilityEvent` assertion. **Performance**: N/A. Deps: 4.4.
       Complexity: S. Example app: bare RN + Expo.
 
+## Observability gap closure (session 2026-08-27, post-Phase-4 — outside the 0–9 phase numbering)
+
+Discovered via an explicit audit of `src/`: `checkBudgets`/`emitBudgetWarnings` (task 1.6's own
+deliverable) were never called from any production code path — only exercised by
+`metrics.test.ts`. REQ-OBS-BUDGET-1 was therefore NOT actually met despite task 1.6 being marked
+complete: a formatter unit-tested in isolation but never invoked does not satisfy an emission
+requirement. `spec.md` REQ-OBS-BUDGET-1 was amended to state this explicitly. Separately, a new
+REQ-OBS-BUDGET-2 (the ADR-2/RISK-1-mandated radius-fallback-share warning) did not exist in any
+form — no types, no logic, no tests — despite task 4.2's Observability line already claiming "dev
+warning when default exceeds 30% of a screen's shapes." That claim was never implemented; only
+`radiusSourceHistogram` DATA existed.
+
+- [x] **G.1** RED→GREEN wire `checkBudgets`/`emitBudgetWarnings` into the real web measurement
+      path (`src/web/AutoSkeleton.tsx`'s `useColdMeasurement`), gated
+      `process.env.NODE_ENV !== 'production'` at the platform layer per ADR-4 (core stays
+      platform-agnostic). Discovered and worked around a real architectural constraint:
+      `dom-sensor.ts`'s `pushShape` truncates AT `maxShapes`, so a completed traversal's own
+      snapshot can never literally report a shape count `> maxShapes` — the wiring uses the
+      sensor's real `shape-cap-reached` degradation flag as the authoritative signal instead of a
+      naive count comparison against already-capped data.
+      **Tests**: `test/web/auto-skeleton.spec.ts` — 3 new Playwright cases driving the REAL
+      component + REAL DOM sensor (shape-cap truncation via `maxShapes:1`, `budgetMs:-1`
+      deterministic time-budget trip, and a no-false-positive negative case). **Observability**:
+      this task closes REQ-OBS-BUDGET-1 for real — a developer running the example app now
+      genuinely sees the warning. **Performance**: N/A, dev-only, gated out of production builds.
+      Deps: 1.6, 2.3. Complexity: S. Example app: Vite (any web consumer).
+- [x] **G.2** RED→GREEN implement REQ-OBS-BUDGET-2 (added to `spec.md` §2.4 this session) —
+      `checkRadiusFallback`/`formatRadiusFallbackWarning`/`emitRadiusFallbackWarning` in
+      `src/core/metrics.ts` (default 30% threshold, configurable via
+      `SkeletonProvider.radiusFallbackShare`), wired into the same `useColdMeasurement` path using
+      the real sensor's `radiusSources` dev sidecar.
+      **Tests**: `metrics.test.ts` — 8 new pure-function cases (18/20 exceeds, 6/20 exactly-at-
+      threshold does not fire, undefined sidecar, emission gate). `auto-skeleton.spec.ts` — 1 new
+      Playwright case proving the real wiring stays silent against real (always-`measured`-on-web)
+      traversal data even at an aggressive `radiusFallbackShare:0`. **Platform-scope finding**:
+      `dom-sensor.ts`'s `leafShape` only ever assigns `radiusSource: 'measured' | 'hint'` — a
+      genuine positive trigger (`'default'` rung) is structurally impossible on web, so the
+      positive-fire path is validated at the pure-function layer, which is the correct and only
+      layer capable of exercising it on this platform. **Observability**: this task IS the
+      REQ-OBS-BUDGET-2 deliverable on web. **Performance**: N/A, dev-only. Deps: G.1, 4.2.
+      Complexity: S. Example app: Vite (any web consumer).
+- [ ] **G.3** (tracked, NOT implemented this session — scope boundary) Wire the equivalent
+      REQ-OBS-BUDGET-1/REQ-OBS-BUDGET-2 warnings on iOS and Android. **Investigated and
+      confirmed**: neither native platform has ANY warning-emission mechanism today — no
+      `Log.w`/`println` anywhere under `android/src/main/java/com/autoskeleton/`, no
+      `os_log`/`NSLog`/`print` anywhere under `ios/`. Both platforms already compute the
+      equivalent degradation data (`budgetMs`/`maxShapes` truncation with
+      `budget-exceeded`/`shape-cap-reached` flags; Android's per-shape `radiusSource` feeding what
+      would be a `radiusSourceHistogram`) but never emit a developer-facing warning from it — the
+      SAME dead-code failure mode as REQ-OBS-BUDGET-1's original JS-side gap, just never wired on
+      native either. **This does NOT require the Phase 5 Turbo Module bridge** — a same-process
+      native log write (`Log.w`/`os_log`) needs no JS round-trip, unlike an `onMetrics` JS
+      callback. Left unimplemented this session because (a) the requesting brief scoped exactly
+      two items and explicitly said not to start Phase 5, and (b) a correct implementation needs
+      new Kotlin/Swift logic plus JUnit/XCTest coverage under strict TDD across two platforms —
+      real, non-trivial new work, not a wiring fix. **Corrects task 4.2's Observability claim**
+      ("dev warning when default exceeds 30% of a screen's shapes") — no such warning exists in
+      the shipped Android code; only the histogram-feeding data does. Deps: 4.2, 3.1 (iOS radius
+      data — iOS resolves radius exactly via `layer.cornerRadius`, so `'default'` is likewise
+      expected to be rare/absent there; unverified this session). Complexity: S–M (a native log
+      line + threshold check per platform, plus tests). Example app: bare RN (both platforms).
+
 ## Phase 5: Bridge (`getShapes` Turbo Module, ADR-1) + Skia/Reanimated tier-2 renderer
 
 - [ ] **5.1** RED→GREEN Turbo Module TS spec `src/native/NativeAutoskeleton.ts`

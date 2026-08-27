@@ -376,6 +376,161 @@ test.describe('AutoSkeleton — REQ-NAV-1 cache hot path + REQ-OBS-METRICS-1', (
   });
 });
 
+test.describe('AutoSkeleton — REQ-OBS-BUDGET-1 dev budget warnings, emitted from the real measurement path', () => {
+  test('shape count exceeding a configured maxShapes emits a console.warn citing the real counts', async ({
+    page,
+    mountReady,
+  }) => {
+    await mountReady();
+    const warnings: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'warning') warnings.push(msg.text());
+    });
+
+    await page.evaluate(() => {
+      const { React, createRoot, AutoSkeleton, SkeletonProvider, MemoryShapeStore } = window.AutoskeletonComponent;
+      const store = new MemoryShapeStore();
+      const root = createRoot(document.getElementById('root')!);
+      root.render(
+        React.createElement(
+          SkeletonProvider,
+          // A real, aggressively low maxShapes so a genuine multi-shape
+          // traversal (two real leaves below) really trips dom-sensor.ts's
+          // `shape-cap-reached` truncation — no formatter is called
+          // directly, only real props flow into the real component. (The
+          // wiring reads that real degradation flag rather than comparing
+          // the truncated snapshot's own capped count against maxShapes,
+          // since a truncated snapshot's count can never itself exceed
+          // maxShapes by construction — see AutoSkeleton.tsx's
+          // useColdMeasurement comment.)
+          { store, maxShapes: 1 },
+          React.createElement(
+            AutoSkeleton,
+            { isLoading: true, skeletonKey: 'budget-shapecap-screen' },
+            React.createElement('div', {}, [
+              React.createElement('p', { key: 'a', style: { margin: 0 } }, 'One'),
+              React.createElement('p', { key: 'b', style: { margin: 0 } }, 'Two'),
+            ]),
+          ),
+        ),
+      );
+    });
+    await settle(page);
+
+    const shapeCapWarning = warnings.find((w) => w.includes('shapes') && w.includes('exceeding'));
+    expect(shapeCapWarning).toBeTruthy();
+    expect(shapeCapWarning).toContain('1');
+  });
+
+  test('traversal exceeding a configured budgetMs emits a console.warn citing the real measured time', async ({
+    page,
+    mountReady,
+  }) => {
+    await mountReady();
+    const warnings: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'warning') warnings.push(msg.text());
+    });
+
+    await page.evaluate(() => {
+      const { React, createRoot, AutoSkeleton, SkeletonProvider, MemoryShapeStore } = window.AutoskeletonComponent;
+      const store = new MemoryShapeStore();
+      const root = createRoot(document.getElementById('root')!);
+      root.render(
+        React.createElement(
+          SkeletonProvider,
+          // A negative budgetMs guarantees ANY real measured traversal time
+          // (always >= 0) exceeds it — deterministic without depending on
+          // machine-speed timing flakiness, while still exercising the real
+          // `checkBudgets`/`emitBudgetWarnings` call against a REAL
+          // `traversalMs` produced by the real sensor.
+          { store, budgetMs: -1 },
+          React.createElement(
+            AutoSkeleton,
+            { isLoading: true, skeletonKey: 'budget-time-screen' },
+            React.createElement('p', { style: { margin: 0 } }, 'Hello world'),
+          ),
+        ),
+      );
+    });
+    await settle(page);
+
+    const timeWarning = warnings.find((w) => w.includes('traversal took'));
+    expect(timeWarning).toBeTruthy();
+  });
+
+  test('no warning fires when traversal stays within the default budgets', async ({ page, mountReady }) => {
+    await mountReady();
+    const warnings: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'warning') warnings.push(msg.text());
+    });
+
+    await page.evaluate(() => {
+      const { React, createRoot, AutoSkeleton, SkeletonProvider, MemoryShapeStore } = window.AutoskeletonComponent;
+      const store = new MemoryShapeStore();
+      const root = createRoot(document.getElementById('root')!);
+      root.render(
+        React.createElement(
+          SkeletonProvider,
+          { store },
+          React.createElement(
+            AutoSkeleton,
+            { isLoading: true, skeletonKey: 'budget-ok-screen' },
+            React.createElement('p', { style: { margin: 0 } }, 'Hello world'),
+          ),
+        ),
+      );
+    });
+    await settle(page);
+
+    expect(warnings).toEqual([]);
+  });
+});
+
+test.describe('AutoSkeleton — REQ-OBS-BUDGET-2 radius fallback share warning, wired to the real sensor output', () => {
+  test('no false-positive fires against real DOM traversal even at an aggressive threshold', async ({
+    page,
+    mountReady,
+  }) => {
+    // On web, dom-sensor.ts's `leafShape` only ever assigns radiusSource
+    // 'measured' or 'hint' (never 'default') — web always knows the exact
+    // pixel radius directly, unlike Android's degradation ladder (plan.md
+    // ADR-2). A genuine positive trigger for REQ-OBS-BUDGET-2 is therefore
+    // structurally impossible on this platform; what this test proves is
+    // that the real wiring, fed the real sensor's live `radiusSources`
+    // sidecar, correctly stays silent even against `radiusFallbackShare: 0`
+    // — the most aggressive threshold that would fire on any nonzero
+    // default-rung share.
+    await mountReady();
+    const warnings: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'warning') warnings.push(msg.text());
+    });
+
+    await page.evaluate(() => {
+      const { React, createRoot, AutoSkeleton, SkeletonProvider, MemoryShapeStore } = window.AutoskeletonComponent;
+      const store = new MemoryShapeStore();
+      const root = createRoot(document.getElementById('root')!);
+      root.render(
+        React.createElement(
+          SkeletonProvider,
+          { store, radiusFallbackShare: 0 },
+          React.createElement(
+            AutoSkeleton,
+            { isLoading: true, skeletonKey: 'radius-fallback-screen' },
+            React.createElement('div', { style: { background: '#eee', borderRadius: 8, width: 40, height: 40 } }),
+          ),
+        ),
+      );
+    });
+    await settle(page);
+
+    const radiusWarning = warnings.find((w) => w.includes('default') && w.includes('fallback'));
+    expect(radiusWarning).toBeUndefined();
+  });
+});
+
 test.describe('AutoSkeleton — debugOverlay (REQ-OBS-OVERLAY-1)', () => {
   test('outlines one box per detected shape, each annotated with index/source/cache badge', async ({
     page,

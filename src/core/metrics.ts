@@ -88,14 +88,89 @@ export function checkBudgets(
   return { budgetExceeded, shapeCapExceeded, warnings };
 }
 
+function emitWarnings(warnings: readonly string[]): void {
+  for (const warning of warnings) {
+    console.warn(warning);
+  }
+}
+
 /** Emits every warning via `console.warn`. Callers gate this to dev builds
  *  only (`__DEV__`/`NODE_ENV !== 'production'`) — kept as a caller
  *  responsibility so this module stays a pure function over its inputs and
  *  is trivially testable without mocking a global dev flag. */
 export function emitBudgetWarnings(result: BudgetCheckResult): void {
-  for (const warning of result.warnings) {
-    console.warn(warning);
-  }
+  emitWarnings(result.warnings);
+}
+
+/** REQ-OBS-BUDGET-2: default share of a screen's shapes allowed to resolve
+ *  their corner radius through the least-informed `default` rung before a
+ *  dev warning fires. Matches ADR-2/RISK-1's documented 30% figure. */
+export const DEFAULT_RADIUS_FALLBACK_SHARE = 0.3;
+
+export interface RadiusFallbackOptions {
+  readonly radiusFallbackShare?: number;
+}
+
+export interface RadiusFallbackCheckResult {
+  readonly shareExceeded: boolean;
+  readonly defaultCount: number;
+  readonly totalCount: number;
+  /** `defaultCount / totalCount`, or `0` when `totalCount` is `0`. */
+  readonly share: number;
+  /** Actionable dev-build warning strings; empty when the share was at or
+   *  below the threshold, or when there were no shapes to tally. */
+  readonly warnings: readonly string[];
+}
+
+/** REQ-OBS-BUDGET-2 scenario: "radius fallback exceeds the configured
+ *  share" — the message cites the measured count/percentage, the configured
+ *  threshold, and the actionable remedy (a `radius` hint, or
+ *  `SkeletonProvider.defaultRadius`). */
+export function formatRadiusFallbackWarning(
+  defaultCount: number,
+  totalCount: number,
+  share: number,
+  threshold: number,
+): string {
+  const sharePct = Math.round(share * 100);
+  const thresholdPct = Math.round(threshold * 100);
+  return (
+    `[autoskeleton] ${defaultCount}/${totalCount} shapes (${sharePct}%) resolved their corner ` +
+    `radius through the 'default' fallback rung, exceeding the configured ${thresholdPct}% ` +
+    'threshold. Supply a radius hint on the affected views, or set ' +
+    'SkeletonProvider.defaultRadius to match your design.'
+  );
+}
+
+/** Evaluates a completed traversal's `radiusSources` dev sidecar against the
+ *  configured fallback-share threshold and builds the actionable warning
+ *  when exceeded. Does not itself decide whether to log — see
+ *  `emitRadiusFallbackWarning`. Mirrors `checkBudgets`'s shape. */
+export function checkRadiusFallback(
+  radiusSources: Uint8Array | undefined,
+  options: RadiusFallbackOptions = {},
+): RadiusFallbackCheckResult {
+  const threshold = options.radiusFallbackShare ?? DEFAULT_RADIUS_FALLBACK_SHARE;
+  const histogram = buildRadiusSourceHistogram(radiusSources);
+  const totalCount = Object.values(histogram).reduce((a, b) => a + b, 0);
+  const defaultCount = histogram.default;
+  const share = totalCount === 0 ? 0 : defaultCount / totalCount;
+  const shareExceeded = totalCount > 0 && share > threshold;
+
+  return {
+    shareExceeded,
+    defaultCount,
+    totalCount,
+    share,
+    warnings: shareExceeded ? [formatRadiusFallbackWarning(defaultCount, totalCount, share, threshold)] : [],
+  };
+}
+
+/** Emits the radius-fallback warning via `console.warn` when the threshold
+ *  was exceeded. Callers gate this to dev builds only, same as
+ *  `emitBudgetWarnings`. */
+export function emitRadiusFallbackWarning(result: RadiusFallbackCheckResult): void {
+  emitWarnings(result.warnings);
 }
 
 function buildRadiusSourceHistogram(radiusSources: Uint8Array | undefined): RadiusSourceHistogram {
