@@ -158,37 +158,21 @@ describe('MemoryShapeStore synchronous lookup budget (NFR-4 local guard)', () =>
   });
 });
 
-describe('MemoryShapeStore import/export round-trip', () => {
-  it('exports every entry and a fresh store imports them all as accepted', () => {
-    const source = new MemoryShapeStore();
+describe('MemoryShapeStore values() (bulk-iteration seam for opt-in serialization)', () => {
+  it('yields every stored snapshot', () => {
+    const store = new MemoryShapeStore();
     const a = keyFor('a');
     const b = keyFor('b');
-    source.set(a, snapshotFor(a));
-    source.set(b, snapshotFor(b));
-
-    const exported = source.export();
-    expect(exported).toHaveLength(2);
-
-    const target = new MemoryShapeStore();
-    const report = target.import(exported);
-    expect(report).toEqual({ accepted: 2, rejected: 0, reasons: [] });
-    expect(target.has(a)).toBe(true);
-    expect(target.has(b)).toBe(true);
-  });
-
-  it('rejects an unparseable entry and reports the reason', () => {
-    const target = new MemoryShapeStore();
-    const report = target.import([
-      {
-        v: WIRE_VERSION,
-        key: keyFor('broken'),
-        capturedAt: 0,
-        frame: [0, 0],
-        data: [WIRE_VERSION, 1, 2], // malformed length: fails the modulus check
-      },
-    ]);
-    expect(report.accepted).toBe(0);
-    expect(report.rejected).toBe(1);
-    expect(report.reasons.length).toBeGreaterThan(0);
+    store.set(a, snapshotFor(a));
+    store.set(b, snapshotFor(b));
+    expect(Array.from(store.values())).toHaveLength(2);
   });
 });
+
+// PHASE 2 REVISION (task 2.5, NFR-6 remediation): the `export()`/`import()`
+// round-trip tests that used to live here now live in
+// `snapshot-io.test.ts`, because `MemoryShapeStore` no longer HAS those
+// methods — they moved to the `exportShapeStore`/`importIntoShapeStore` free
+// functions in `snapshot-io.ts` so a bundler can tree-shake them out of a
+// web build that never calls them. See `snapshot-io.ts`'s header comment and
+// plan.md §3.3 for the full rationale.

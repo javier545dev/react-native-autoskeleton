@@ -6,18 +6,22 @@
 // `SensorOptions`/`SensorResult` are finalized here in task 1.8 — types only,
 // platform layers implement them in Phases 2-5.
 //
+// PHASE 2 REVISION (task 2.5, NFR-6 remediation): `ShapeStore.export()` /
+// `.import()` were removed from this contract. They are no longer part of
+// the hot-path seam every `ShapeStore` implementation must carry — bulk
+// serialization is opt-in via `snapshot-io.ts`'s `exportShapeStore()` /
+// `importIntoShapeStore()` free functions, which work against ANY store
+// exposing a `values()` iterator (for export) or the ordinary `set()` method
+// (for import) rather than requiring dedicated class methods. `ImportReport`
+// stays here because it is still the reusable result shape those free
+// functions return. See plan.md §3.3 and `snapshot-io.ts`'s header comment
+// for the full rationale.
+//
 // Observability / Performance: N/A, pure composition (types carry no runtime
 // logic of their own).
 
 import type { CacheKeyParts, ShapeCacheKey } from './cache-key';
-import type {
-  AnimationKind,
-  DegradationFlag,
-  Platform,
-  RendererKind,
-  SerializedShapeSnapshot,
-  ShapeSnapshot,
-} from './types';
+import type { AnimationKind, DegradationFlag, Platform, RendererKind, ShapeSnapshot } from './types';
 
 export interface ImportReport {
   readonly accepted: number;
@@ -36,11 +40,6 @@ export interface ShapeStore {
   invalidate(predicate: (parts: CacheKeyParts) => boolean): number;
   clear(): void;
   readonly size: number;
-
-  /** Serializable by construction. The capture CLI writes `export()` output; the SSR
-   *  client and v2 disk persistence feed `import()`. Both are pure data. */
-  export(): readonly SerializedShapeSnapshot[];
-  import(entries: readonly SerializedShapeSnapshot[]): ImportReport;
 
   /** v2 disk persistence hook. Warm-up is async; lookup stays sync. Absent in v1. */
   hydrate?(): Promise<void>;

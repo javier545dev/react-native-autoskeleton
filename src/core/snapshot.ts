@@ -1,81 +1,24 @@
 // src/core/snapshot.ts
 //
-// plan.md §3.3 / §2 module layout: `serializeSnapshot`/`deserializeSnapshot`
-// and `MemoryShapeStore`. Observability N/A directly for this task; the
-// store/serializer underlie `onMetrics.cacheHit` correctness downstream
-// (assembled in task 1.8's `assembleMetrics`).
+// plan.md §3.3 / §2 module layout: `MemoryShapeStore`. Observability N/A
+// directly for this task; the store underlies `onMetrics.cacheHit`
+// correctness downstream (assembled in task 1.8's `assembleMetrics`).
+//
+// PHASE 2 REVISION (task 2.5, NFR-6 remediation): `serializeSnapshot` /
+// `deserializeSnapshot` and the `export()`/`import()` bulk-serialization
+// methods moved OUT of this file (and off this class) into
+// `snapshot-io.ts`'s `serializeSnapshot`/`deserializeSnapshot`/
+// `exportShapeStore`/`importIntoShapeStore` free functions. This file now
+// contains ONLY the hot-path `get`/`has`/`set`/`delete`/`invalidate`/
+// `clear`/`subscribe` surface `AutoSkeleton` actually calls at runtime, so a
+// web bundle that never imports `snapshot-io.ts` never pays for
+// serialization code it doesn't use. See `snapshot-io.ts`'s header comment
+// for the full rationale.
 
 import type { CacheKeyParts, ShapeCacheKey } from './cache-key';
 import { keyMatches } from './cache-key';
-import type { ImportReport, ShapeStore } from './contracts';
-import type { DegradationFlag, SerializedShapeSnapshot, ShapeSnapshot } from './types';
-import { decodeWire } from './wire';
-
-/** Deviation note: plan.md's contract sketch names the too-new-version throw
- *  `WireVersionError`; this implementation reuses `wire.ts`'s
- *  `WireVersionMismatchError` (via `decodeWire`) instead of introducing a
- *  second error type for the identical condition. No downstream task or spec
- *  scenario references the literal symbol name `WireVersionError`. */
-function isProductionBuild(): boolean {
-  return (
-    typeof process !== 'undefined' && process.env?.['NODE_ENV'] === 'production'
-  );
-}
-
-/** Converts a runtime snapshot to its JSON-safe form. Dev sidecars
- *  (`sources`/`radiusSources`) are stripped in production builds so they can
- *  never inflate the SSR payload (plan.md §4.4). */
-export function serializeSnapshot(s: ShapeSnapshot): SerializedShapeSnapshot {
-  const includeSidecars = !isProductionBuild();
-  const serialized: {
-    v: number;
-    key: string;
-    capturedAt: number;
-    frame: readonly [number, number];
-    data: readonly number[];
-    sources?: readonly number[];
-    radiusSources?: readonly number[];
-    degraded?: readonly DegradationFlag[];
-  } = {
-    v: s.version,
-    key: s.key,
-    capturedAt: s.capturedAt,
-    frame: [s.frameWidth, s.frameHeight],
-    data: Array.from(s.data),
-  };
-  if (includeSidecars && s.sources) {
-    serialized.sources = Array.from(s.sources);
-  }
-  if (includeSidecars && s.radiusSources) {
-    serialized.radiusSources = Array.from(s.radiusSources);
-  }
-  if (s.degraded.length > 0) {
-    serialized.degraded = s.degraded;
-  }
-  return serialized;
-}
-
-/** Reconstructs a runtime snapshot from its JSON-safe form. Rejects a newer
- *  schema version and forward-migrates an older one (both via `decodeWire`),
- *  merging any resulting `snapshot-version-mismatch` flag with the flags the
- *  serialized snapshot already carried. */
-export function deserializeSnapshot(s: SerializedShapeSnapshot): ShapeSnapshot {
-  const data = Float32Array.from(s.data);
-  const decoded = decodeWire(data);
-  const degraded = new Set<DegradationFlag>([...(s.degraded ?? []), ...decoded.degraded]);
-
-  return {
-    key: s.key as ShapeCacheKey,
-    version: decoded.version,
-    capturedAt: s.capturedAt,
-    frameWidth: s.frame[0],
-    frameHeight: s.frame[1],
-    data,
-    sources: s.sources ? Uint8Array.from(s.sources) : undefined,
-    radiusSources: s.radiusSources ? Uint8Array.from(s.radiusSources) : undefined,
-    degraded: Array.from(degraded),
-  };
-}
+import type { ShapeStore } from './contracts';
+import type { ShapeSnapshot } from './types';
 
 const DEFAULT_MAX_ENTRIES = 128;
 
@@ -150,29 +93,12 @@ export class MemoryShapeStore implements ShapeStore {
     this.entries.clear();
   }
 
-  export(): readonly SerializedShapeSnapshot[] {
-    return Array.from(this.entries.values(), serializeSnapshot);
-  }
-
-  import(entries: readonly SerializedShapeSnapshot[]): ImportReport {
-    let accepted = 0;
-    let rejected = 0;
-    const reasons: DegradationFlag[] = [];
-    for (const entry of entries) {
-      try {
-        const snapshot = deserializeSnapshot(entry);
-        this.set(snapshot.key, snapshot);
-        accepted += 1;
-      } catch {
-        rejected += 1;
-        // No dedicated DegradationFlag exists for "malformed wire buffer";
-        // 'snapshot-version-mismatch' is documented as "stored snapshot
-        // rejected by wire version negotiation", which is the closest and
-        // only applicable flag for any import-time decode rejection.
-        reasons.push('snapshot-version-mismatch');
-      }
-    }
-    return { accepted, rejected, reasons };
+  /** Bulk-iteration seam for opt-in serialization (`snapshot-io.ts`'s
+   *  `exportShapeStore`). Deliberately NOT `export()`: this is a plain
+   *  iterator delegate with no serialization logic of its own, so it stays
+   *  cheap to ship even in a bundle that never calls it. */
+  values(): IterableIterator<ShapeSnapshot> {
+    return this.entries.values();
   }
 
   subscribe(listener: (key: ShapeCacheKey) => void): () => void {

@@ -38,7 +38,8 @@ and never implements, decodes or manages blurhash (brief §9b, ADR-16). Both bou
 | `src/core/contracts.ts` | `Sensor`, `Renderer`, `ShapeStore`, `ShimmerClock` |
 | `src/core/cache-key.ts` | `composeCacheKey` / `parseCacheKey`, bucketing + quantization |
 | `src/core/wire.ts` | encode/decode of the `Float32Array` layout, version negotiation |
-| `src/core/snapshot.ts` | `serializeSnapshot` / `deserializeSnapshot`, `MemoryShapeStore` |
+| `src/core/snapshot.ts` | `MemoryShapeStore` (hot path only, since Phase 2 — see §3.3) |
+| `src/core/snapshot-io.ts` | `serializeSnapshot` / `deserializeSnapshot`, `exportShapeStore` / `importIntoShapeStore` (opt-in, split out in Phase 2 — see §3.3) |
 | `src/core/lines.ts` | collapsed-text line synthesis heuristics |
 | `src/core/clip-path.ts` | union-of-rounded-rects → SVG `path()` string (pure, web + capture CLI) |
 | `src/core/metrics.ts` | budget checks, dev warnings, `onMetrics` assembly |
@@ -182,11 +183,47 @@ export interface SerializedShapeSnapshot {
   readonly radiusSources?: readonly number[];
   readonly degraded?: readonly DegradationFlag[];
 }
+```
 
+**PHASE 2 REVISION (task 2.5, NFR-6 remediation — read before the two blocks below):** the sketch
+above and originally below this note put `serializeSnapshot`/`deserializeSnapshot` in `snapshot.ts`
+next to `MemoryShapeStore`, and `export()`/`import()` directly on the `ShapeStore` contract. As shipped,
+that coupled the hot-path `get`/`set`/`has` methods `AutoSkeleton` calls at runtime to serialization
+logic only the Phase 8 capture CLI and v2 disk persistence need — and a bundler cannot tree-shake
+individual class methods, so `export()`/`import()` (and everything they called) rode into every web
+bundle regardless of use, contributing to the NFR-6 gzip overrun this task closes. **What actually
+ships**: `serializeSnapshot`/`deserializeSnapshot` and two new free functions,
+`exportShapeStore`/`importIntoShapeStore`, all live in a new file, `src/core/snapshot-io.ts` — not in
+`snapshot.ts` and not as class methods. `snapshot.ts` keeps only the hot-path `ShapeStore`
+implementation plus one small `values(): IterableIterator<ShapeSnapshot>` iteration delegate (the
+minimal seam `exportShapeStore` needs; it carries no serialization logic itself). `ShapeStore.export()`
+/`.import()` are REMOVED from the contract entirely — bulk serialization is opt-in, not a hot-path
+requirement every implementation must carry. `ImportReport` stays in `contracts.ts` (still the shared
+result shape). Measured effect: raw bundle 23076 B → 22105 B (-971 B), gzip 7566 B → 7421 B (-145 B) —
+a real but modest saving (gzip already compresses the repetitive serialization code well; the split's
+main value is the tree-shaking-correctness fix, not a specific byte target).
+
+```ts
+// src/core/snapshot-io.ts (Phase 2 revision — was src/core/snapshot.ts)
 export declare function serializeSnapshot(s: ShapeSnapshot): SerializedShapeSnapshot;
 /** Throws `WireVersionError` when `s.v > WIRE_VERSION`; returns a forward-migrated
  *  snapshot when `s.v < WIRE_VERSION`. */
 export declare function deserializeSnapshot(s: SerializedShapeSnapshot): ShapeSnapshot;
+
+/** Minimal read seam a store needs to support bulk export; `MemoryShapeStore` satisfies
+ *  this structurally via `values()`. */
+export interface ShapeSnapshotSource {
+  values(): Iterable<ShapeSnapshot>;
+}
+/** Opt-in. The capture CLI writes this output; nothing in the live web/native runtime
+ *  calls it, so it tree-shakes out of a production bundle. */
+export declare function exportShapeStore(store: ShapeSnapshotSource): readonly SerializedShapeSnapshot[];
+/** Opt-in. The SSR client and v2 disk persistence feed this via the target store's
+ *  ordinary `set()` — no dedicated class method required. */
+export declare function importIntoShapeStore(
+  store: Pick<ShapeStore, 'set'>,
+  entries: readonly SerializedShapeSnapshot[],
+): ImportReport;
 ```
 
 ```ts
@@ -202,11 +239,6 @@ export interface ShapeStore {
   invalidate(predicate: (parts: CacheKeyParts) => boolean): number;
   clear(): void;
   readonly size: number;
-
-  /** Serializable by construction. The capture CLI writes `export()` output; the SSR
-   *  client and v2 disk persistence feed `import()`. Both are pure data. */
-  export(): readonly SerializedShapeSnapshot[];
-  import(entries: readonly SerializedShapeSnapshot[]): ImportReport;
 
   /** v2 disk persistence hook. Warm-up is async; lookup stays sync. Absent in v1. */
   hydrate?(): Promise<void>;
@@ -632,7 +664,7 @@ flowchart TB
         CSER --> CBUN["CSS bundle: one @media block per width bucket + [dir] selectors"]
         CBUN --> SRV["server render: static markup, viewport-agnostic"]
         SRV --> HYD["client hydrate: identical markup → zero mismatch by construction"]
-        CSER --> IMP["ShapeStore.import() on the client"]
+        CSER --> IMP["importIntoShapeStore() on the client (snapshot-io.ts, Phase 2 revision)"]
     end
 
     HYD --> RCSS
