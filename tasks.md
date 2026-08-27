@@ -120,14 +120,14 @@ plan.md §7 preamble).
 
 ## Phase 1: Core + contracts + snapshot cache, with tests
 
-- [ ] **1.1** RED→GREEN `src/core/cache-key.ts` — `bucketWidth` against `WIDTH_BUCKETS`,
+- [x] **1.1** RED→GREEN `src/core/cache-key.ts` — `bucketWidth` against `WIDTH_BUCKETS`,
       `quantizeFontScale` (2 decimals), `composeCacheKey`/`parseCacheKey` round-trip with `|`
       percent-escaping, `keyMatches`.
       **Tests**: `cache-key.test.ts` (Vitest, no DOM). **Observability**: N/A — pure key algebra
       on no lifecycle path; exempt. **Performance**: feeds NFR-4 indirectly but not measured
       standalone here — measured in 1.3 and authoritatively in 9.1. Deps: 0.2. Complexity: M.
       Example app: none/unit-only.
-- [ ] **1.2** RED→GREEN `src/core/wire.ts` — `[VERSION,x,y,w,h,r]xN` Float32Array codec, modulus
+- [x] **1.2** RED→GREEN `src/core/wire.ts` — `[VERSION,x,y,w,h,r]xN` Float32Array codec, modulus
       check, version negotiation (reject newer, forward-migrate older, raise
       `snapshot-version-mismatch`), `byteOffset===0` assertion.
       **Tests**: `wire.test.ts` — round-trip N=0/1/60; malformed-length rejection; version
@@ -135,7 +135,7 @@ plan.md §7 preamble).
       `onMetrics.degraded` (assembled in 1.8) — no emission call here. **Performance**: not
       measured here (pure codec); covered by Phase 9.1 CI benchmark. Deps: 1.1. Complexity: M.
       Example app: none/unit-only.
-- [ ] **1.3** RED→GREEN `src/core/snapshot.ts` — `serializeSnapshot`/`deserializeSnapshot`
+- [x] **1.3** RED→GREEN `src/core/snapshot.ts` — `serializeSnapshot`/`deserializeSnapshot`
       (dev sidecars stripped in prod) + `MemoryShapeStore` (sync `get`/`has`/`set`/`delete`/
       `invalidate`/`clear`/`export`/`import`/`subscribe`, LRU cap 128 default per ASSUMPTION
       plan.md §11.6).
