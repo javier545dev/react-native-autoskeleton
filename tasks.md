@@ -312,7 +312,7 @@ plan.md §7 preamble).
 
 ## Phase 4: Android sensor + fallback renderer + Android `debugOverlay`
 
-- [ ] **4.1** RED→GREEN `android/.../AutoskeletonSensor.kt` — traversal over `ViewGroup`s with
+- [x] **4.1** RED→GREEN `android/.../AutoskeletonSensor.kt` — traversal over `ViewGroup`s with
       `offsetDescendantRectToMyCoords` (scrollX/scrollY subtraction), leaf detection
       (`ReactTextView`/`ReactImageView`/`ReactEditText` — **confirmed present in RN 0.87.1**, spec
       Open Question 4 already resolved by this ground truth), container rule, `Ignore` via
@@ -325,7 +325,7 @@ plan.md §7 preamble).
       name ≤127 chars, same-thread nesting, asserted by a dedicated test). **Performance**: NFR-3
       local guard here; authoritative gate is 9.1. Deps: 1.9, 0.4. Complexity: L. Example app:
       bare RN (CLI autolinking proof) + Expo.
-- [ ] **4.2** RED→GREEN ADR-2 radius ladder rungs R0/R1/R3 (public-API only) —
+- [x] **4.2** RED→GREEN ADR-2 radius ladder rungs R0/R1/R3 (public-API only) —
       `AutoskeletonRadiusResolver.kt`: R0 typed `radius` hint via `nativeID`; R1
       `drawable.getOutline(outline)` on a copy, use `outline.getRadius()` when ≥0; R3
       `SkeletonProvider.defaultRadius` with `r=-1` and `radius-unavailable` flag. **Resolves spec
@@ -339,7 +339,7 @@ plan.md §7 preamble).
       dev warning when `default` exceeds 30% of a screen's shapes. **Performance**: N/A directly —
       resolution runs inside 4.1's already-budgeted traversal. Deps: 4.1. Complexity: M. Example
       app: bare RN + Expo.
-- [ ] **4.3** **R2 on-device validation task (gated, proposal not fact).** Raster corner probe
+- [x] **4.3** **R2 on-device validation task (gated, proposal not fact).** Raster corner probe
       `Sensor.refine()`: copy `getConstantState().newDrawable().mutate()`, draw into a
       library-owned 48×48 `ARGB_8888` `Bitmap`, diagonal alpha-transition scan, memoized by
       `(ConstantState identity, bounds)`, capped `maxProbesPerTraversal=8`.
@@ -354,7 +354,7 @@ plan.md §7 preamble).
       on unclassifiable drawables. **Performance**: runs off the interaction frame in `refine()`,
       never counted against NFR-3 — asserted by a test proving R2 never executes synchronously
       inside `measure()`. Deps: 4.2. Complexity: L. Example app: bare RN + Expo.
-- [ ] **4.4** RED→GREEN `android/.../AutoskeletonRendererTier1.kt` — single draw pass, `Path`
+- [x] **4.4** RED→GREEN `android/.../AutoskeletonRendererTier1.kt` — single draw pass, `Path`
       union + `canvas.clipPath`, `LinearGradient` shader created ONCE and translated via
       `Matrix.setTranslate`+`setLocalMatrix` (rebuilding per frame forbidden),
       `postInvalidateOnAnimation` via `Choreographer`, no view-state mutation inside
@@ -365,14 +365,14 @@ plan.md §7 preamble).
       **Observability**: `Trace.beginSection`/`endSection` around draw. **Performance**: NFR-1
       (60 fps), NFR-2 (blocked-thread resilience), NFR-5 (zero per-frame allocation — shader-reuse
       test is the direct proof). Deps: 4.2. Complexity: L. Example app: bare RN + Expo.
-- [ ] **4.5** RED→GREEN Android `debugOverlay` — outline per shape, index/source/hit-miss badge,
+- [x] **4.5** RED→GREEN Android `debugOverlay` — outline per shape, index/source/hit-miss badge,
       **plus the ADR-2-mandated radius-rung badge**, dev-only.
       **Tests**: JUnit/Robolectric — overlay draw count == shape count with correct annotations
       including the rung badge. **Observability**: this task IS the Android REQ-OBS-OVERLAY-1
       deliverable plus ADR-2's per-shape rung badge requirement. **Performance**: N/A, dev-only,
       stripped from release (asserted by a release-build test). Deps: 4.4. Complexity: M. Example
       app: bare RN + Expo.
-- [ ] **4.6** RED→GREEN Android a11y — `importantForAccessibility="no-hide-descendants"` while
+- [x] **4.6** RED→GREEN Android a11y — `importantForAccessibility="no-hide-descendants"` while
       `isLoading`, reduce-motion via animator-duration-scale detection degrading to pulse/static.
       **Tests**: JUnit — REQ-A11Y-1/REQ-A11Y-3 scenarios. **Observability**: REQ-A11Y-2
       announcement verified via `AccessibilityEvent` assertion. **Performance**: N/A. Deps: 4.4.
