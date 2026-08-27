@@ -85,6 +85,20 @@ describe('composeCacheKey / parseCacheKey round-trip', () => {
   });
 });
 
+describe('parseCacheKey — malformed key rejection', () => {
+  it('throws when the key does not start with the expected version prefix', () => {
+    expect(() => parseCacheKey('v2|profile|-|390|1|ltr|ios' as ReturnType<typeof composeCacheKey>)).toThrow(
+      /Invalid cache key/,
+    );
+  });
+
+  it('throws when the key does not have exactly 7 segments', () => {
+    expect(() => parseCacheKey('v1|profile|-|390|1|ltr' as ReturnType<typeof composeCacheKey>)).toThrow(
+      /Invalid cache key/,
+    );
+  });
+});
+
 describe('keyMatches', () => {
   it('applies the predicate against the parsed parts', () => {
     const key = composeCacheKey({

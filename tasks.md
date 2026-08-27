@@ -165,7 +165,7 @@ plan.md §7 preamble).
       task IS the observability deliverable. **Performance**: NFR-3 threshold (2 ms) and
       shape-cap (60) asserted as constants matching spec §3 exactly. Deps: 1.3. Complexity: M.
       Example app: none/unit-only.
-- [ ] **1.7** RED→GREEN `src/core/handoff.ts` — `HandoffController` state machine
+- [x] **1.7** RED→GREEN `src/core/handoff.ts` — `HandoffController` state machine
       (`skeleton→placeholder→content`), `requestHandoff()` stamps `displayDurationMs`
       immediately, idempotent `notifyPainted()`, `handoffTimeoutMs`/`handoffFadeMs` defaults
       250/120 (ASSUMPTION §11.8), `ImageLeafDescriptor`/`HandoffOptions`/`HandoffReason` (ADR-16).
