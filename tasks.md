@@ -273,7 +273,7 @@ plan.md §7 preamble).
 
 ## Phase 3: iOS native sensor + native fallback renderer + iOS `debugOverlay`
 
-- [ ] **3.1** RED→GREEN `ios/AutoskeletonSensor.swift` — recursive traversal via
+- [x] **3.1** RED→GREEN `ios/AutoskeletonSensor.swift` — recursive traversal via
       `convert(rect:to:)`, leaf detection (`RCTParagraphComponentView`,
       `RCTImageComponentView`, `RCTTextInputComponentView`) + non-transparent-background
       containers, radius via `layer.cornerRadius`, container rule, `Ignore` via
@@ -286,7 +286,7 @@ plan.md §7 preamble).
       PROFILE-1), asserted by a dedicated XCTest. **Performance**: NFR-3 local guard here;
       authoritative gate is 9.1. Deps: 1.9, 0.4. Complexity: L. Example app: bare RN (CLI
       autolinking proof) + Expo.
-- [ ] **3.2** RED→GREEN `ios/AutoskeletonRendererTier1.swift` — single `CAShapeLayer` masked
+- [x] **3.2** RED→GREEN `ios/AutoskeletonRendererTier1.swift` — single `CAShapeLayer` masked
       with the combined rounded-rect path + gradient, CoreAnimation-driven shimmer, shared
       `ShimmerClock` via `CADisplayLink` + `preferredFrameRateRange` (120 Hz ProMotion).
       **Tests**: XCTest — mask-path geometry matches expected union; signpost-based test proving
@@ -296,13 +296,13 @@ plan.md §7 preamble).
       NFR-2 (blocked-thread resilience), NFR-5 proxy (layer/path instance reuse across ≥120
       invalidations, mirrors the Android draw-pass invariant in 4.4). Deps: 3.1. Complexity: L.
       Example app: bare RN + Expo.
-- [ ] **3.3** RED→GREEN iOS `debugOverlay` — outline sublayer per shape, index/source/hit-miss
+- [x] **3.3** RED→GREEN iOS `debugOverlay` — outline sublayer per shape, index/source/hit-miss
       badge, dev-only.
       **Tests**: XCTest — sublayer count == shape count with correct annotations (REQ-OBS-
       OVERLAY-1). **Observability**: this task IS the iOS overlay deliverable. **Performance**:
       N/A, dev-only, stripped from release (asserted by a release-configuration build test).
       Deps: 3.2. Complexity: M. Example app: bare RN + Expo.
-- [ ] **3.4** RED→GREEN iOS a11y — `accessibilityElementsHidden` on the real subtree while
+- [x] **3.4** RED→GREEN iOS a11y — `accessibilityElementsHidden` on the real subtree while
       `isLoading`, `UIAccessibility.isReduceMotionEnabled` degrading tier-1 shimmer to
       pulse/static.
       **Tests**: XCTest — REQ-A11Y-1 (content excluded from accessibility tree), REQ-A11Y-3
