@@ -1,0 +1,110 @@
+name: Example apps (build-only)
+
+# Task 0.7 (tasks.md Phase 0): "Wire build-only CI jobs, no assertions yet." Each
+# job installs the packed library tarball (ADR-14: never a workspace symlink) and
+# proves the app builds / boots. No functional assertions here — those start with
+# each app's own feature work (Phase 2 web, Phase 3/4 native, Phase 8 SSR).
+#
+# bare-rn and expo run their boot-smoke script (CLI / expo-modules-autolinking
+# discovery) rather than a full native compile: there is no native sensor code to
+# compile yet (strict TDD, Phase 0 is scaffold-only), so a full `gradlew
+# assembleDebug` / `xcodebuild` run would spend CI minutes compiling boilerplate.
+# Full native builds are wired once real native source exists (Phase 3 iOS,
+# Phase 4 Android, Phase 9.2 ADR-14 verification closure).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  pack-library:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: mkdir -p .tarball && npm pack --pack-destination ./.tarball
+      - uses: actions/upload-artifact@v4
+        with:
+          name: autoskeleton-tarball
+          path: .tarball/*.tgz
+
+  bare-rn:
+    needs: pack-library
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: autoskeleton-tarball
+          path: .tarball
+      - run: npm install
+        working-directory: examples/bare-rn
+      - name: Zero-Expo-packages guard (ADR-14 / RISK-5)
+        run: |
+          if node -e "process.exit(Object.keys(require('./package.json').dependencies).some(d => d.startsWith('expo')) ? 1 : 0)"; then
+            echo "no expo-* dependency present"
+          else
+            echo "::error::examples/bare-rn must have zero Expo packages in its dependency tree (ADR-14)"
+            exit 1
+          fi
+        working-directory: examples/bare-rn
+      - run: npm run boot-smoke
+        working-directory: examples/bare-rn
+
+  expo:
+    needs: pack-library
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: autoskeleton-tarball
+          path: .tarball
+      - run: npm install
+        working-directory: examples/expo
+      - run: npm run boot-smoke
+        working-directory: examples/expo
+
+  vite:
+    needs: pack-library
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: autoskeleton-tarball
+          path: .tarball
+      - run: npm install
+        working-directory: examples/vite
+      - run: npm run boot-smoke
+        working-directory: examples/vite
+
+  next:
+    needs: pack-library
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: autoskeleton-tarball
+          path: .tarball
+      - run: npm install
+        working-directory: examples/next
+      - run: npm run boot-smoke
+        working-directory: examples/next
