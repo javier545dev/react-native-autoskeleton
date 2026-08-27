@@ -1,0 +1,19 @@
+{
+  "class": "container",
+  "frame": { "x": 0, "y": 0, "w": 300, "h": 300 },
+  "nativeID": "root",
+  "children": [
+    {
+      "class": "container",
+      "frame": { "x": 20, "y": 20, "w": 200, "h": 200 },
+      "nativeID": "inner",
+      "children": [
+        {
+          "class": "text",
+          "frame": { "x": 10, "y": 10, "w": 100, "h": 30 },
+          "nativeID": "leaf-text"
+        }
+      ]
+    }
+  ]
+}

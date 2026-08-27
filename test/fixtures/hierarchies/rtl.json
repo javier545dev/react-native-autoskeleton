@@ -1,0 +1,13 @@
+{
+  "class": "container",
+  "frame": { "x": 0, "y": 0, "w": 300, "h": 100 },
+  "nativeID": "root",
+  "semanticContentAttribute": "forceRightToLeft",
+  "children": [
+    {
+      "class": "text",
+      "frame": { "x": 190, "y": 10, "w": 100, "h": 30 },
+      "nativeID": "leaf-text"
+    }
+  ]
+}

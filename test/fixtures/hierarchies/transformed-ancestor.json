@@ -1,0 +1,20 @@
+{
+  "class": "container",
+  "frame": { "x": 0, "y": 0, "w": 300, "h": 300 },
+  "nativeID": "root",
+  "children": [
+    {
+      "class": "container",
+      "frame": { "x": 100, "y": 100, "w": 100, "h": 100 },
+      "nativeID": "rotated",
+      "transform": { "scale": 1, "translateX": 0, "translateY": 0, "rotationDegrees": 90 },
+      "children": [
+        {
+          "class": "text",
+          "frame": { "x": 10, "y": 10, "w": 30, "h": 25 },
+          "nativeID": "leaf-text"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "class": "container",
+  "frame": { "x": 0, "y": 0, "w": 200, "h": 100 },
+  "backgroundColor": "#FF0000",
+  "nativeID": "container-with-leaf",
+  "children": [
+    {
+      "class": "text",
+      "frame": { "x": 10, "y": 10, "w": 80, "h": 30 },
+      "nativeID": "leaf-text"
+    }
+  ]
+}
