@@ -580,3 +580,65 @@ test.describe('AutoSkeleton — debugOverlay (REQ-OBS-OVERLAY-1)', () => {
     expect(firstAnnotation.source).toBeTruthy();
   });
 });
+
+test.describe('AutoSkeleton — delay prop (session gap closure: declared but never read)', () => {
+  test('withholds the skeleton overlay until `delay` ms have elapsed', async ({ page, mountReady }) => {
+    await mountReady();
+    await page.evaluate(() => {
+      const { React, createRoot, AutoSkeleton, SkeletonProvider, MemoryShapeStore } = window.AutoskeletonComponent;
+      const store = new MemoryShapeStore();
+      const root = createRoot(document.getElementById('root')!);
+      root.render(
+        React.createElement(
+          SkeletonProvider,
+          { store },
+          React.createElement(
+            AutoSkeleton,
+            { isLoading: true, skeletonKey: 'delay-screen', delay: 200 },
+            React.createElement('p', { style: { margin: 0 } }, 'Delayed'),
+          ),
+        ),
+      );
+    });
+
+    // Immediately after mount, well before the 200ms delay, no overlay yet.
+    await settle(page);
+    expect(await page.locator('.askl-overlay').count()).toBe(0);
+
+    await page.waitForTimeout(300);
+    expect(await page.locator('.askl-overlay').count()).toBe(1);
+  });
+
+  test('a load that resolves before `delay` elapses never shows a skeleton at all', async ({ page, mountReady }) => {
+    await mountReady();
+    await page.evaluate(() => {
+      const { React, createRoot, AutoSkeleton, SkeletonProvider, MemoryShapeStore } = window.AutoskeletonComponent;
+      const store = new MemoryShapeStore();
+      const root = createRoot(document.getElementById('root')!);
+      (window as unknown as { __setLoading: (v: boolean) => void }).__setLoading = () => {};
+      function Harness() {
+        const [isLoading, setIsLoading] = React.useState(true);
+        (window as unknown as { __setLoading: (v: boolean) => void }).__setLoading = setIsLoading;
+        return React.createElement(
+          AutoSkeleton,
+          { isLoading, skeletonKey: 'delay-resolves-fast', delay: 500 },
+          React.createElement('p', { style: { margin: 0 } }, 'Fast'),
+        );
+      }
+      root.render(React.createElement(SkeletonProvider, { store }, React.createElement(Harness)));
+    });
+
+    await settle(page);
+    expect(await page.locator('.askl-overlay').count()).toBe(0);
+
+    // Resolve well before the 500ms delay would have elapsed.
+    await page.waitForTimeout(100);
+    await page.evaluate(() => (window as unknown as { __setLoading: (v: boolean) => void }).__setLoading(false));
+    await settle(page);
+
+    // Wait past the original delay window entirely — the skeleton must
+    // never have appeared, not even briefly.
+    await page.waitForTimeout(500);
+    expect(await page.locator('.askl-overlay').count()).toBe(0);
+  });
+});
