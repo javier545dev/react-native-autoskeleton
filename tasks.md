@@ -186,7 +186,7 @@ plan.md §7 preamble).
       `assemble-metrics.test.ts` covering REQ-OBS-METRICS-1's cold-load and hot-load scenarios.
       **Observability**: this task IS the metrics-assembly module. **Performance**: N/A, pure
       composition. Deps: 1.7. Complexity: M. Example app: none/unit-only.
-- [ ] **1.9** Consolidate `src/core/types.ts` (`ShapeInfo`, `ShapeSnapshot`,
+- [x] **1.9** Consolidate `src/core/types.ts` (`ShapeInfo`, `ShapeSnapshot`,
       `SerializedShapeSnapshot`, `DegradationFlag`, `RadiusSource`, `ShapeSource`) — no new logic.
       **Tests**: `types.test.ts` asserting `DegradationFlag` enumerates all 8 documented flags
       (drift guard). **Observability**: N/A. **Performance**: N/A. Deps: 1.8. Complexity: S.
