@@ -194,7 +194,7 @@ plan.md §7 preamble).
 
 ## Phase 2: DOM sensor + CSS renderer + web `debugOverlay`
 
-- [ ] **2.1** RED→GREEN `src/web/dom-sensor.ts` (`Sensor<HTMLElement>`) — `TreeWalker`
+- [x] **2.1** RED→GREEN `src/web/dom-sensor.ts` (`Sensor<HTMLElement>`) — `TreeWalker`
       traversal, leaf detection (text/`img`/`input`/`button`/background), `getBoundingClientRect`
       framing, `getComputedStyle().borderRadius`, `element.getClientRects()` per-line text,
       `ResizeObserver`+`MutationObserver` `observe()` (REQ-NAV-1 invalidation channel), `Ignore`
@@ -205,7 +205,7 @@ plan.md §7 preamble).
       `performance.measure` around traversal (REQ-OBS-PROFILE-1 web); dev sidecars populated when
       `collectDebugSidecars`. **Performance**: NFR-3 (<2 ms, ≤60 shapes) measured here as a local
       guard on web; authoritative gate is 9.1. Deps: 1.9. Complexity: L. Example app: Vite.
-- [ ] **2.2** RED→GREEN `src/web/css-renderer.ts` (`Renderer<HTMLElement>`) — single
+- [x] **2.2** RED→GREEN `src/web/css-renderer.ts` (`Renderer<HTMLElement>`) — single
       `clip-path: path()` overlay (reuses 1.5), shimmer animates `transform` ONLY (ADR-6 — lint
       rule + CSS-output assertion banning `background-position` anywhere in the codebase),
       `prefers-reduced-motion`→pulse/static, `ShimmerClock` CSS driver via negative
@@ -217,7 +217,7 @@ plan.md §7 preamble).
       PROFILE-1); `debugOverlay` itself is 2.4. **Performance**: NFR-1 (60 fps proxy) and NFR-7
       (zero React re-renders from animation, asserted via a React DevTools profiler hook showing
       no commit during a shimmer cycle). Deps: 2.1. Complexity: L. Example app: Vite.
-- [ ] **2.3** RED→GREEN `<AutoSkeleton>` web component — `src/index.web.ts`,
+- [x] **2.3** RED→GREEN `<AutoSkeleton>` web component — `src/index.web.ts`,
       `src/web/AutoSkeleton.tsx`: `isLoading`, `skeletonKey`, `animation`, `delay`, `onMetrics`,
       `debugOverlay`; a11y (`aria-busy="true"`, `role="status"`, real content `aria-hidden`);
       `SkeletonProvider`; `<AutoSkeleton.Ignore>`.
@@ -229,19 +229,31 @@ plan.md §7 preamble).
       **Performance**: NFR-6 — this is the web entry point; gzip measured on the Vite consumer
       build in 2.5, never on builder-bob output (ADR-3 caveat). Deps: 2.2. Complexity: L. Example
       app: Vite.
-- [ ] **2.4** RED→GREEN web `debugOverlay` — outline every detected shape with index, `source`
+- [x] **2.4** RED→GREEN web `debugOverlay` — outline every detected shape with index, `source`
       type, cache hit/miss badge (REQ-OBS-OVERLAY-1), dev-build only.
       **Tests**: Playwright — outline count == shape count with correct annotations; verifies the
       "missed node" diagnostic scenario. **Observability**: this task IS REQ-OBS-OVERLAY-1's web
       deliverable. **Performance**: N/A, dev-only, tree-shaken from production (verified by 2.5).
       Deps: 2.3. Complexity: M. Example app: Vite.
-- [ ] **2.5** RED→GREEN web packaging — Vite consumer bundle build, `<5 kB gzip` assertion
+- [ ] **2.5** PARTIAL — RED→GREEN web packaging — Vite consumer bundle build, `<5 kB gzip` assertion
       (NFR-6, spec Open Question 5 assumption: **failing gate**) measured on the built bundle;
       extend 0.6's packaging test to assert `index.web.js`'s transitive graph excludes native/Skia
       /Reanimated specifiers (closes the web-entry portion of the RISK-5 detector).
       **Tests**: `test/packaging/web-bundle.test.ts` (Vitest, reads Vite build output).
       **Observability**: N/A, packaging test. **Performance**: NFR-6, hard failing CI gate.
       Deps: 2.4, 0.6. Complexity: M. Example app: Vite.
+      **Status**: transitive-graph extension DONE and GREEN (`lib/module` + `lib/commonjs`
+      `index.web.js`, real recursive walk, not just the entry file). The NFR-6 gzip assertion itself
+      is genuinely RED: measured ~7.4-7.6 kB gzip (production build, `DebugOverlay` confirmed
+      tree-shaken) against the 5 kB budget. Root cause identified, not freelance-fixed: `ShapeStore`'s
+      contract (task 1.3, `src/core/contracts.ts`) requires `export()`/`import()` serialization on
+      every implementation including `MemoryShapeStore`, and those methods live on the same class as
+      the hot-path `get`/`set`/`has` methods `AutoSkeleton` actually calls — a bundler cannot
+      tree-shake individual class methods, so the serialization code (needed later for the Phase 8
+      SSR capture pipeline, unused by the live web runtime) rides along regardless. Closing this
+      task needs an explicit decision (e.g. split `MemoryShapeStore` into a lean runtime class plus a
+      separate serialization module, or revisit the 5 kB number) — left open rather than forced green
+      or silently weakened, per this project's own "do not mark complete if focused tests fail" rule.
 
 ## Phase 3: iOS native sensor + native fallback renderer + iOS `debugOverlay`
 
