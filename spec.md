@@ -1,0 +1,479 @@
+# Specification: autoskeleton v1
+
+> Change: `auto-skeleton-v1` — SDD phase 1 (spec).
+> Package identifier: `autoskeleton` (never `auto-skeleton`).
+> Source of truth: `docs/product-brief.md`. Upstream: `sdd/auto-skeleton-v1/proposal`, `sdd/auto-skeleton-v1/explore`.
+> This document describes WHAT the system must do. It does not prescribe implementation.
+
+## Scope note
+
+Ten new capabilities are in scope for v1 (greenfield repository, no existing behavior to modify):
+`shape-detection`, `snapshot-cache`, `skeleton-rendering`, `virtualized-lists`, `ssr-cold-snapshot`,
+`component-api`, `theming-interop`, `accessibility-and-motion`, `observability`, `package-distribution`.
+All requirements below are ADDED requirements against a greenfield baseline.
+
+---
+
+## 1. User Stories
+
+### 1.1 Simple screen (single wrapped view, cold cache)
+
+As a developer, I want to wrap a screen with `<AutoSkeleton isLoading>` and get a faithful
+placeholder derived from the real layout, with no manually authored skeleton.
+
+**REQ-SIMPLE-1**: The system MUST traverse the wrapped subtree's rendered layout (native view
+tree post-Yoga, or DOM boxes) when no cached snapshot exists for the composite key, and MUST
+render shimmer placeholders matching the detected frames before the first paint of loading state.
+
+#### Scenario: Cold load, no prior cache entry
+- GIVEN a screen wrapped in `<AutoSkeleton isLoading skeletonKey="profile">` with `isLoading=true`
+  and no snapshot cached for `profile` at the current `viewportWidth + fontScale + RTL + platform`
+- WHEN the screen mounts
+- THEN the sensor traverses the real subtree and derives one or more `ShapeInfo` rects
+- AND the renderer draws shimmer placeholders at those exact frames (position, size, radius)
+- AND the derived snapshot is persisted to the `ShapeStore` under the composite key
+
+#### Scenario: Container-vs-leaf resolution
+- GIVEN a container view with a non-transparent background that contains one or more detectable
+  leaf nodes (text, image, input) in its subtree
+- WHEN the sensor traverses that subtree
+- THEN the leaves are rendered as individual shapes and the container's own shape is omitted
+- AND if the subtree contains no detectable leaves, the container's own shape is rendered instead
+
+#### Scenario: Android corner radius — observable requirement, mechanism unresolved
+- GIVEN a native Android view with a rounded background
+- WHEN the sensor detects that view as a shape
+- THEN the rendered skeleton rect MUST use the view's actual corner radius when the runtime can
+  determine it, through whichever mechanism `plan.md`'s ADR selects
+- AND WHEN the radius cannot be determined, the system MUST degrade to a defined fallback radius
+  (typed `radius` hint or `SkeletonProvider.defaultRadius`) and MUST emit probe-miss telemetry
+  identifying the affected shape — silent radius-0 degradation with no signal is a defect
+
+### 1.2 Virtualized lists — sub-case 1: initial load (empty list)
+
+As a developer, I want a skeleton to render before any list data exists, using synthetic rows
+sized from a cached or freshly measured template cell.
+
+**REQ-LIST-EMPTY-1**: The system MUST render N synthetic skeleton rows for an empty/loading list
+using cached shapes for the declared `itemType`, without requiring any real row to exist yet.
+
+**REQ-LIST-EMPTY-2**: On the first-ever render of a given `itemType` in the app's lifetime (no
+cache entry exists), the system MUST render exactly one invisible template cell, measure it once
+outside the interaction frame (deferred, non-blocking), and persist the result before any further
+synthetic rows use it.
+
+#### Scenario: First-ever render of an itemType
+- GIVEN a `<SkeletonList itemType="feedCard" estimatedCount={6} />` with no cache entry for
+  `feedCard`
+- WHEN the list mounts with `isLoading=true`
+- THEN one invisible template cell is measured once, deferred so it does not block the interaction
+  frame
+- AND the measured shapes are cached under `itemType="feedCard"`
+- AND 6 synthetic skeleton rows render using those shapes
+
+#### Scenario: Repeat render, cache present
+- GIVEN a cache entry already exists for `itemType="feedCard"`
+- WHEN a different screen renders `<SkeletonList itemType="feedCard" estimatedCount={4} />`
+- THEN no template cell is measured and no traversal runs
+- AND 4 synthetic rows render immediately from the cached shapes
+
+### 1.3 Virtualized lists — sub-case 2: pagination / infinite scroll
+
+As a developer, I want a loading indicator for the next page of a list that matches the real row
+shape, rendered via `ListFooterComponent`.
+
+**REQ-LIST-PAGE-1**: The system MUST render skeleton rows inside `ListFooterComponent` using the
+same cached shapes as the list's `itemType`, without re-traversing the already-rendered cells.
+
+#### Scenario: Fetching next page
+- GIVEN a FlatList/FlashList with real rows already rendered for `itemType="feedCard"` and a cache
+  entry present
+- WHEN `onEndReached` fires and the next page is loading
+- THEN `ListFooterComponent` renders skeleton rows sized from the cached `feedCard` shapes
+- AND existing rendered rows are unaffected (no re-traversal, no flicker)
+
+#### Scenario: Page load completes
+- GIVEN skeleton footer rows are visible during pagination
+- WHEN the next page's data resolves
+- THEN the footer skeleton rows are replaced by real rows
+- AND no traversal occurs for the newly appended real rows unless they belong to an unseen
+  `itemType`
+
+### 1.4 Virtualized lists — sub-case 3: per-cell loading (ZERO-TRAVERSAL-ON-BIND)
+
+As a developer, I want individual cells (e.g. refetching an image or item) to show a skeleton
+without any per-bind traversal cost.
+
+**REQ-LIST-CELL-1**: The system MUST resolve a per-cell skeleton via a synchronous cache lookup by
+`itemType` on every bind. Traversal MUST NOT run on bind. Traversal MUST run only the first time a
+given `itemType` is seen, and MUST be deferred with `runAfterInteractions`.
+
+#### Scenario: Cell rebind with known itemType
+- GIVEN `itemType="feedCard"` has a cached snapshot
+- WHEN a recycled cell rebinds with `isLoading=true` for `itemType="feedCard"`
+- THEN the skeleton shapes resolve via a synchronous cache lookup only
+- AND no view-tree traversal is triggered during the bind call
+
+#### Scenario: Cell rebind with unseen itemType
+- GIVEN `itemType="promoCard"` has never been measured
+- WHEN a cell first binds with `isLoading=true` for `itemType="promoCard"`
+- THEN a fallback generic skeleton renders immediately for that bind
+- AND traversal for `promoCard` is scheduled via `runAfterInteractions`, not run synchronously on
+  bind
+- AND subsequent binds of `promoCard` use the now-cached shapes with zero traversal
+
+### 1.5 Pull-to-refresh with existing data
+
+As a user, I want pull-to-refresh to keep showing my existing content by default, not replace it
+with a skeleton.
+
+**REQ-PTR-1**: The system MUST NOT show a skeleton during a pull-to-refresh of a screen/list that
+already has rendered data, unless the developer explicitly opts out of this default.
+
+#### Scenario: Default stale-while-revalidate behavior
+- GIVEN a screen with data already rendered and `<AutoSkeleton isLoading={false}>`
+- WHEN the user triggers pull-to-refresh and `isLoading` becomes `true` while stale data is still
+  present
+- THEN the existing content remains visible (no skeleton overlay)
+- AND when fresh data resolves, content updates in place
+
+#### Scenario: Explicit opt-out
+- GIVEN the developer has set the documented opt-out flag for a given `<AutoSkeleton>` instance
+- WHEN pull-to-refresh sets `isLoading=true` over existing data
+- THEN the skeleton renders over/instead of the stale content as it would on a cold load
+
+### 1.6 Navigation between screens (cache hot path)
+
+As a user, I want a screen I've visited before to show its skeleton with the correct shapes from
+the very first frame.
+
+**REQ-NAV-1**: The system MUST serve a cached snapshot synchronously (no traversal) when a screen
+with a matching composite key (`skeletonKey + itemType + viewportWidth + fontScale + RTL +
+platform`) has been previously measured.
+
+#### Scenario: Returning to a previously visited screen
+- GIVEN screen `profile` was previously measured and cached at the current composite key
+- WHEN the user navigates back to `profile` with `isLoading=true`
+- THEN the skeleton renders with the cached shapes on the first frame
+- AND `onMetrics` reports `cacheHit: true` and `traversalMs: 0`
+
+#### Scenario: Composite key invalidation on rotation
+- GIVEN a cached snapshot exists for `profile` at `viewportWidth=390`
+- WHEN the device rotates and `viewportWidth` changes to `844`
+- THEN the previous cache entry is not served
+- AND the sensor traverses again and persists a new snapshot under the new composite key
+
+### 1.7 Images: skeleton → placeholder → image pipeline
+
+As a developer, I want the skeleton for an image to hand off cleanly to whatever progressive
+loading the underlying image component provides, without fighting it.
+
+**REQ-IMG-1**: The system MUST detect image nodes as leaf shapes (native image component classes,
+or `img`/background-image elements on web) and render a skeleton for them while `isLoading=true`.
+
+**REQ-IMG-2**: The system MUST relinquish control of the visual once `isLoading` transitions to
+`false`; it MUST NOT manage or interfere with any subsequent placeholder-to-full-image transition
+(e.g. a low-resolution placeholder) performed by the underlying image component itself.
+
+#### Scenario: Image skeleton to real image, no intermediate placeholder
+- GIVEN an image leaf detected inside a wrapped subtree, `isLoading=true`
+- WHEN `isLoading` transitions to `false`
+- THEN the skeleton unmounts and the underlying image component renders as it normally would
+- AND autoskeleton renders no further state for that node
+
+#### Scenario: Image skeleton to real image, with a low-res placeholder
+- GIVEN the underlying image component (e.g. an image library supporting a low-resolution
+  placeholder) is configured with its own placeholder mechanism
+- WHEN `isLoading` transitions to `false`
+- THEN the skeleton unmounts immediately
+- AND the placeholder-to-full-image transition is owned entirely by the image component, not by
+  autoskeleton
+- (See Open Questions — this pipeline hand-off is a working assumption, not a brief-sourced fact.)
+
+### 1.8 SSR / Suspense — cold-path replay
+
+As a developer using Next.js, I want a server-rendered skeleton fallback that never mismatches on
+hydration, without live layout detection being attempted inside `<Suspense>`.
+
+**REQ-SSR-1**: The system MUST NOT attempt live layout detection inside a `<Suspense>` fallback.
+SSR skeleton rendering MUST be replay of a build-time-captured snapshot.
+
+**REQ-SSR-2**: A build-time capture CLI MUST run the target app in headless Chromium across N
+declared viewport-width buckets and both RTL directions (LTR/RTL), using a developer-declared
+`skeletonKey → route` registry, and MUST emit a serializable snapshot bundle.
+
+**REQ-SSR-3**: The captured bundle MUST be emitted as CSS with one `@media` block per captured
+width bucket, so a single server-rendered payload is correct at every width without the server
+knowing the viewport.
+
+**REQ-SSR-4**: A server-rendered `<Suspense>` fallback using a captured `skeletonKey` MUST produce
+byte-identical markup to what the client renders for the same key before hydration completes
+(zero hydration mismatch).
+
+#### Scenario: Server render of a captured skeletonKey
+- GIVEN `skeletonKey="dashboard"` was captured by the CLI at width buckets `[360, 768, 1280]` in
+  both LTR and RTL
+- WHEN a Next.js route server-renders `<Suspense fallback={<AutoSkeleton.SSR skeletonKey="dashboard" />}>`
+- THEN the server emits one markup payload with the `@media`-bucketed CSS bundle inlined or linked
+- AND the browser at any of the captured widths displays the shapes for its matching bucket with
+  no client-side re-measurement
+- AND React reports zero hydration mismatch warnings for that fallback
+
+#### Scenario: Uncaptured skeletonKey (residual limit, not a defect)
+- GIVEN `skeletonKey="new-widget"` was never captured by the CLI
+- WHEN the server renders a `<Suspense>` fallback for `new-widget`
+- THEN the server renders a defined neutral generic block for that key
+- AND the client renders the identical neutral generic block before any client-side traversal
+- AND no hydration mismatch occurs, because server and client rendered the same fallback
+
+#### Scenario: fontScale is unknowable server-side (residual limit, not a defect)
+- GIVEN a user has an enlarged system font scale
+- WHEN the server renders a captured cold skeleton without knowledge of that user's `fontScale`
+- THEN the served skeleton uses `rem`-relative sizing to absorb scale where geometrically possible
+- AND the specification acknowledges the skeleton MAY still differ from final rendered content
+  for that user; this is a documented constraint, not a bug to be fixed in v1
+
+### 1.9 Theming via Tailwind v4 / Uniwind / NativeWind
+
+As a developer using a Tailwind-based styling system, I want the skeleton's colors and radius to
+follow my theme without extra configuration.
+
+**REQ-THEME-1**: The system MUST expose a CSS-variable contract (`--skl-base`, `--skl-highlight`)
+that is themeable via Tailwind v4, and MUST support dark mode via cascade on web.
+
+**REQ-THEME-2**: The system MUST offer optional subpath exports (`autoskeleton/uniwind`,
+`autoskeleton/nativewind`) that map className-driven values (`backgroundColor`, `color`,
+`borderRadius`) to skeleton props (`shimmerBaseColor`, `shimmerHighlightColor`, `defaultRadius`).
+
+**REQ-THEME-3**: The core sensor MUST remain agnostic to the active styling system — it reads
+rendered frames and computed styles only, never className strings.
+
+#### Scenario: Tailwind v4 theme variables
+- GIVEN a web app defines `--skl-base` and `--skl-highlight` inside `@theme` or `:root`
+- WHEN `<AutoSkeleton>` renders its shimmer overlay
+- THEN the shimmer gradient colors resolve from those CSS variables
+- AND toggling a dark-mode class changes the shimmer colors via cascade, with no prop change
+
+#### Scenario: Uniwind interop maps className to skeleton props
+- GIVEN a native component uses `className="bg-slate-200 rounded-lg"` under `withUniwind`
+- WHEN `autoskeleton/uniwind` interop is active
+- THEN `shimmerBaseColor` and `defaultRadius` are derived from the resolved className values
+- AND the developer supplies no separate skeleton-specific color/radius props
+
+### 1.10 Accessibility
+
+As a user of assistive technology, I want loading content hidden from the accessibility tree and
+announced, and I want the shimmer to respect reduced-motion settings.
+
+**REQ-A11Y-1**: While `isLoading=true`, the system MUST hide the underlying real content from
+assistive technology (`accessibilityElementsHidden` / `importantForAccessibility="no-hide-descendants"`
+on native; `aria-busy="true"` + `role="status"` on web).
+
+**REQ-A11Y-2**: The system MUST announce the loading state to screen readers.
+
+**REQ-A11Y-3**: When the platform's reduce-motion setting is enabled, the system MUST degrade the
+shimmer animation to a pulse or static presentation.
+
+#### Scenario: Screen reader hides real content during load
+- GIVEN a screen wrapped in `<AutoSkeleton isLoading>` with a screen reader active
+- WHEN `isLoading=true`
+- THEN the real content subtree is excluded from the accessibility tree
+- AND the container carries `role="status"` / equivalent native semantics
+- AND a loading announcement is emitted
+
+#### Scenario: Reduce-motion degrades animation
+- GIVEN the platform reduce-motion setting is enabled
+- WHEN a skeleton with `animation="shimmer"` renders
+- THEN the rendered animation is a pulse or static presentation instead of the traveling shimmer
+- AND no `transform`-based shimmer sweep is applied
+
+---
+
+## 2. Observability Stories
+
+Per brief section 11, observability is a phase-1 requirement: no feature capability is complete
+without emitting its metrics and instrumentation. Each capability below is independently
+verifiable — "metrics are emitted" alone is not an acceptable acceptance criterion.
+
+### 2.1 `onMetrics` callback
+
+**REQ-OBS-METRICS-1**: Every `<AutoSkeleton>` instance with an `onMetrics` prop MUST invoke it
+exactly once per completed skeleton-to-content lifecycle (mount-to-hide transition), with all
+seven fields populated as specified below.
+
+| Field | Type | Emitted when / correct value |
+|---|---|---|
+| `traversalMs` | number | Wall-clock time of the sensor traversal call for this instance. `0` on a cache hit (no traversal ran); `> 0` and `< 2` for a typical (<=60 shape) cold traversal per the NFR budget. |
+| `shapeCount` | number | Count of `ShapeInfo` entries produced for this instance, whether from traversal or cache. Never negative; `0` only if the subtree had no detectable content. |
+| `cacheHit` | boolean | `true` if the composite key resolved a persisted snapshot without traversal; `false` if traversal ran (cold path, including a first-ever template-cell measurement). |
+| `ttfsMs` | number | Elapsed time from `isLoading` becoming `true` to the first skeleton frame being painted. Must be `>= 0`; near-`0` on a cache hit, larger on a cold traversal. |
+| `displayDurationMs` | number | Elapsed time the skeleton was visibly shown, from first paint to the `isLoading=false` transition (or content-hide-to-restore). Must reflect wall-clock display time, not traversal time. |
+| `platform` | `'ios' \| 'android' \| 'web'` | Matches the runtime platform the instance executed on; never a fourth value. |
+| `renderer` | `'native' \| 'skia' \| 'web'` | Matches the renderer tier actually used for this instance (tier-1 native fallback, tier-2 Skia overlay, or the CSS web renderer). |
+
+#### Scenario: Cold load reports traversal cost
+- GIVEN a first-ever cold load for `skeletonKey="profile"` with 12 detected shapes
+- WHEN the skeleton-to-content lifecycle completes
+- THEN `onMetrics` fires once with `cacheHit: false`, `shapeCount: 12`, `traversalMs > 0`, and
+  `renderer`/`platform` matching the executing environment
+
+#### Scenario: Hot load reports zero traversal cost
+- GIVEN a cached snapshot exists for `skeletonKey="profile"` at the current composite key
+- WHEN the same screen mounts again
+- THEN `onMetrics` fires once with `cacheHit: true` and `traversalMs: 0`
+- AND `ttfsMs` is measurably smaller than the cold-load `ttfsMs` for the same key
+
+### 2.2 Native profiler markers
+
+**REQ-OBS-PROFILE-1**: The system MUST emit `os_signpost` intervals (iOS) and
+`Trace.beginSection`/`endSection` (Android) around traversal, JSI serialization, and draw, and
+MUST emit `performance.mark`/`performance.measure` around the equivalent phases on web.
+
+**REQ-OBS-PROFILE-2**: Every Android trace section name MUST be <= 127 characters and MUST obey
+same-thread begin/end nesting.
+
+#### Scenario: iOS traversal visible in Instruments
+- GIVEN a cold traversal runs on iOS
+- WHEN captured in Instruments' `os_signpost` / Points of Interest instrument
+- THEN a signpost interval labeled for traversal is present, with a nested or adjacent interval
+  for JSI serialization, and one for draw
+
+#### Scenario: Android trace section respects the name limit
+- GIVEN a traversal runs on Android with Perfetto/Systrace capture active
+- WHEN the trace section is opened via `Trace.beginSection`
+- THEN the section name is <= 127 characters
+- AND `endSection` is called on the same thread before the traversal call returns
+
+### 2.3 `debugOverlay`
+
+**REQ-OBS-OVERLAY-1**: In development builds, setting `debugOverlay` on `<AutoSkeleton>` MUST draw
+the outline of every detected shape, annotated with its index, source type
+(`text | image | background | synthetic`), and a cache hit/miss badge.
+
+#### Scenario: Debugging a missed node
+- GIVEN a developer suspects a text node was not detected
+- WHEN `debugOverlay` is enabled and the screen re-renders in loading state
+- THEN every detected shape shows its outline, index, source type, and hit/miss badge
+- AND the absence of an outline over the suspected node is itself the diagnostic signal
+
+### 2.4 Dev budget warnings
+
+**REQ-OBS-BUDGET-1**: In development builds, the system MUST emit a warning with an actionable
+suggestion when traversal exceeds the configured time budget (default 2 ms) or when shape count
+exceeds the configured budget (default 60 shapes per screen). Budgets MUST be configurable.
+
+#### Scenario: Traversal exceeds the default time budget
+- GIVEN a screen traversal takes 3.4 ms with default budgets
+- WHEN the traversal completes
+- THEN a development-only warning is logged citing the measured time, the 2 ms budget, and an
+  actionable suggestion (e.g. reduce subtree depth, use `<AutoSkeleton.Ignore>`)
+
+#### Scenario: Shape count exceeds the default budget
+- GIVEN a screen produces 74 detected shapes with default budgets
+- WHEN traversal completes
+- THEN a development-only warning is logged citing the measured count, the 60-shape budget, and
+  an actionable suggestion
+
+### 2.5 CI benchmark suite
+
+**REQ-OBS-CI-1**: A reproducible CI benchmark suite MUST measure traversal time for 30-shape and
+60-shape reference screens, JSI serialization cost, and shimmer frame drops while scrolling a
+50-cell list, and MUST fail the pipeline on budget regression.
+
+#### Scenario: Traversal regression fails CI
+- GIVEN the 60-shape reference screen benchmark has a recorded baseline of 1.6 ms
+- WHEN a change increases measured traversal time to 2.3 ms
+- THEN the CI benchmark job fails with the baseline, the measured value, and the exceeded budget
+
+#### Scenario: Frame-drop regression fails CI
+- GIVEN the 50-cell scroll benchmark has a recorded baseline frame-drop count
+- WHEN a change increases dropped frames beyond the configured tolerance while scrolling
+- THEN the CI benchmark job fails, citing the baseline and measured frame-drop counts
+
+---
+
+## 3. Non-Functional Requirements (measurable)
+
+| # | Requirement | Pass/fail criterion |
+|---|---|---|
+| NFR-1 | Shimmer frame rate | Tier-1 (native fallback) sustains 60 fps on mid-range devices; tier-2 (Reanimated) sustains 120 Hz on ProMotion displays. Fails if measured fps drops below target for more than 5% of sampled frames in the CI scroll benchmark. |
+| NFR-2 | Blocked-thread resilience | Tier-1 shimmer continues animating (measurable via frame capture) while the JS thread is synchronously blocked for >= 500 ms. Fails if the shimmer freezes during the block. |
+| NFR-3 | Traversal cost | Native traversal completes in < 2 ms for a screen with <= 60 shapes (CI benchmark, p95). Fails if p95 >= 2 ms. |
+| NFR-4 | Cache lookup cost | Synchronous cache lookup by composite key completes in < 0.2 ms (CI benchmark, p95). Fails if p95 >= 0.2 ms. |
+| NFR-5 | Zero per-frame allocations | The animation path allocates no new objects per frame (Android: shader created once and reused via `Matrix.setTranslate`; JSI: `Float32Array` reused per Nitro ownership rules). Fails if a memory-profiler pass shows per-frame allocation growth during a steady-state shimmer loop. |
+| NFR-6 | Web bundle size | The web entry (`.`, no theming interops) is < 5 kB gzip with no runtime dependency beyond React. Fails if a production build of that entry exceeds 5 kB gzip. |
+| NFR-7 | Zero animation-driven re-renders | No React re-render is attributable to the shimmer animation. Fails if a React DevTools Profiler / render-count instrumentation pass records a re-render caused by an animation frame tick. |
+| NFR-8 | No memory leaks under recycling | A list-recycling stress test (repeated mount/unmount of skeleton cells over N cycles) shows no retained-memory growth beyond a fixed tolerance. Fails if retained heap size grows monotonically across cycles. |
+
+---
+
+## 4. Compatibility Matrix
+
+| Dependency | Minimum / requirement | Source |
+|---|---|---|
+| React Native (bare) | 0.83+ (Fabric-only; old architecture removed as of 0.83, not merely deprecated). **Bare RN is a first-class, co-equal target with Expo**, proven by a dedicated bare example app in CI. | Brief §1, §2, §3b |
+| React | 19 | Brief §15 (proposal dependencies) |
+| Architecture | New Architecture (Fabric) only — old architecture unsupportable, no code path exists on current RN | Brief §2 |
+| Expo | Supported via a development build / prebuild. Exact minimum Expo SDK: **to be pinned during implementation**. | Brief §1, §3b |
+| Expo Go | **NOT SUPPORTED.** A custom native module is absent from the Expo Go binary. This MUST surface as documented guidance pointing the user to a development build, never as a silent failure. | Brief §3b |
+| Autolinking | Two distinct mechanisms must BOTH be satisfied by one published artifact: `@react-native-community/cli` (bare — reads `react-native.config.js`, `.podspec`, `build.gradle`) and `expo-modules-autolinking` (Expo). Whether `create-react-native-library`'s default output satisfies both must be VERIFIED in CI, not assumed. | Brief §3b |
+| Metro resolution | `preferNativePlatform: true` is set unconditionally by Metro core (`DependencyGraph.js:153`) and is overridden by NONE of `metro-config` 0.87.0, `@expo/metro-config` 57.0.11, or `@react-native/metro-config` 0.87.1. The explicit `index.web.ts`/`index.native.ts` pair plus `exports` conditions is therefore required and sufficient across bare RN, Expo, and Expo Web alike. | Brief §2 |
+| Nitro Modules (if selected by the bridge ADR) | `react-native-nitro-modules` >= 0.37; requires RN >= 0.75, Swift 5.9 / Xcode 16.4 (iOS), NDK 27+ / compileSdk 34+ (Android) | Brief §2 |
+| `react-native-reanimated` (tier-2, optional peer) | v4+; New-Architecture-only; requires `react-native-worklets` as an additional peer, version-matched to the Reanimated release | Brief §2, explore §B.6 |
+| `@shopify/react-native-skia` (tier-2, optional peer) | >= 2.10 pairs with Reanimated v4+ | Explore §B.6 |
+| Tailwind v4 | `@theme` CSS-first syntax; `--skl-base`/`--skl-highlight` declared as plain CSS custom properties (not a recognized Tailwind namespace) | Brief §2, §9; explore §D |
+| Uniwind | `withUniwind` interop API, current ~1.2.6 | Brief §2; explore §D |
+| NativeWind | `cssInterop` — current and stable in v4; deprecated in the unreleased v5 in favor of a unified `styled` API. v5 migration is a documented future risk, not a v1 blocker. | Brief §2; explore §D |
+| Browsers (web renderer) | `clip-path: path()` — Chrome 88+, Edge 88+, Firefox 71+, Safari 15.4+. `shape()` reached Baseline Feb 2026 but is NOT relied upon alone (shorter support tail). `ResizeObserver` — Chrome 64+, Firefox 69+, Edge 79+, Safari 13.1+. `MutationObserver` — near-universal. | Brief §2; explore §C |
+| Test tooling | Vitest (core, unit); Playwright (layout-sensitive tests and the SSR capture CLI) — jsdom cannot perform real layout (jsdom #653, #3729) | Brief §2, §15 |
+| Build tooling | `create-react-native-library` + `react-native-builder-bob` 0.43.0. **S4 is RESOLVED: a distinct web entry IS supported, no custom tooling needed** — builder-bob's `compile.js` is a filename-preserving per-file Babel transpile (globs `**/*`, writes `path.join(output, path.relative(source, filepath))`), so `src/index.web.ts` emits `index.web.js` automatically. Two caveats: `exports` conditions must be hand-authored (`init.js:182-223` generates a default without them and PROMPTS TO REPLACE an existing one — decline it), and the < 5 kB gzip NFR must be measured on a consumer bundle, never on builder-bob output. | Brief §14 |
+
+---
+
+## 5. Out of Scope for v1
+
+Per brief section 13:
+
+- Old RN architecture (pre-Fabric) — it no longer exists as of RN 0.83.
+- Disk persistence of the snapshot cache (the `ShapeStore` interface must permit it later; v1 is
+  in-memory only).
+- Per-corner border-radius detection on Android (v1 supports a single uniform radius per shape).
+- Vue, Svelte, or any non-React framework.
+
+---
+
+## 6. Open Questions
+
+Execution mode is `auto`; these could not be resolved interactively. Each carries the working
+assumption in force for this spec, carried over from the proposal's question round unless noted.
+
+1. **Capture-CLI ergonomics** — is a developer-declared `skeletonKey → route` registry acceptable
+   for v1, or should route auto-discovery be attempted? **Assumption: declared registry.**
+2. **Uncaptured-key SSR behavior** — neutral generic block, rendered identically on server and
+   client. **Assumption: confirmed in REQ-SSR / §1.8 scenario above; this is the current working
+   contract, not yet user-ratified.**
+3. **Tier-2 Skia positioning** — opt-in extra vs. documented default for Reanimated-equipped teams.
+   **Assumption: opt-in**, per proposal.
+4. **Spike-failure policy for Android leaf class names (S3)** — if `ReactTextView` /
+   `ReactImageView` / `ReactEditText` prove unreliable across targeted RN builds, does v1 ship
+   iOS-complete with degraded Android detection, or does Android block release? **Assumption:
+   Android blocks release**, per proposal.
+5. **Web bundle size gate** — is the < 5 kB gzip target (NFR-6) a hard failing CI gate or a
+   tracked budget? **Assumption: failing gate**, per proposal.
+6. **Image pipeline hand-off (§1.7)** — the skeleton→placeholder→image transition described here
+   is a working interpretation (autoskeleton owns only the "no data" phase and cedes control on
+   `isLoading=false`), since neither the brief nor the exploration document a specific
+   blurhash mechanism. **Assumption: autoskeleton does not implement or manage blurhash decoding
+   itself; it only governs the skeleton-visible phase.** This should be confirmed or corrected
+   before `plan.md` designs the image leaf contract.
+7. **Android corner-radius mechanism (brief §2, §14 ADR)** — deliberately left unresolved by this
+   spec, which states only the observable requirement (§1.1 scenario) and the probe-miss
+   telemetry requirement. The mechanism choice among (a) internal-class reflection, (b) Fabric
+   shadow-node props, (c) typed-hint fallback, is owned by `plan.md`.
+8. **Native bridge choice for `getShapes`** — Nitro vs. Turbo+codegen vs. hand-written JSI is an
+   ADR owed by `plan.md` (brief §3). This spec only fixes the observable contract: a flat
+   `Float32Array` `[x,y,w,h,r] x N` with a schema-version slot.
+9. **Build tooling for the dual web/native entry (spike S4)** — whether
+   `create-react-native-library`/`react-native-builder-bob` can ship a distinct web entry point is
+   unresolved. **Assumption: proceed with the standard toolchain first; fall back to custom
+   build tooling if S4 resolves negatively during `plan.md`.**
