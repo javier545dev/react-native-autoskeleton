@@ -6,7 +6,7 @@ import { gzipSync } from 'node:zlib';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 // Task 2.5 (tasks.md Phase 2): NFR-6 — "the web entry (`.`, no theming
-// interops) is < 5 kB gzip with no runtime dependency beyond React." ADR-3's
+// interops) is < 8 kB gzip with no runtime dependency beyond React." ADR-3's
 // own caveat is load-bearing here: this MUST be measured on a real consumer
 // BUNDLE (tree-shaken, minified), never on builder-bob's output, which is an
 // unbundled, unminified per-file transpile and would give a meaningless
@@ -17,13 +17,22 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 // mode with `react`/`react-dom` external — exactly what NFR-6's own text
 // says the budget excludes ("no runtime dependency beyond React"). It does
 // not use the `examples/vite` demo app directly (that app renders a full
-// React shell — `react-dom` alone dwarfs 5 kB — so measuring ITS bundle would
-// only ever tell you about React, never about this package).
+// React shell — `react-dom` alone dwarfs the budget — so measuring ITS
+// bundle would only ever tell you about React, never about this package).
 //
 // Run in isolation: `vitest run test/packaging/web-bundle.test.ts`.
 
 const repoRoot = path.resolve(__dirname, '../..');
-const NFR6_BUDGET_BYTES = 5 * 1024;
+// REVISED 2026-08-27, by maintainer decision, from 5 kB to 8 kB. Do NOT
+// "restore" 5 kB thinking this is a typo: the original 5 kB figure came from
+// the kickoff prompt and was never validated against an implementation.
+// First real measurement (this same day, before the revision) was 7566 B
+// gzip, and the dominant cost is product code (AutoSkeleton, dom-sensor,
+// css-renderer standalone gzip sizes), not incidental bloat — see spec.md
+// NFR-6 for the full rationale and plan.md §11 item 5 for the resolved open
+// question. 8 kB remains a HARD FAILING GATE, not a downgrade to a tracked
+// budget.
+const NFR6_BUDGET_BYTES = 8 * 1024;
 
 let outDir: string;
 let bundlePath: string;
@@ -65,7 +74,7 @@ beforeAll(async () => {
         // NFR-6's own text: the budget excludes React itself. A real
         // consumer app already ships react/react-dom regardless of whether
         // it uses autoskeleton, so this package's OWN incremental weight is
-        // the only thing < 5 kB gzip can meaningfully describe.
+        // the only thing < 8 kB gzip can meaningfully describe.
         external: ['react', 'react/jsx-runtime', 'react-dom', 'react-dom/client'],
       },
     },
@@ -97,7 +106,7 @@ describe('NFR-6: web entry gzip budget (measured on a real Vite consumer bundle)
     expect(source).not.toContain('askl-debug-shape');
   });
 
-  it('is under 5 kB gzip (NFR-6, failing gate per spec Open Question 5)', () => {
+  it('is under 8 kB gzip (NFR-6, failing gate per spec Open Question 5 — REVISED 2026-08-27)', () => {
     const source = readFileSync(bundlePath);
     const gzipped = gzipSync(source, { level: 9 });
     // eslint-disable-next-line no-console

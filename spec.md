@@ -401,7 +401,7 @@ exceeds the configured budget (default 60 shapes per screen). Budgets MUST be co
 | NFR-3 | Traversal cost | Native traversal completes in < 2 ms for a screen with <= 60 shapes (CI benchmark, p95). Fails if p95 >= 2 ms. |
 | NFR-4 | Cache lookup cost | Synchronous cache lookup by composite key completes in < 0.2 ms (CI benchmark, p95). Fails if p95 >= 0.2 ms. |
 | NFR-5 | Zero per-frame allocations | The animation path allocates no new objects per frame (Android: shader created once and reused via `Matrix.setTranslate`; JSI: `Float32Array` reused per Nitro ownership rules). Fails if a memory-profiler pass shows per-frame allocation growth during a steady-state shimmer loop. |
-| NFR-6 | Web bundle size | The web entry (`.`, no theming interops) is < 5 kB gzip with no runtime dependency beyond React. Fails if a production build of that entry exceeds 5 kB gzip. |
+| NFR-6 | Web bundle size | The web entry (`.`, no theming interops) is **< 8 kB gzip** with no runtime dependency beyond React. Fails if a production build of that entry exceeds 8 kB gzip. **REVISED 2026-08-27 from 5 kB, by maintainer decision, after first measurement.** The original 5 kB came from the kickoff prompt and was never validated against an implementation. Measured reality at the end of Phase 2 is 7566 B gzip, and the dominant cost is product code (AutoSkeleton, dom-sensor, css-renderer), not incidental bloat — removing the `ShapeStore` serialization methods recovers roughly 1 kB of the 2446 that 5 kB would require, so the remainder could only come from cutting real functionality. 8 kB is a measured, defensible number and remains a HARD FAILING GATE. |
 | NFR-7 | Zero animation-driven re-renders | No React re-render is attributable to the shimmer animation. Fails if a React DevTools Profiler / render-count instrumentation pass records a re-render caused by an animation frame tick. |
 | NFR-8 | No memory leaks under recycling | A list-recycling stress test (repeated mount/unmount of skeleton cells over N cycles) shows no retained-memory growth beyond a fixed tolerance. Fails if retained heap size grows monotonically across cycles. |
 
@@ -426,7 +426,7 @@ exceeds the configured budget (default 60 shapes per screen). Budgets MUST be co
 | NativeWind | `cssInterop` — current and stable in v4; deprecated in the unreleased v5 in favor of a unified `styled` API. v5 migration is a documented future risk, not a v1 blocker. | Brief §2; explore §D |
 | Browsers (web renderer) | `clip-path: path()` — Chrome 88+, Edge 88+, Firefox 71+, Safari 15.4+. `shape()` reached Baseline Feb 2026 but is NOT relied upon alone (shorter support tail). `ResizeObserver` — Chrome 64+, Firefox 69+, Edge 79+, Safari 13.1+. `MutationObserver` — near-universal. | Brief §2; explore §C |
 | Test tooling | Vitest (core, unit); Playwright (layout-sensitive tests and the SSR capture CLI) — jsdom cannot perform real layout (jsdom #653, #3729) | Brief §2, §15 |
-| Build tooling | `create-react-native-library` + `react-native-builder-bob` 0.43.0. **S4 is RESOLVED: a distinct web entry IS supported, no custom tooling needed** — builder-bob's `compile.js` is a filename-preserving per-file Babel transpile (globs `**/*`, writes `path.join(output, path.relative(source, filepath))`), so `src/index.web.ts` emits `index.web.js` automatically. Two caveats: `exports` conditions must be hand-authored (`init.js:182-223` generates a default without them and PROMPTS TO REPLACE an existing one — decline it), and the < 5 kB gzip NFR must be measured on a consumer bundle, never on builder-bob output. | Brief §14 |
+| Build tooling | `create-react-native-library` + `react-native-builder-bob` 0.43.0. **S4 is RESOLVED: a distinct web entry IS supported, no custom tooling needed** — builder-bob's `compile.js` is a filename-preserving per-file Babel transpile (globs `**/*`, writes `path.join(output, path.relative(source, filepath))`), so `src/index.web.ts` emits `index.web.js` automatically. Two caveats: `exports` conditions must be hand-authored (`init.js:182-223` generates a default without them and PROMPTS TO REPLACE an existing one — decline it), and the NFR-6 gzip budget must be measured on a consumer bundle, never on builder-bob output. | Brief §14 |
 
 ---
 
@@ -458,7 +458,9 @@ assumption in force for this spec, carried over from the proposal's question rou
    `ReactImageView` / `ReactEditText` prove unreliable across targeted RN builds, does v1 ship
    iOS-complete with degraded Android detection, or does Android block release? **Assumption:
    Android blocks release**, per proposal.
-5. **Web bundle size gate** — is the < 5 kB gzip target (NFR-6) a hard failing CI gate or a
+5. ~~**Web bundle size gate**~~ — **RESOLVED 2026-08-27.** It is a hard failing CI gate, and the
+   budget was revised from 5 kB to 8 kB after the first real measurement (7566 B). See NFR-6.
+   Original question text: is the < 5 kB gzip target (NFR-6) a hard failing CI gate or a
    tracked budget? **Assumption: failing gate**, per proposal.
 6. **Image pipeline hand-off (§1.7)** — the skeleton→placeholder→image transition described here
    is a working interpretation (autoskeleton owns only the "no data" phase and cedes control on

@@ -1190,7 +1190,7 @@ round, restated here because the design now depends on them):**
 2. An uncaptured `skeletonKey` renders a neutral generic block, identical on server and client (ADR-12).
 3. Tier-2 Skia is opt-in, never the documented default (ADR-5, RISK-8).
 4. If Android detection cannot be made to work, Android **blocks** release; v1 does not ship iOS-only.
-5. The < 5 kB gzip web entry budget is a **failing** CI gate (§7.5).
+5. The NFR-6 gzip web entry budget is a **failing** CI gate (§7.5). RESOLVED 2026-08-27: it is a failing gate, and the budget was revised 5 kB -> 8 kB after Phase 2 measured 7566 B.
 6. `MemoryShapeStore` is LRU-capped at 128 snapshots by default (§3.3).
 7. ADR-15: production fails **open** on a missing native module (children rendered, telemetry flagged)
    rather than throwing; `__DEV__` throws.

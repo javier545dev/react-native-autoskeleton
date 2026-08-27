@@ -381,7 +381,7 @@ LQIP, etc.).
 
 Rationale, and why this is not a scope dodge:
 - Bundling a blurhash decoder would duplicate functionality `expo-image` already ships,
-  and would blow the < 5 kB gzip web bundle NFR (brief section 12) on its own.
+  and would blow the NFR-6 gzip web bundle budget (brief section 12) on its own.
 - Owning phase 2 would force `autoskeleton` to take a hard dependency on a specific image
   component, which contradicts the "agnostic to the styling and component system"
   positioning.
@@ -445,7 +445,10 @@ as done unless it emits its metrics and instrumentation.
   < 0.2 ms.
 - Zero per-frame allocations on the animation path (Android: shader created once;
   JSI: reusable Float32Array, subject to Nitro ownership rules).
-- Web bundle (entry `.`, no interops) target < 5 kB gzip; no runtime dependencies beyond
+- Web bundle (entry `.`, no interops) **< 8 kB gzip** (REVISED from 5 kB on 2026-08-27 by
+  maintainer decision, after Phase 2 measured 7566 B; the 5 kB figure was never validated
+  against an implementation and the dominant cost is product code, not bloat). Hard failing
+  gate. No runtime dependencies beyond
   React on web.
 - Zero React re-renders caused by the animation.
 - No memory leaks under list recycling (verified by a stress test).
@@ -482,7 +485,7 @@ as done unless it emits its metrics and instrumentation.
      generates a default `exports` field with no platform conditions and, if one already
      exists, PROMPTS TO REPLACE IT. Decline that prompt, or repair `package.json` after
      running init.
-   - CAVEAT: because builder-bob is not a bundler, the "< 5 kB gzip" web bundle NFR must
+   - CAVEAT: because builder-bob is not a bundler, the NFR-6 gzip web bundle budget must
      be measured on a consumer bundle (Vite/Next build), never on builder-bob output.
 5. Reading corner radius from the Fabric props / shadow node instead of the background
    drawable. **PROMOTED**: no longer an upside spike, it is now the leading candidate for
