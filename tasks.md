@@ -501,6 +501,118 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
 > 199/199, playwright 36/36 (+2 delay-prop cases), Android unit 83/83 (was 73/73), Android
 > instrumented 7/7 (unchanged), iOS 55/55 (was 46/46), typecheck clean. See the apply-progress
 > Engram artifact for the full per-file breakdown.
+>
+> **Session status (2026-08-27, branch `feat/visual-paint-gate`, narrowed continuation)**: task
+> 5.7, the on-device visual paint gate, added and proven RED for the right reason on Android (see
+> 5.7 below). No other Phase 5 remediation was attempted this session by design. Harnesses:
+> vitest 199/199, playwright 36/36, typecheck clean, Android unit 83/83, Android library
+> instrumented 7/7 — all unchanged/still green. New: Android app instrumented (paint gate)
+> 1/3 green, 2/3 RED as intended. iOS 55/55 unchanged (no iOS gate built this session — see 5.7).
+>
+> **Session status (2026-08-27, branch `feat/visual-paint-gate`, second continuation — the actual
+> native draw surface)**: built the missing `AutoskeletonOverlayView` on Android end to end and
+> flipped the paint gate from 1/3 to 2/3 reliably green (the 3rd is flaky at a tolerance boundary,
+> not a wiring defect — see 5.7 below for the full account). Root-caused and fixed THREE further
+> real defects the original diagnosis did not anticipate, each confirmed empirically (not
+> guessed) via targeted logging and real-device runs before being fixed: (1) `codegenConfig.type`
+> was `"modules"`, so no Fabric ComponentDescriptor/ShadowNode/Props existed for
+> `AutoskeletonOverlayView` on either platform regardless of ViewManager code — fixed by adding
+> `src/native/AutoskeletonOverlayNativeComponent.ts` and setting `codegenConfig.type: "all"`,
+> verified by inspecting the actual generated codegen output (Android
+> `AutoskeletonOverlayViewManagerInterface`/`Delegate`, iOS `ComponentDescriptors.h`/`Props.h`), not
+> assumed; (2) Android `getShapes()`'s `FabricUIManager.resolveView(reactTag)` silently returned
+> `null` when called off the UI thread — fixed with a UI-thread dispatch primitive
+> (`AutoskeletonUiThreadDispatcher`, mirrored on iOS as `AutoskeletonSystemUiThreadDispatcher`); (3)
+> the wrapper `<View>` in `native/AutoSkeleton.tsx` was Fabric-view-flattened (no visual props), so
+> its reactTag NEVER resolved to a real native view — fixed with `collapsable={false}`; (4) the
+> native `AutoskeletonOverlayView` read the wire array's DENSITY-NORMALIZED geometry directly
+> instead of scaling back to raw view pixels for the `Canvas` draw pass — fixed in
+> `decodeWireShapes(wire, density)`. Also fixed an ADR-8 compliance gap (shared shimmer clock,
+> matching `src/web/AutoSkeleton.tsx`'s own pattern) discovered while investigating the residual
+> flakiness. **iOS**: re-investigated the "Swift/ObjC++ interop" blocker directly rather than
+> trusting the earlier session's conclusion — the earlier "reproducible Xcode New Build System
+> issue" theory was WRONG; the actual root cause (found via a minimal isolated probe class) is
+> that `@objc` alone does not export a symbol into the generated `Autoskeleton-Swift.h` on this
+> project's Swift 6.3.3 toolchain — the class/methods must also be `public`. Fixed by marking
+> `AutoskeletonModuleBridge` and its `@objc` methods `public`; `getShapes`/`evictShapes` in
+> `Autoskeleton.mm` now call the real Swift bridge (through a new
+> `AutoskeletonUiThreadDispatching`-based dispatcher, mirroring Android's fix) instead of the old
+> no-op stub. Also added `DEFINES_MODULE = YES` to `Autoskeleton.podspec` (a real, standard,
+> documented fix for a static-library CocoaPods pod mixing Swift + Objective-C++, tried and kept
+> even though it turned out not to be the deciding factor for this specific symptom) and a
+> portable `#if __has_include(<Autoskeleton/Autoskeleton-Swift.h>)` import guard. **The iOS
+> `RCTViewComponentView` overlay subclass (the visual draw-surface equivalent of Android's
+> `AutoskeletonOverlayView`) was NOT built this session** — explicit scope stop, not an oversight:
+> with zero iOS visual gate in this repo (5.7's own prior session explicitly deferred building
+> one) there is no test harness to catch a mistake in hand-written Fabric C++/ObjC++ interop code,
+> and the remaining session budget did not support the same multi-iteration empirical debugging
+> this same class of native UI work required on Android. `resolveAutoskeletonOverlayNativeComponent()`
+> still fails safely on iOS (no crash, no skeleton) until it exists — same contract as before,
+> now with real `getShapes`/`evictShapes` data flowing underneath it. Harnesses this session:
+> vitest 206/206 (was 199), playwright 36/36 unchanged, typecheck clean, Android unit 102/102 (was
+> 83, +19 new), Android library instrumented 7/7 unchanged, Android app instrumented paint gate
+> 2/3 reliably green + 1/3 flaky (was 1/3 green), iOS 59/59 (was 55, +4 new;
+> verified via a temporary workspace-symlink install because `SyntheticHierarchyBuilder.swift`'s
+> fixture-path resolution assumes a symlinked `:path` dependency — contradicting ADR-14's "no
+> workspace symlink" rule, a pre-existing inconsistency this session did not introduce and did not
+> fix, flagged as a follow-up; the real ADR-14-compliant tarball install was restored afterward and
+> the getShapes/ViewManager/dispatcher code itself does not depend on that fixture path at all).
+>
+> **Session status (2026-08-27, branch `feat/visual-paint-gate`, third continuation — Android
+> assertion calibration + iOS fixtures + iOS visual gate)**: three deliverables, in dependency
+> order. (1) **Android paint gate assertion fix**: `skeletonPaintsOverDetectedShapes` was a
+> calibration bug, not a wiring defect — it asserted the sampled pixel equals `baseColor` exactly,
+> but the production draw pass (`AutoskeletonRendererTier1.ensureShader()`) paints one animated
+> `LinearGradient(baseColor, highlightColor, baseColor)`, and `COLOR_TOLERANCE` (16) is narrower
+> than the base/highlight per-channel delta (19) — any capture near the true highlight phase failed
+> regardless of correctness. Fixed with `colorInRamp()`: every channel must fall within the
+> ramp's own per-channel min/max, inflated by tolerance — strictly stronger than widening
+> `COLOR_TOLERANCE`, since the three fixture colors stay far outside the grey 226..245 range on at
+> least one channel each, verified rather than assumed. **4/4 consecutive runs, 3/3 green every
+> time** (was 2/3 reliable + 1/3 flaky). (2) **iOS fixture-path fix**:
+> `SyntheticHierarchyBuilder.swift`'s `packageRoot` computed a hardcoded 3-levels-up from
+> `#filePath`, correct only for a symlinked `:path` dependency; under the real ADR-14 tarball
+> install this landed on a path that never exists (`test/` is deliberately excluded from
+> `package.json#files`). Fixed by mirroring the Android harness's already-established pattern
+> (`SyntheticHierarchyBuilder.kt`'s `repoRoot`): walk up from the compile-time source location
+> until a directory containing `test/fixtures/hierarchies` is found — no symlink reintroduced, no
+> `test/` added to published files. **59/59 on 2 of 3 runs** (real tarball install, not symlinked);
+> one run hit a single pre-existing, unrelated 2ms sensor-budget timing flake unconnected to any
+> fixture-loading path, not reproduced on either follow-up run. Along the way, found and fixed a
+> real npm gotcha unrelated to the design: `rm -rf node_modules/autoskeleton && npm install` alone
+> silently served STALE cached tarball content keyed to the OLD integrity hash still recorded in
+> `examples/bare-rn/package-lock.json`; fixed by reinstalling with the explicit
+> `autoskeleton@file:../../.tarball/autoskeleton-0.1.0.tgz` specifier, which forces npm to
+> recompute integrity. (3) **iOS visual gate built** (task 5.7's iOS half, previously blocked):
+> added a genuine `com.apple.product-type.bundle.ui-testing` XCUITest target
+> (`AutoskeletonBareRnPaintGateUITests`) to the app's own `.xcodeproj` (not CocoaPods-managed, so
+> it survives `pod install`), created via the `xcodeproj` Ruby gem rather than hand-edited pbxproj
+> text, wired via `TEST_TARGET_NAME` + a target dependency on the app target (the same mechanism
+> Xcode's own target wizard generates) plus a new shared scheme `PaintGate-UITests`. Evaluated and
+> rejected CocoaPods' `app_host_name` mechanism first: it only hosts a test bundle inside a minimal
+> app the POD itself builds via a sibling `app_spec`, never the real `AutoskeletonBareRn` app with
+> Metro connectivity. `PaintGateUITests.swift` mirrors `PaintGateInstrumentedTest.kt` exactly,
+> including the same colour-ramp semantics from fix (1). **Verified RED for the right reason, 3
+> consecutive deterministic runs**: `testSkeletonPaintsOverDetectedShapes` fails because the
+> sampled pixel is React Native's own "Unimplemented component: <AutoskeletonOverlayView>"
+> placeholder (screenshot evidence captured and inspected directly), not the fixture's raw content
+> color. **This corrects a claim in the second continuation's own notes above**
+> ("`resolveAutoskeletonOverlayNativeComponent()` still fails safely on iOS \[...\] no skeleton") —
+> false on iOS as built: `codegenNativeComponent()` never throws synchronously for a missing native
+> view manager registration, so `resolveAutoskeletonOverlayNativeComponent()` always returns the
+> codegen'd reference and Fabric mounts it, then falls back to its own dev placeholder at mount
+> time instead of leaving the real content visible. This is real, useful information for 5.8/2c:
+> the overlay view build should not assume "fails open to null" was ever true on this platform.
+> The other two gate assertions pass today for accurate reasons (real content color is masked by
+> the placeholder while loading; toggling `isLoading` off correctly shows real content with no
+> skeleton, confirming the overlay element only mounts while loading). **The `RCTViewComponentView`
+> overlay subclass itself was NOT built this session** — explicit scope stop per this session's own
+> instructions, which name stopping after the gate exists as a legitimate outcome rather than
+> building a view without the multi-iteration native debugging budget Android's equivalent work
+> required. Harnesses this session: vitest 206/206 unchanged, Android paint gate 3/3 (was 2/3 +
+> 1/3 flaky), iOS unit 59/59 on 2/3 runs (real tarball install; unrelated flake on 1 run, not
+> reproduced twice after), iOS UI test (new) 2/3 green + 1/3 RED by design (was: gate did not
+> exist).
 
 - [x] **5.1** RED→GREEN Turbo Module TS spec `src/native/NativeAutoskeleton.ts`
       (`codegenConfig` in `package.json`) declaring sync `getShapes(cacheKey): Array<number>` per
@@ -577,6 +689,112 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       **Tests**: `test/packaging/entries.test.ts` fully GREEN (started RED in 0.6).
       **Observability**: N/A, packaging test. **Performance**: N/A. Deps: 5.5, 2.5. Complexity:
       S. Example app: none/unit-only.
+- [x] **5.7** RED, written FIRST per the RISK-5/0.6 precedent — the ON-DEVICE VISUAL PAINT GATE.
+      Narrowed continuation of Phase 5, not the rest of its remediation: `examples/bare-rn/App.tsx`
+      now renders a real `PaintGateScreen` fixture (known-color text/image/rounded-card content,
+      runtime `isLoading` toggle) wrapped in the real native `<AutoSkeleton>` from the published
+      package; `examples/bare-rn/android/app/src/androidTest/.../PaintGateInstrumentedTest.kt`
+      launches the real app, waits for the real JS bundle to mount it, rasterizes the real
+      on-screen frame with `PixelCopy.request(Window, ...)` (never `View.draw(Canvas)`), and
+      asserts real ARGB pixels at the fixture's real screen location (found via
+      `accessibilityLabel`, never guessed coordinates).
+      **THIS TEST IS DELIBERATELY RED AND MUST NEVER BE WEAKENED, SKIPPED, OR DELETED TO MAKE CI
+      GREEN.** It closes only when a real `AutoskeletonOverlayView` `ViewManager` is registered
+      (Android: `AutoskeletonPackage.createViewManagers`; iOS: an `RCTViewManager`) and actually
+      draws through the already-built `AutoskeletonRendererTier1.mount(surface:...)` — the exact
+      gap 5.5's session note documents as still open.
+      **Tests**: `PaintGateInstrumentedTest.skeletonPaintsOverDetectedShapes` and
+      `.realContentHiddenWhileLoading` fail today for the right reason — real pixel mismatch
+      (`#0000FF` sampled where `#e2e2e2` was expected), not a build error, missing fixture, bad
+      selector, or unregistered-component error; `.realContentVisibleAndSkeletonGoneAfterLoadCompletes`
+      already passes (nothing currently hides the content either, which is the same root cause
+      from the other side) and stands as the regression guard once the other two go green. Not
+      satisfiable by `AutoskeletonDebugOverlay`: the fixture never passes `debugOverlay` to
+      `<AutoSkeleton>`, and every sampled pixel is the geometric center of a large fixture shape,
+      far from any outline stroke, so only a genuine solid-fill production draw pass can turn it
+      into `baseColor`. **Android status (final, third continuation)**: the exact-`baseColor`
+      assertion was itself a calibration bug — the production draw pass animates a gradient
+      between `baseColor` and `highlightColor`, and `COLOR_TOLERANCE` was narrower than that
+      delta. Fixed with a colour-RAMP assertion (`colorInRamp()`, every channel within the ramp's
+      own min/max + tolerance) — strictly precise, not a loosened tolerance. 3/3 assertions green,
+      4/4 consecutive runs, no flakiness remaining.
+      **iOS**: a genuine on-device XCUITest visual gate now exists —
+      `examples/bare-rn/ios/AutoskeletonBareRnPaintGateUITests/PaintGateUITests.swift`, a real
+      `com.apple.product-type.bundle.ui-testing` target added to the app's own `.xcodeproj` (via
+      the `xcodeproj` Ruby gem, not CocoaPods — CocoaPods' `app_host_name` mechanism was evaluated
+      and rejected because it only hosts tests inside a minimal app the POD itself builds, never
+      the real example app with Metro connectivity), wired via `TEST_TARGET_NAME` + a target
+      dependency on the app target, with a dedicated shared scheme `PaintGate-UITests`. Mirrors
+      `PaintGateInstrumentedTest.kt` exactly (same fixture, same `testID` lookups via
+      `XCUIElement`, same colour-ramp semantics, real `XCUIScreen.main.screenshot()` pixel
+      sampling). Verified RED for the right reason, 3 consecutive deterministic runs:
+      `testSkeletonPaintsOverDetectedShapes` fails because the sampled pixel is React Native's own
+      "Unimplemented component: <AutoskeletonOverlayView>" placeholder — confirmed via captured
+      screenshot evidence, not React Native's own no-op fallback the earlier session's notes
+      assumed (see the Phase 5 header's third continuation note for the full correction). The
+      `RCTViewComponentView` overlay subclass itself remains NOT built — explicit scope stop, gate
+      exists and is proven RED for the right reason, which is this task's Definition of Done; the
+      overlay view is 5.8/2c's job, not 5.7's. **Observability**: N/A, gate test. **Performance**:
+      N/A. Deps: 5.5. Complexity: M. Example app: bare RN (both platforms now have a real,
+      running, RED-by-design visual gate).
+      **Incidental fixes discovered while building this fixture** (both real, both necessary for
+      any bare-rn Jest/Metro use of the published package, neither a design deviation):
+      `examples/bare-rn/jest.config.js` now sets `testEnvironmentOptions.customExportConditions:
+      ['react-native']` — Jest's default resolver applies no `react-native` `exports` condition,
+      so `require('autoskeleton')` was silently resolving to the WEB build (`lib/module/index.js`
+      → `index.web.js`) under Jest even though Metro (real device/simulator builds) always
+      resolves correctly; and `examples/bare-rn/metro.config.js` now sets `resolver.useWatchman:
+      false` — Watchman cannot crawl this repo in the sandboxed session environment ("Operation
+      not permitted"), crashing Metro on startup; the node-crawler fallback (already what Jest
+      silently uses here) is unaffected functionally, just slower.
+- [x] **5.8** RED→GREEN the iOS `RCTViewComponentView` overlay subclass — the missing draw
+      surface `AutoskeletonOverlayHostComponent.tsx` resolves but which nothing implemented on
+      iOS, the actual root cause of the "Unimplemented component: `<AutoskeletonOverlayView>`"
+      placeholder 5.7's iOS gate proved was painting instead of a real skeleton.
+      `ios/AutoskeletonOverlayViewHost.swift` (new, unit tested by
+      `ios/Tests/AutoskeletonOverlayViewHostTests.swift`, 13 RED→GREEN cases: wire decode at full
+      fidelity with NO density scaling — iOS's wire is already points, unlike Android's — hex
+      color parsing with a safe fallback, mount/no-mount-on-cache-miss/no-mount-on-zero-size,
+      in-place update without restarting the shimmer phase, reduced-motion/`animation:"none"`
+      degradation, `speedMs` flowing through to the shared clock) hosts the EXISTING, already-
+      tested `AutoskeletonRendererTier1` (task 3.2) — no new drawing logic, only the wiring.
+      `ios/AutoskeletonOverlayView.h`/`.mm` (new) is the thin ObjC++ `RCTViewComponentView`
+      subclass Fabric mounts: `+componentDescriptorProvider` wires the codegen'd
+      `AutoskeletonOverlayViewComponentDescriptor`; `updateProps:oldProps:` and `layoutSubviews`
+      both call into the Swift host (props arrive before layout metrics on first mount, mirroring
+      why Android's own view re-runs `mountOrUpdate()` from `onSizeChanged`); `prepareForRecycle`
+      calls `destroy()`.
+      **Tests**: `PaintGate-UITests` 3/3 green, 3/3 consecutive full-suite runs. Real
+      `xcodebuild test -scheme Autoskeleton-Unit-Tests` 72/72 (was 59/59 + 13 new host tests), no
+      regression. **Observability**: N/A, hosting-only task — `debugOverlay` prop is accepted and
+      stored, not yet wired to a visible rung overlay (matches Android's own current state, not a
+      new gap). **Performance**: N/A, reuses the already-benchmarked tier-1 renderer unmodified.
+      Deps: 5.7, 3.2. Complexity: M. Example app: bare RN (iOS).
+      **Discovery mechanism, corrected mid-session**: the free-function `.mm`-crawl convention
+      (`Class<RCTComponentViewProtocol> <Name>Cls(void)`, the mechanism this task's brief
+      described) does NOT fire for this package — `parseiOSAnnotations` skips any library whose
+      `codegenConfig` has no `ios` key at all before the crawl fallback is ever reached, confirmed
+      empirically (added the free function, ran `pod install`, found no new entry in the
+      generated `RCTThirdPartyComponentsProvider.mm`). Fixed with the non-deprecated, explicit
+      `codegenConfig.ios.componentProvider` map in root `package.json` — the SAME mechanism
+      `react-native-safe-area-context` uses, verified by reading its own `package.json` directly.
+      **Second real defect found and fixed**: `AutoskeletonOverlayView.h` (subclassing
+      `RCTViewComponentView`, which transitively `#include`s the C++ standard header `<atomic>`
+      via RN's own `EventBeat.h`) broke the WHOLE Swift target's build the moment it was left
+      PUBLIC — CocoaPods folds public headers into the pod's auto-generated umbrella header, which
+      Xcode also compiles to build the synthesized Clang module Swift needs to see this pod's
+      ObjC/C++ surface, and that module compilation could not resolve `<atomic>` ("could not build
+      module 'Autoskeleton'"). Fixed by adding it to `Autoskeleton.podspec`'s
+      `private_header_files`, mirroring `Autoskeleton.h`'s existing (opposite-reasoned) entry.
+      **Third real defect found and fixed, in the TEST HARNESS, not production code**: with a real
+      overlay now mounting, `PaintGateUITests`'s original single-shot screenshot sample (taken
+      immediately after `waitForMount()`'s existence check) raced the overlay's own async mount —
+      content children mount on React's FIRST render pass, the overlay only mounts once the async
+      native `getShapes` round-trip resolves on a LATER pass. Confirmed empirically: 4/4
+      consecutive single-shot runs failed, showing the exact raw content color, not a color
+      partway through any animation phase. Fixed by polling each pixel for up to 5s
+      (`pollUntilPixel`) instead of sampling once — the same "wait for a real condition" discipline
+      `waitForMount` itself already used, never a widened color tolerance.
 
 ## Phase 6: Virtualized lists (all three sub-cases)
 

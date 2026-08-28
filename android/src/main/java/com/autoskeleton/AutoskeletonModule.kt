@@ -4,8 +4,11 @@ import android.view.View
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReadableArray
+import com.facebook.react.bridge.UiThreadUtil
 import com.facebook.react.bridge.WritableArray
 import com.facebook.react.uimanager.UIManagerHelper
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /** Package-visible seam (same DI pattern as `AutoskeletonTracing`/
  *  `AutoskeletonWarningEmitter`): resolves a `View` by React tag, or `null`
@@ -23,6 +26,49 @@ fun interface AutoskeletonViewResolver {
 class AutoskeletonSystemViewResolver(private val reactContext: ReactApplicationContext) : AutoskeletonViewResolver {
   override fun resolve(reactTag: Int): View? =
     UIManagerHelper.getUIManagerForReactTag(reactContext, reactTag)?.resolveView(reactTag)
+}
+
+/** Visual-paint-gate remediation: `getShapes()` is a SYNCHRONOUS Turbo
+ *  Module method (ADR-1), invoked on the JS thread. Fabric's
+ *  `FabricUIManager.resolveView(reactTag)` soft-asserts
+ *  ("Expected to run on UI thread!") and — confirmed empirically on a real
+ *  device via `PaintGateInstrumentedTest`, not merely suspected — returns
+ *  `null` when called off the UI thread; every JVM/Robolectric test in
+ *  `AutoskeletonModuleTest` was green throughout Phase 5 without ever
+ *  catching this because `AutoskeletonViewResolver` is a FAKE there
+ *  (Robolectric cannot run a real Fabric `UIManager`, so nothing ever
+ *  exercised this thread boundary until this end-to-end gate). Same DI seam
+ *  pattern as `AutoskeletonViewResolver`/`AutoskeletonTracing`: production
+ *  hops to the UI thread and blocks the calling (JS) thread until the view
+ *  resolves — the standard pattern synchronous native-view-reading Turbo
+ *  Modules use (e.g. `react-native-view-shot`) — with a bounded timeout so
+ *  a stuck UI thread degrades to `null` (same "unresolved tag" contract
+ *  `Sensor.measure` already documents) instead of hanging the JS thread
+ *  forever. */
+interface AutoskeletonUiThreadDispatcher {
+  /** Runs `block` guaranteed on the UI thread and returns its result,
+   *  blocking the caller. Returns `null` if `block` itself returns `null`
+   *  OR if the UI thread never became available within `timeoutMs`. */
+  fun <T> runAndWait(timeoutMs: Long, block: () -> T): T?
+}
+
+object AutoskeletonSystemUiThreadDispatcher : AutoskeletonUiThreadDispatcher {
+  override fun <T> runAndWait(timeoutMs: Long, block: () -> T): T? {
+    if (UiThreadUtil.isOnUiThread()) {
+      return block()
+    }
+    var result: T? = null
+    val latch = CountDownLatch(1)
+    UiThreadUtil.runOnUiThread {
+      try {
+        result = block()
+      } finally {
+        latch.countDown()
+      }
+    }
+    latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+    return result
+  }
 }
 
 // Task 5.1 (tasks.md Phase 5) / plan.md ADR-1: the codegen'd Turbo Module
@@ -49,6 +95,7 @@ class AutoskeletonModule(
   private val radiusResolver: AutoskeletonRadiusResolver = AutoskeletonPublicApiRadiusResolver(),
   private val viewResolver: AutoskeletonViewResolver = AutoskeletonSystemViewResolver(reactContext),
   private val shapeCache: AutoskeletonNativeShapeCache = AutoskeletonNativeShapeCache,
+  private val uiThreadDispatcher: AutoskeletonUiThreadDispatcher = AutoskeletonSystemUiThreadDispatcher,
 ) : NativeAutoskeletonSpec(reactContext) {
 
   /** The entire measure + encode + cache-write pipeline, as a PURE function
@@ -61,24 +108,33 @@ class AutoskeletonModule(
    *  unit-testable — `AutoskeletonModuleTest` exercises this function
    *  through the real `AutoskeletonSensor`/`AutoskeletonPublicApiRadiusResolver`
    *  against real, laid-out `View`s. Returns `null` for the same reasons
-   *  `Sensor.measure` does (unresolved tag, target not laid out yet). */
-  internal fun computeWireArray(reactTag: Double, cacheKey: String): DoubleArray? {
-    val view = viewResolver.resolve(reactTag.toInt()) ?: return null
-    val density = view.resources?.displayMetrics?.density?.takeIf { it > 0f } ?: 1f
+   *  `Sensor.measure` does (unresolved tag, target not laid out yet).
+   *
+   *  `getShapes()` runs on the JS thread, but `viewResolver.resolve()` must
+   *  run on the UI thread (see `AutoskeletonUiThreadDispatcher`'s doc
+   *  comment) — `uiThreadDispatcher.runAndWait` provides that hop, is a
+   *  no-op fast path when already on the UI thread (the common case in
+   *  `AutoskeletonModuleTest`, which never dispatches), and bounds the
+   *  wait so a stuck UI thread degrades to `null` instead of hanging the
+   *  JS thread forever. */
+  internal fun computeWireArray(reactTag: Double, cacheKey: String): DoubleArray? =
+    uiThreadDispatcher.runAndWait(UI_THREAD_DISPATCH_TIMEOUT_MS) {
+      val view = viewResolver.resolve(reactTag.toInt()) ?: return@runAndWait null
+      val density = view.resources?.displayMetrics?.density?.takeIf { it > 0f } ?: 1f
 
-    val measured = sensor.measure(
-      view,
-      AutoskeletonSensorOptions.defaults.copy(
-        hints = AutoskeletonEmptyHintRegistry(),
-        radiusResolver = radiusResolver,
-        collectDebugSidecars = false,
-      ),
-    ) ?: return null
+      val measured = sensor.measure(
+        view,
+        AutoskeletonSensorOptions.defaults.copy(
+          hints = AutoskeletonEmptyHintRegistry(),
+          radiusResolver = radiusResolver,
+          collectDebugSidecars = false,
+        ),
+      ) ?: return@runAndWait null
 
-    val wire = encodeWireArray(measured.shapes, density)
-    shapeCache.set(cacheKey, wire)
-    return wire
-  }
+      val wire = encodeWireArray(measured.shapes, density)
+      shapeCache.set(cacheKey, wire)
+      wire
+    }
 
   override fun getShapes(reactTag: Double, cacheKey: String): WritableArray {
     val result = Arguments.createArray()
@@ -96,6 +152,13 @@ class AutoskeletonModule(
 
   companion object {
     const val NAME = NativeAutoskeletonSpec.NAME
+
+    /** Generous relative to the 2ms traversal budget (ADR-1 scopes that
+     *  budget to serialization/traversal cost, not this thread hop), but
+     *  bounded: a UI thread genuinely stuck for 200ms is already failing
+     *  its own frame budget many times over, so waiting longer would only
+     *  hold the JS thread hostage for no additional benefit. */
+    internal const val UI_THREAD_DISPATCH_TIMEOUT_MS = 200L
 
     /** Pure wire encoder: `[VERSION, x,y,w,h,r] x N`, every geometry value
      *  divided by `density` (plan.md §4.1 "Units"). Decoupled from
