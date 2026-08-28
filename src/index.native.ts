@@ -15,6 +15,13 @@ export {
   AutoskeletonNativeModuleUnavailableError,
   AUTOSKELETON_NATIVE_MODULE_UNAVAILABLE_DOCS_URL,
 } from './native/nativeModuleAccessor';
+// Phase 6 (tasks.md 6.1-6.5): virtualized-list skeletons.
+export { SkeletonList } from './native/list/SkeletonList';
+export type { SkeletonListProps } from './native/list/SkeletonList';
+export { SkeletonListFooter } from './native/list/SkeletonListFooter';
+export type { SkeletonListFooterProps } from './native/list/SkeletonListFooter';
+export { useSkeletonCell } from './native/list/useSkeletonCell';
+export type { UseSkeletonCellOptions, UseSkeletonCellResult } from './native/list/useSkeletonCell';
 export type {
   AnimationKind,
   DegradationFlag,
