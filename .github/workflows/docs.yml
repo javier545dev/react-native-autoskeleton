@@ -1,0 +1,37 @@
+name: Docs (worked-example typecheck)
+
+# tasks.md 9.4 — "a doc-example compile/typecheck job — the expo-image
+# worked example runs as an actual snippet against built types, not
+# hand-typed prose." This is the ONE active-code sample in the docs set
+# (docs/image-pipeline.md §3); everything else in docs/ is passive prose,
+# whose proportional check is structural readback, not a compile job.
+#
+# VERIFIED IN THIS SESSION (not just authored): `npx tsc --noEmit -p
+# tsconfig.docs-examples.json` from `examples/expo`, run locally against a
+# real installed `autoskeleton` tarball and real `expo-image` types — 0
+# errors. Deliberately caught a real doc-accuracy bug during this session's
+# own verification (a `handoff` prop that does not exist on `AutoSkeletonProps`
+# — corrected in both the example file and docs/image-pipeline.md).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  docs-examples-typecheck:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: mkdir -p .tarball && npm pack --pack-destination ./.tarball
+      - run: npm install
+        working-directory: examples/expo
+      - run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
+        working-directory: examples/expo
+      - name: Typecheck the worked expo-image example against real installed types
+        run: npm run typecheck:docs-examples
+        working-directory: examples/expo

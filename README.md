@@ -1,11 +1,80 @@
 # autoskeleton
 
-Automatic skeleton loaders for React Native and web.
+Automatic skeleton loaders for React Native and web. One sensor that reads
+your existing layout and paints a faithful shimmer skeleton over it — no
+hand-authored placeholder shapes, no separate skeleton component tree to
+keep in sync with your real UI.
 
-> This file currently documents only the TypeScript/packaging configuration
-> consumers need for the published `exports` map (see "TypeScript
-> configuration" below). The full install/usage guide is tracked separately
-> (tasks.md task 9.4) and will replace this note once written.
+## Install
+
+### Bare React Native (RN >= 0.83, New Architecture / Fabric only)
+
+```bash
+npm install autoskeleton
+cd ios && pod install
+```
+
+Autolinking is automatic via `@react-native-community/cli` — no manual
+native project edits required.
+
+### Expo (development build required — see the Expo Go note directly below)
+
+```bash
+npx expo install autoskeleton
+npx expo prebuild
+```
+
+> **Expo Go does not work with this library, and that is expected —
+> not a bug to file.** `autoskeleton` ships a custom native Turbo Module,
+> and custom native modules are absent from the prebuilt Expo Go binary by
+> design. You need a **development build** (`expo prebuild` + `expo run:ios`
+> / `expo run:android`, or an EAS development build) — a plain `expo start`
+> pointed at Expo Go will not have the native module available.
+>
+> If you run under Expo Go anyway: in development, `autoskeleton` throws a
+> named, actionable error at first use telling you exactly this. In a
+> shipped production build, it fails open instead — `children` render
+> unwrapped (no skeleton, no crash) and `onMetrics` reports
+> `degraded: ['native-module-unavailable']`, so a stray Expo Go install is
+> visible in your telemetry rather than silently invisible.
+
+Web is unaffected by any of the above — the native Turbo Module never
+enters any web bundle (see `docs/theming.md`'s bundle-size notes and
+`test/packaging/entries.test.ts`'s transitive-import-graph guard).
+
+## Quick start
+
+```tsx
+import { AutoSkeleton } from 'autoskeleton';
+
+function ProductCard({ product }: { product: Product | null }) {
+  return (
+    <AutoSkeleton isLoading={product === null} skeletonKey="product-card">
+      {product !== null && <ProductContent product={product} />}
+    </AutoSkeleton>
+  );
+}
+```
+
+That's it for the simple case — `autoskeleton` measures the real
+`ProductContent` layout the first time it renders, caches the result by
+`skeletonKey`, and replays a shimmer skeleton over the identical geometry on
+every subsequent loading state (including on a fresh mount, before
+`ProductContent` exists at all).
+
+## Learn more
+
+- **[Image loading pipeline](docs/image-pipeline.md)** — the full
+  skeleton → placeholder → image handoff, with a worked `expo-image`
+  example (verified in CI against real types — see `docs/image-pipeline.md`
+  §3).
+- **[Theming](docs/theming.md)** — `autoskeleton/uniwind`, and why
+  NativeWind is an explicit non-goal, not a gap.
+- **[Observability](docs/observability.md)** — `debugOverlay`, dev budget
+  warnings, and `onMetrics`.
+- **[SSR capture CLI](docs/ssr-capture-cli.md)** — build-time snapshot
+  capture for `<AutoSkeleton.SSR>`, including the registry-maintenance cost
+  (RISK-4) named openly.
 
 ## TypeScript configuration
 
