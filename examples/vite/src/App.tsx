@@ -1,8 +1,38 @@
 import { useState } from 'react'
+import { AutoSkeleton } from 'autoskeleton'
 import heroImg from './assets/hero.png'
 import reactLogo from './assets/react.svg'
 import viteLogo from './assets/vite.svg'
 import './App.css'
+
+// tasks.md 8.4 (ADR-16 / RISK-11): a real, wired demo of the image-handoff
+// no-flash guarantee — proven end to end under Playwright in
+// `test/web/handoff.spec.ts`, reproduced here against a real consuming app.
+// `expectsPlaceholder` tells the controller to wait for the real `<img>`
+// successor (auto-detected via `usePaintDetectionHeuristic`'s double-rAF +
+// `img.decode()` heuristic, zero extra wiring) rather than fading
+// immediately — reveal-before-hide means the hero image is ALWAYS mounted
+// underneath the still-painted skeleton, so there is never a frame with
+// neither on screen.
+function HeroWithSkeleton() {
+  const [isLoading, setIsLoading] = useState(true)
+  return (
+    <div className="hero">
+      <AutoSkeleton isLoading={isLoading} skeletonKey="vite-hero" expectsPlaceholder>
+        <img
+          src={heroImg}
+          className="base"
+          width="170"
+          height="179"
+          alt=""
+          onLoad={() => setIsLoading(false)}
+        />
+      </AutoSkeleton>
+      <img src={reactLogo} className="framework" alt="React logo" />
+      <img src={viteLogo} className="vite" alt="Vite logo" />
+    </div>
+  )
+}
 
 function App() {
   const [count, setCount] = useState(0)
@@ -10,11 +40,7 @@ function App() {
   return (
     <>
       <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
+        <HeroWithSkeleton />
         <div>
           <h1>Get started</h1>
           <p>

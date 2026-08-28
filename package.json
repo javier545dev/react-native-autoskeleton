@@ -23,6 +23,10 @@
       "types": "./lib/typescript/module/src/interop/uniwind.d.ts",
       "default": "./lib/module/interop/uniwind.js"
     },
+    "./ssr": {
+      "types": "./lib/typescript/module/src/index.ssr.d.ts",
+      "default": "./lib/module/index.ssr.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
