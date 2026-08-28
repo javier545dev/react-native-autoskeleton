@@ -481,13 +481,19 @@ into something the developer can see and act on.
 | `react-native-reanimated` (tier-2, optional peer) | v4+; New-Architecture-only; requires `react-native-worklets` as an additional peer, version-matched to the Reanimated release | Brief §2, explore §B.6 |
 | `@shopify/react-native-skia` (tier-2, optional peer) | >= 2.10 pairs with Reanimated v4+ | Explore §B.6 |
 | Tailwind v4 | `@theme` CSS-first syntax; `--skl-base`/`--skl-highlight` declared as plain CSS custom properties (not a recognized Tailwind namespace) | Brief §2, §9; explore §D |
-| Uniwind | `withUniwind` interop API, current ~1.2.6 | Brief §2; explore §D |
-| NativeWind | `cssInterop` — current and stable in v4; deprecated in the unreleased v5 in favor of a unified `styled` API. v5 migration is a documented future risk, not a v1 blocker. | Brief §2; explore §D |
+| Uniwind | **v1.11.0** (corrected 2026-08-28 from ~1.2.6). From `uni-stack/uniwind` — a COMPETING project by the Unistyles team, NOT NativeWind's engine (NativeWind's own engine is `react-native-css`). `withUniwind` manual-mapping API confirmed real and matching our assumptions. Pairs with Tailwind v4. | Verified from package source |
+| NativeWind | **v4.2.6. INCOMPATIBLE WITH TAILWIND v4** — verified from the published package: `dist/metro/tailwind/index.js` throws `"NativeWind only supports Tailwind CSS v3"` at two call sites, gated on an `isV3` check. A NativeWind consumer is therefore a Tailwind **v3** consumer; the `autoskeleton/nativewind` interop targets that combination, NOT the Tailwind v4 story described elsewhere in this spec. `cssInterop` itself is confirmed real and current in v4.2.6. **CORRECTED 2026-08-28** — the earlier "current and stable in v4" wording conflated NativeWind v4 with Tailwind v4. | Verified from package source |
 | Browsers (web renderer) | `clip-path: path()` — Chrome 88+, Edge 88+, Firefox 71+, Safari 15.4+. `shape()` reached Baseline Feb 2026 but is NOT relied upon alone (shorter support tail). `ResizeObserver` — Chrome 64+, Firefox 69+, Edge 79+, Safari 13.1+. `MutationObserver` — near-universal. | Brief §2; explore §C |
 | Test tooling | Vitest (core, unit); Playwright (layout-sensitive tests and the SSR capture CLI) — jsdom cannot perform real layout (jsdom #653, #3729) | Brief §2, §15 |
 | Build tooling | `create-react-native-library` + `react-native-builder-bob` 0.43.0. **S4 is RESOLVED: a distinct web entry IS supported, no custom tooling needed** — builder-bob's `compile.js` is a filename-preserving per-file Babel transpile (globs `**/*`, writes `path.join(output, path.relative(source, filepath))`), so `src/index.web.ts` emits `index.web.js` automatically. Two caveats: `exports` conditions must be hand-authored (`init.js:182-223` generates a default without them and PROMPTS TO REPLACE an existing one — decline it), and the NFR-6 gzip budget must be measured on a consumer bundle, never on builder-bob output. | Brief §14 |
 
 ---
+
+**THEMING CONSTRAINT (measured 2026-08-28):** `uniwind` and `nativewind` CANNOT share one
+`node_modules` tree — they require conflicting Tailwind CSS majors (v4 and v3 respectively).
+A consumer picks one. The two subpath interops are therefore mutually exclusive in practice,
+not merely optional. Document this prominently; a user who installs both will get a broken build,
+not a warning.
 
 ## 5. Out of Scope for v1
 
