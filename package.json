@@ -125,7 +125,7 @@
   },
   "codegenConfig": {
     "name": "AutoskeletonSpec",
-    "type": "modules",
+    "type": "all",
     "jsSrcsDir": "src",
     "outputDir": {
       "ios": "ios/generated",

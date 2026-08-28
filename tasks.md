@@ -508,6 +508,55 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
 > vitest 199/199, playwright 36/36, typecheck clean, Android unit 83/83, Android library
 > instrumented 7/7 — all unchanged/still green. New: Android app instrumented (paint gate)
 > 1/3 green, 2/3 RED as intended. iOS 55/55 unchanged (no iOS gate built this session — see 5.7).
+>
+> **Session status (2026-08-27, branch `feat/visual-paint-gate`, second continuation — the actual
+> native draw surface)**: built the missing `AutoskeletonOverlayView` on Android end to end and
+> flipped the paint gate from 1/3 to 2/3 reliably green (the 3rd is flaky at a tolerance boundary,
+> not a wiring defect — see 5.7 below for the full account). Root-caused and fixed THREE further
+> real defects the original diagnosis did not anticipate, each confirmed empirically (not
+> guessed) via targeted logging and real-device runs before being fixed: (1) `codegenConfig.type`
+> was `"modules"`, so no Fabric ComponentDescriptor/ShadowNode/Props existed for
+> `AutoskeletonOverlayView` on either platform regardless of ViewManager code — fixed by adding
+> `src/native/AutoskeletonOverlayNativeComponent.ts` and setting `codegenConfig.type: "all"`,
+> verified by inspecting the actual generated codegen output (Android
+> `AutoskeletonOverlayViewManagerInterface`/`Delegate`, iOS `ComponentDescriptors.h`/`Props.h`), not
+> assumed; (2) Android `getShapes()`'s `FabricUIManager.resolveView(reactTag)` silently returned
+> `null` when called off the UI thread — fixed with a UI-thread dispatch primitive
+> (`AutoskeletonUiThreadDispatcher`, mirrored on iOS as `AutoskeletonSystemUiThreadDispatcher`); (3)
+> the wrapper `<View>` in `native/AutoSkeleton.tsx` was Fabric-view-flattened (no visual props), so
+> its reactTag NEVER resolved to a real native view — fixed with `collapsable={false}`; (4) the
+> native `AutoskeletonOverlayView` read the wire array's DENSITY-NORMALIZED geometry directly
+> instead of scaling back to raw view pixels for the `Canvas` draw pass — fixed in
+> `decodeWireShapes(wire, density)`. Also fixed an ADR-8 compliance gap (shared shimmer clock,
+> matching `src/web/AutoSkeleton.tsx`'s own pattern) discovered while investigating the residual
+> flakiness. **iOS**: re-investigated the "Swift/ObjC++ interop" blocker directly rather than
+> trusting the earlier session's conclusion — the earlier "reproducible Xcode New Build System
+> issue" theory was WRONG; the actual root cause (found via a minimal isolated probe class) is
+> that `@objc` alone does not export a symbol into the generated `Autoskeleton-Swift.h` on this
+> project's Swift 6.3.3 toolchain — the class/methods must also be `public`. Fixed by marking
+> `AutoskeletonModuleBridge` and its `@objc` methods `public`; `getShapes`/`evictShapes` in
+> `Autoskeleton.mm` now call the real Swift bridge (through a new
+> `AutoskeletonUiThreadDispatching`-based dispatcher, mirroring Android's fix) instead of the old
+> no-op stub. Also added `DEFINES_MODULE = YES` to `Autoskeleton.podspec` (a real, standard,
+> documented fix for a static-library CocoaPods pod mixing Swift + Objective-C++, tried and kept
+> even though it turned out not to be the deciding factor for this specific symptom) and a
+> portable `#if __has_include(<Autoskeleton/Autoskeleton-Swift.h>)` import guard. **The iOS
+> `RCTViewComponentView` overlay subclass (the visual draw-surface equivalent of Android's
+> `AutoskeletonOverlayView`) was NOT built this session** — explicit scope stop, not an oversight:
+> with zero iOS visual gate in this repo (5.7's own prior session explicitly deferred building
+> one) there is no test harness to catch a mistake in hand-written Fabric C++/ObjC++ interop code,
+> and the remaining session budget did not support the same multi-iteration empirical debugging
+> this same class of native UI work required on Android. `resolveAutoskeletonOverlayNativeComponent()`
+> still fails safely on iOS (no crash, no skeleton) until it exists — same contract as before,
+> now with real `getShapes`/`evictShapes` data flowing underneath it. Harnesses this session:
+> vitest 206/206 (was 199), playwright 36/36 unchanged, typecheck clean, Android unit 102/102 (was
+> 83, +19 new), Android library instrumented 7/7 unchanged, Android app instrumented paint gate
+> 2/3 reliably green + 1/3 flaky (was 1/3 green), iOS 59/59 (was 55, +4 new;
+> verified via a temporary workspace-symlink install because `SyntheticHierarchyBuilder.swift`'s
+> fixture-path resolution assumes a symlinked `:path` dependency — contradicting ADR-14's "no
+> workspace symlink" rule, a pre-existing inconsistency this session did not introduce and did not
+> fix, flagged as a follow-up; the real ADR-14-compliant tarball install was restored afterward and
+> the getShapes/ViewManager/dispatcher code itself does not depend on that fixture path at all).
 
 - [x] **5.1** RED→GREEN Turbo Module TS spec `src/native/NativeAutoskeleton.ts`
       (`codegenConfig` in `package.json`) declaring sync `getShapes(cacheKey): Array<number>` per
@@ -607,16 +656,21 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       satisfiable by `AutoskeletonDebugOverlay`: the fixture never passes `debugOverlay` to
       `<AutoSkeleton>`, and every sampled pixel is the geometric center of a large fixture shape,
       far from any outline stroke, so only a genuine solid-fill production draw pass can turn it
-      into `baseColor`. **iOS**: no equivalent runnable gate was added this session — the existing
-      `Autoskeleton-Unit-Tests` xcodebuild target is a CocoaPods `test_spec` unit-test bundle with
-      no app host (verified: no `TEST_HOST`/`requires_app_host` wiring), so it cannot boot the real
-      `AutoskeletonBareRn.app` process or its JS bundle; a genuine on-device iOS visual gate needs
-      a new XCUITest UI-test target (or a CocoaPods `app_host_name` pointed at the example app),
-      which is real new Xcode-project surgery against a workspace that already hit a reproducible
-      Swift/ObjC++ toolchain bug this phase — judged out of scope for this narrowed continuation
-      and flagged as follow-up rather than attempted half-built. **Observability**: N/A, gate test.
-      **Performance**: N/A. Deps: 5.5. Complexity: M. Example app: bare RN (Android only this
-      session).
+      into `baseColor`. **iOS**: still no equivalent runnable gate (unchanged from the prior
+      session's assessment: the existing `Autoskeleton-Unit-Tests` xcodebuild target is a
+      CocoaPods `test_spec` unit-test bundle with no app host — verified, no `TEST_HOST`/
+      `requires_app_host` wiring — so it cannot boot the real `AutoskeletonBareRn.app` process or
+      its JS bundle; a genuine on-device iOS visual gate needs a new XCUITest UI-test target or a
+      CocoaPods `app_host_name` pointed at the example app). A LATER session (same branch) did
+      real, tested iOS native work regardless — see the Phase 5 header's second continuation note
+      — resolving the real Swift/ObjC++ root cause (not the one originally suspected) and wiring
+      real `getShapes`/`evictShapes`, but the `RCTViewComponentView` overlay subclass itself
+      (iOS's equivalent of Android's now-real `AutoskeletonOverlayView`) was an explicit scope
+      stop for that session, not attempted half-built, precisely because no iOS visual gate exists
+      to prove hand-written Fabric C++/ObjC++ interop code correct. **Observability**: N/A, gate
+      test. **Performance**: N/A. Deps: 5.5. Complexity: M. Example app: bare RN (Android only
+      this session; the second continuation's iOS bridge work has no iOS example-app gate to run
+      against).
       **Incidental fixes discovered while building this fixture** (both real, both necessary for
       any bare-rn Jest/Metro use of the published package, neither a design deviation):
       `examples/bare-rn/jest.config.js` now sets `testEnvironmentOptions.customExportConditions:

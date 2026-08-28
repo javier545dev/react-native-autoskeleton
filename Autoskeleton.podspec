@@ -30,6 +30,29 @@ Pod::Spec.new do |s|
   # see `AutoskeletonReactViewClassifier.h`'s doc comment for the full reasoning).
   s.private_header_files = "ios/Autoskeleton.h"
 
+  # Visual-paint-gate remediation: the ROOT CAUSE of the previously-documented
+  # "Swift/ObjC++ interop" build issue, found via direct inspection
+  # (`xcodebuild -project Pods/Pods.xcodeproj -target Autoskeleton
+  # -showBuildSettings`) rather than assumed: with `use_frameworks!` NOT
+  # enabled (the default for this project — verified in
+  # `examples/bare-rn/ios/Podfile`), this pod builds as a plain STATIC
+  # LIBRARY (`MACH_O_TYPE = staticlib`), and CocoaPods does NOT
+  # automatically set `DEFINES_MODULE = YES` for a static-library pod
+  # target just because it contains Swift sources — it defaulted to
+  # `DEFINES_MODULE = NO`. Without it, Xcode's build graph does not treat
+  # the Swift-generated `Autoskeleton-Swift.h` as a proper dependency of
+  # `.mm` files that `#import` it, so a `.mm` compile can run against an
+  # incomplete/empty snapshot of that header even on a clean build —
+  # exactly the previously-reported symptom. `DEFINES_MODULE = YES` is the
+  # standard, documented CocoaPods fix for a static-library pod mixing
+  # Swift and Objective-C++: it gives the target a real Clang module map,
+  # which is what makes the generated header a real, correctly-ordered
+  # build dependency. This is a pod CONFIGURATION fix, not a code
+  # workaround, hand-rolled protocol registry, or a reason to reopen ADR-1.
+  s.pod_target_xcconfig = {
+    "DEFINES_MODULE" => "YES",
+  }
+
   # Task 0.4 (tasks.md Phase 0): the XCTest target that plan.md §7.1's
   # SyntheticHierarchyBuilder harness runs under. `pod install` (triggered by the
   # bare RN example app, task 0.7) generates this as a real Xcode test target;

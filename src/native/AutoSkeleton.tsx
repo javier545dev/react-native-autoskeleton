@@ -196,11 +196,28 @@ function useSkeletonDelayGate(delayMs: number, cycleId: number): boolean {
 /** Bridges the wrapper `<View>`'s layout into a `NativeSensorTarget`
  *  (reactTag + frame size — see `sensor.ts`'s header comment for why the
  *  frame size travels alongside the tag rather than through the wire).
- *  Runs the cold `getShapes` call the moment layout is known and no
- *  snapshot exists yet for this `cacheKey` — genuine external-system
+ *  Runs the cold `getShapes` call once layout is known and no snapshot
+ *  exists yet for this `cacheKey` — genuine external-system
  *  synchronization with the native layout engine and the Turbo Module
  *  bridge (no-use-effect skill Rule 4), isolated in its own hook exactly
- *  like `web/AutoSkeleton.tsx`'s `useColdMeasurement`. */
+ *  like `web/AutoSkeleton.tsx`'s `useColdMeasurement`.
+ *
+ *  Visual-paint-gate remediation: the native `getShapes` call is deferred
+ *  by ONE `requestAnimationFrame` after `onLayout` fires, matching this
+ *  file's own already-documented ADR-16 convention ("native = one frame
+ *  after `onLayout`" — see the `HandoffController`/paint-detection doc
+ *  comment above). This is not a stylistic choice: on Fabric, `onLayout`
+ *  fires from the SHADOW TREE commit (layout calculation), which
+ *  genuinely precedes the separate native MOUNTING phase that creates and
+ *  registers the real Android `View` Fabric's `MountingManager` tracks —
+ *  confirmed empirically via `PaintGateInstrumentedTest` plus targeted
+ *  logging: `FabricUIManager.resolveView(reactTag)` returned `null` for
+ *  every call made synchronously inside the `onLayout` effect (same
+ *  `reactTag`, correctly on the UI thread), even though the SAME tag
+ *  resolved fine one frame later. Calling `getShapes` before the view is
+ *  mounted is indistinguishable from an unresolved tag (`Sensor.measure`
+ *  returns `null`), which is why the overlay never rendered at all — not
+ *  a ViewManager registration defect on its own. */
 function useColdMeasurement(
   active: boolean,
   cacheKey: string,
@@ -232,36 +249,42 @@ function useColdMeasurement(
     if (!layout || layout.width === 0) {
       return;
     }
-    const reactTag = findNodeHandle(viewRef.current);
-    if (reactTag == null) {
-      return;
-    }
-    const nativeModule = resolveNativeModule();
-    if (!nativeModule) {
-      onNativeModuleUnavailable();
-      return;
-    }
-    const target: NativeSensorTarget = {
-      reactTag,
-      frameWidth: layout.width,
-      frameHeight: layout.height,
+
+    const measure = (): void => {
+      const reactTag = findNodeHandle(viewRef.current);
+      if (reactTag == null) {
+        return;
+      }
+      const nativeModule = resolveNativeModule();
+      if (!nativeModule) {
+        onNativeModuleUnavailable();
+        return;
+      }
+      const target: NativeSensorTarget = {
+        reactTag,
+        frameWidth: layout.width,
+        frameHeight: layout.height,
+      };
+      const result = nativeSensor.measure(target, {
+        key: cacheKey as unknown as Parameters<typeof nativeSensor.measure>[1]['key'],
+        hints: {
+          linesFor: () => undefined,
+          radiusFor: () => undefined,
+          isIgnored: () => false,
+        },
+        budgetMs,
+        maxShapes,
+        defaultRadius,
+        collectDebugSidecars: false,
+      });
+      if (result) {
+        store.set(result.snapshot.key, result.snapshot);
+        onMeasured(result.snapshot);
+      }
     };
-    const result = nativeSensor.measure(target, {
-      key: cacheKey as unknown as Parameters<typeof nativeSensor.measure>[1]['key'],
-      hints: {
-        linesFor: () => undefined,
-        radiusFor: () => undefined,
-        isIgnored: () => false,
-      },
-      budgetMs,
-      maxShapes,
-      defaultRadius,
-      collectDebugSidecars: false,
-    });
-    if (result) {
-      store.set(result.snapshot.key, result.snapshot);
-      onMeasured(result.snapshot);
-    }
+
+    const frameHandle = requestAnimationFrame(measure);
+    return () => cancelAnimationFrame(frameHandle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, cacheKey, layoutTick, platform]);
 
@@ -465,8 +488,22 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
 
   // ADR-16 reveal-before-hide: children are ALWAYS mounted underneath the
   // still-painted overlay.
+  //
+  // `collapsable={false}` is REQUIRED, not defensive styling: this wrapper
+  // has no visual properties of its own (`position: 'relative'` is
+  // layout-only), so both Paper and Fabric are free to "view-flatten" it —
+  // optimize it out of the native tree entirely rather than create a real
+  // native `View` for it. A flattened node has NO backing native view, so
+  // `findNodeHandle`'s reactTag never resolves via
+  // `FabricUIManager.resolveView` no matter how long native code waits —
+  // confirmed empirically via `PaintGateInstrumentedTest` (a 20-attempt,
+  // ~320ms retry loop on the native side never once resolved it). This is
+  // the actual root cause of the paint gate's persistent RED state, not a
+  // one-frame timing race the earlier `requestAnimationFrame` deferral
+  // (still kept above, since it is a real and separate improvement) could
+  // ever have fixed on its own.
   return (
-    <View ref={viewRef} onLayout={onLayout} style={styles.wrapper}>
+    <View ref={viewRef} onLayout={onLayout} collapsable={false} style={styles.wrapper}>
       {props.children}
       {showSkeleton && snapshot && OverlayComponent && (
         <OverlayComponent

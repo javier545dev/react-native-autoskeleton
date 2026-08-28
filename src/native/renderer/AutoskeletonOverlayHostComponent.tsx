@@ -1,13 +1,17 @@
-// src/native/renderer/AutoskeletonOverlayNativeComponent.ts
+// src/native/renderer/AutoskeletonOverlayHostComponent.tsx
 //
-// Task 5.5 (tasks.md Phase 5) / plan.md ADR-5, ADR-9: the JS-side handle for
-// the native tier-1 overlay host component ("AutoskeletonOverlayView",
-// registered by `AutoskeletonPackage`/`AutoskeletonOverlayViewManager` on
-// Android and `AutoskeletonOverlayViewManager` on iOS). This is a LEGACY
-// (paper) `requireNativeComponent` view — not a codegen'd Fabric component —
-// which the New Architecture's Fabric Interop Layer mounts and updates
-// automatically; no additional Fabric ComponentDescriptor/ShadowNode work is
-// needed for a simple absolute-positioned draw surface like this one.
+// Visual-paint-gate remediation (tasks.md Phase 5, task 5.7 follow-up):
+// the JS-side handle for the native tier-1 overlay host component
+// ("AutoskeletonOverlayView", registered by
+// `AutoskeletonPackage`/`AutoskeletonOverlayViewManager` on Android and a
+// Fabric-discovered `RCTViewComponentView` subclass on iOS). This now
+// resolves the CODEGEN'D Fabric component
+// (`../AutoskeletonOverlayNativeComponent.ts`) instead of calling the
+// legacy Paper API `requireNativeComponent` directly — the latter is what
+// made the paint gate RED: with `codegenConfig.type: "modules"`, no
+// ComponentDescriptor/ShadowNode/Props triple was ever generated for this
+// view, so `requireNativeComponent` resolved to a component whose Fabric
+// view config Fabric itself never received, and nothing ever mounted.
 //
 // ADR-9 in practice: this component receives `cacheKey` (plus theme/
 // animation) as PROPS, never shapes. The native view reads geometry from
@@ -20,41 +24,31 @@
 // "destroy" — no separate imperative mount/update/destroy bridge calls are
 // needed.
 
-import { requireNativeComponent, type ViewProps } from 'react-native';
+import type { HostComponent } from 'react-native';
+import AutoskeletonOverlayView, {
+  type NativeProps as AutoskeletonOverlayNativeProps,
+} from '../AutoskeletonOverlayNativeComponent';
 
-export interface AutoskeletonOverlayNativeProps extends ViewProps {
-  readonly cacheKey: string;
-  readonly baseColor: string;
-  readonly highlightColor: string;
-  readonly defaultRadius: number;
-  readonly speedMs: number;
-  readonly animation: 'shimmer' | 'pulse' | 'none';
-  readonly reducedMotion: boolean;
-  /** REQ-OBS-OVERLAY-1: delegates to the existing native
-   *  `AutoskeletonDebugOverlay` (tasks 3.3/4.5) — outline + index/source/
-   *  hit-miss + radius-rung badge per shape, dev-build only. */
-  readonly debugOverlay: boolean;
-}
+export type { AutoskeletonOverlayNativeProps };
 
 const COMPONENT_NAME = 'AutoskeletonOverlayView';
 
-/** `requireNativeComponent` throws synchronously if the native view is not
- *  linked, which is exactly the ADR-15 "throw at first use, not import
- *  time" contract IF this were evaluated eagerly — so it is resolved
- *  LAZILY (only when actually rendered), guarded the same way
- *  `nativeModuleAccessor.ts` guards `NativeAutoskeleton`. */
-let cached: ReturnType<typeof requireNativeComponent<AutoskeletonOverlayNativeProps>> | null = null;
+/** The codegen'd component is resolved once at module load (codegen itself
+ *  is lazy internally — it never throws synchronously even when the
+ *  underlying native view manager is unlinked, e.g. Expo Go). This accessor
+ *  keeps the same memoized/never-throwing shape the rest of the codebase
+ *  already depends on (`AutoSkeleton.tsx` calls it unconditionally on every
+ *  render) so swapping the underlying primitive stays a pure refactor. */
+let cached: HostComponent<AutoskeletonOverlayNativeProps> | null = null;
 let attempted = false;
 
-export function resolveAutoskeletonOverlayNativeComponent():
-  | ReturnType<typeof requireNativeComponent<AutoskeletonOverlayNativeProps>>
-  | null {
+export function resolveAutoskeletonOverlayNativeComponent(): HostComponent<AutoskeletonOverlayNativeProps> | null {
   if (attempted) {
     return cached;
   }
   attempted = true;
   try {
-    cached = requireNativeComponent<AutoskeletonOverlayNativeProps>(COMPONENT_NAME);
+    cached = AutoskeletonOverlayView as HostComponent<AutoskeletonOverlayNativeProps>;
   } catch {
     cached = null;
   }
