@@ -159,7 +159,10 @@ class AutoskeletonSensor(
             return emptyList()
         }
         val id = nativeId(view)
-        if (id != null && ctx.options.hints.isIgnored(id)) {
+        // `<AutoSkeleton.Ignore>` bug fix: the sentinel marker (self-sufficient,
+        // no registry needed) is checked FIRST, then the registry — mirrors
+        // `src/web/dom-sensor.ts`'s `isIgnored()` `marker || registry` shape.
+        if (id == AUTOSKELETON_IGNORE_MARKER_NATIVE_ID || (id != null && ctx.options.hints.isIgnored(id))) {
             return emptyList()
         }
         // A hidden/transparent view contributes no visible pixels, so it must not

@@ -56,6 +56,24 @@ struct AutoskeletonShapeInfo: Equatable {
     let radiusSource: AutoskeletonRadiusSource
 }
 
+/// `<AutoSkeleton.Ignore>` bug fix (`src/native/Ignore.tsx`): sentinel
+/// `accessibilityIdentifier` value the JS `Ignore` component clones onto its
+/// single child (via the `testID` prop — VERIFIED, not assumed, by reading
+/// `RCTViewComponentView.mm`'s `testId` prop-diffing branch: `testID` reaches
+/// `accessibilityIdentifier` on iOS, while `nativeID` reaches an unrelated
+/// `.nativeId` category property this sensor never reads), recognized
+/// DIRECTLY by `AutoskeletonSensor`'s traversal — BEFORE consulting
+/// `AutoskeletonHintRegistry` — so it works with today's production
+/// `AutoskeletonEmptyHintRegistry` and needs no bridge/registry wiring.
+/// Structurally the same `marker || registry` shape as `src/web/dom-sensor.ts`'s
+/// `isIgnored()` (`el.hasAttribute(IGNORE_ATTRIBUTE) || hints.isIgnored(...)`).
+/// Mirrored verbatim in `src/native/Ignore.tsx` (`AUTOSKELETON_IGNORE_MARKER_ID`)
+/// and `AutoskeletonTypes.kt` (`AUTOSKELETON_IGNORE_MARKER_NATIVE_ID`) — the
+/// same deliberate-duplication convention this codebase already uses for
+/// `skeletonBaseColor` in the on-device paint-gate tests, so a drift between
+/// platforms is a loud test failure, never a silent divergence.
+let autoskeletonIgnoreMarkerNativeId = "__autoskeleton-ignore__"
+
 /// Mirrors `HintRegistry` in `src/core/contracts.ts`. `nodeId` is the view's
 /// `accessibilityIdentifier` — the public channel plan.md §4 names for both the
 /// `Ignore` marker and typed hints on iOS.

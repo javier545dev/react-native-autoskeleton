@@ -133,7 +133,11 @@ final class AutoskeletonSensor {
         if ctx.truncated {
             return []
         }
-        if let nodeId = view.accessibilityIdentifier, ctx.options.hints.isIgnored(nodeId) {
+        // `<AutoSkeleton.Ignore>` bug fix: the sentinel marker (self-sufficient,
+        // no registry needed) is checked FIRST, then the registry — mirrors
+        // `src/web/dom-sensor.ts`'s `isIgnored()` `marker || registry` shape.
+        if let nodeId = view.accessibilityIdentifier,
+           nodeId == autoskeletonIgnoreMarkerNativeId || ctx.options.hints.isIgnored(nodeId) {
             return []
         }
         // A hidden/transparent view contributes no visible pixels, so it must not

@@ -63,6 +63,20 @@ data class AutoskeletonShapeInfo(
     val radiusSource: AutoskeletonRadiusSource,
 )
 
+/** `<AutoSkeleton.Ignore>` bug fix (`src/native/Ignore.tsx`): sentinel `nativeID`
+ *  value the JS `Ignore` component clones onto its single child, recognized
+ *  DIRECTLY by [AutoskeletonSensor]'s traversal — BEFORE consulting
+ *  [AutoskeletonHintRegistry] — so it works with today's production
+ *  [AutoskeletonEmptyHintRegistry] and needs no bridge/registry wiring.
+ *  Structurally the same `marker || registry` shape as `src/web/dom-sensor.ts`'s
+ *  `isIgnored()` (`el.hasAttribute(IGNORE_ATTRIBUTE) || hints.isIgnored(...)`).
+ *  Mirrored verbatim in `src/native/Ignore.tsx` (`AUTOSKELETON_IGNORE_MARKER_ID`)
+ *  and `AutoskeletonTypes.swift` (`autoskeletonIgnoreMarkerNativeId`) — the same
+ *  deliberate-duplication convention this codebase already uses for
+ *  `SKELETON_BASE_COLOR` in the on-device paint-gate tests, so a drift between
+ *  platforms is a loud test failure, never a silent divergence. */
+const val AUTOSKELETON_IGNORE_MARKER_NATIVE_ID = "__autoskeleton-ignore__"
+
 /** Mirrors `HintRegistry` in `src/core/contracts.ts`. `nodeId` is the view's
  *  `nativeID` (read back via `view.getTag(com.facebook.react.R.id.view_tag_native_id)`
  *  — the same public tag `BaseViewManager.setNativeId` writes) — the public channel

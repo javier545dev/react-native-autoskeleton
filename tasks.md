@@ -1374,6 +1374,91 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       and gate suites NOT re-run — zero android/, ios/, or native Kotlin/Swift source touched
       (JS/TS and docs only).
 
+## `<AutoSkeleton.Ignore>` native remediation (session 2026-08-28, outside the 0–9 phase numbering)
+
+- [x] **G.5** Fixed `<AutoSkeleton.Ignore>` doing nothing on iOS/Android
+      (RED→GREEN, strict TDD): native `Ignore` (`src/native/AutoSkeleton.tsx`)
+      was a bare pass-through fragment (`return <>{props.children}</>`) — it
+      marked nothing, registered nothing, so wrapped content got skeleton
+      shapes drawn OVER exactly the content the user asked to exclude. Web's
+      `Ignore` already worked (`src/web/dom-sensor.ts`'s `isIgnored()`:
+      `el.hasAttribute(IGNORE_ATTRIBUTE) || hints.isIgnored(...)` — a
+      self-sufficient marker channel, no registry needed); native only had
+      the `HintRegistry` channel, and production always passes an empty
+      registry (verified in 5.9: `HintRegistry` cannot cross the Turbo
+      Module boundary at all), so native Ignore could never have worked
+      regardless of what the component did.
+      **Fix**: gave native the same self-sufficient marker channel web
+      already has — structurally the same `marker || registry` shape.
+      Extracted `Ignore` into its own module (`src/native/Ignore.tsx`,
+      mirrors `TemplateMeasurementHost.tsx`'s pattern so it stays unit-
+      testable without a heavy `react-native` mock); it now
+      `React.cloneElement`s its single element child (`React.Children.only`
+      — a stated, documented API constraint: exactly one element child,
+      whose own `nativeID`/`testID` is overwritten), stamping BOTH
+      `nativeID` and `testID` with a sentinel marker
+      (`AUTOSKELETON_IGNORE_MARKER_ID = '__autoskeleton-ignore__'`).
+      **Real, previously-undocumented discovery** (verified by reading
+      `node_modules/react-native`'s Fabric source, not assumed): on
+      Android, JS `nativeID` reaches `view.setTag(R.id.view_tag_native_id)`
+      — the exact tag `AutoskeletonSensor.kt` reads, so `nativeID` alone is
+      correct there. On iOS, JS `nativeID` reaches a DIFFERENT, unrelated
+      `UIView.nativeId` category property (`RCTViewComponentView.mm`) that
+      `AutoskeletonSensor.swift` never reads; it is JS `testID` that reaches
+      `accessibilityIdentifier` (the `testId` prop-diffing branch), which is
+      what the iOS sensor actually reads. Setting only `nativeID` would have
+      silently no-op'd on iOS — flagged in code for whoever eventually
+      builds the general typed-hint channel (radius/lines), which is a
+      separate, larger, still-unbuilt feature and was NOT built here.
+      Native sensors (`AutoskeletonSensor.kt`/`.swift`) now check the
+      sentinel FIRST, then the registry, in `traverse()` — mirrors
+      `dom-sensor.ts`'s exact shape. Constants mirrored verbatim in
+      `AutoskeletonTypes.kt` (`AUTOSKELETON_IGNORE_MARKER_NATIVE_ID`) and
+      `AutoskeletonTypes.swift` (`autoskeletonIgnoreMarkerNativeId`) — same
+      deliberate-duplication convention as `SKELETON_BASE_COLOR` in the
+      paint-gate tests.
+      **On-device visual proof** (the brief's hard requirement): extended
+      `PaintGateScreen` (`examples/bare-rn/App.tsx`) with an ignored region
+      (`<AutoSkeleton.Ignore>`-wrapped, `#FF6600`) alongside a NOT-ignored
+      sibling in the same row (`#8000FF`). New instrumented test
+      `ignoredRegionPaintsNoSkeletonWhileSiblingDoes`
+      (`PaintGateInstrumentedTest.kt`) and UI test
+      `testIgnoredRegionPaintsNoSkeletonWhileSiblingDoes`
+      (`PaintGateUITests.swift`) assert BOTH halves from the SAME frame:
+      ignored region shows only its own fixture color (no ramp pixel), AND
+      the sibling shows a real shimmer-ramp pixel in that same capture —
+      asserting only the first half would have passed even if the whole
+      skeleton failed to render.
+      **RED taken and confirmed for the right reason** at three levels
+      before the fix: (1) `test/native/ignore.test.ts` against the bare
+      pass-through — `Ignore` returned the child unmodified
+      (`nativeID`/`testID` both `undefined`); (2)
+      `AutoskeletonSensorTest.kt`'s new
+      `ignoreMarkerNativeIdExcludesSubtreeWithoutRegistryEntry` /
+      `SyntheticHierarchyBuilderTests.swift`'s new
+      `testIgnoreMarkerNativeIdExcludesSubtreeWithoutRegistryEntry` (both
+      against the DEFAULT empty `HintRegistry`, no override) — shape-count
+      mismatch (2 vs 1 expected); (3) the on-device gate itself, JS-only
+      reverted against the already-fixed native sensors (proving the JS
+      entry point is the real defect surface) — Android: real pixel
+      `#E3E3E3` (skeleton ramp) sampled directly over the ignored region;
+      iOS: real pixel `#E2E3E2` sampled the same way (one iOS run was
+      flaky — a known overlay-mount-race characteristic already documented
+      in this file for `skeletonPaintsOverDetectedShapes` — a re-run
+      reproduced RED cleanly).
+      **Tests**: vitest 271/271 (was 266, +4 `test/native/ignore.test.ts` + 1
+      elsewhere), Playwright 38/38 unchanged, `npm run typecheck` clean
+      (root + `examples/bare-rn` consumer). Android unit 107/107 (was 106,
+      +1). iOS unit 76/76 (was 75, +1). Android on-device paint gate 9/9
+      (was 3 `PaintGateInstrumentedTest` + 5 `PaintGateListInstrumentedTest`
+      = 8; now 4 + 5 = 9, +1), re-run twice, stable. iOS on-device visual
+      gate 4/4 (was 3, +1), re-run twice, stable. No regressions anywhere.
+      **Out of scope, flagged not built** (per explicit instruction): the
+      general typed-hint channel (`radius`/`lines` end to end — typed-prop
+      API, per-node registry, bridge marshaling); ADR-15's Expo Go
+      mechanism. Deps: 5.5 (native `AutoSkeleton`), 5.9 (confirmed the
+      registry channel is bridge-unreachable). Complexity: M.
+
 ## Phase 8: SSR — build-time snapshot capture CLI + `@media`-bucketed CSS bundle
 
 - [ ] **8.1** RED→GREEN `cli/capture.ts` — Playwright-driven capture over `WIDTH_BUCKETS`

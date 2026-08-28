@@ -92,6 +92,12 @@ class PaintGateInstrumentedTest {
         private val CONTENT_IMAGE_COLOR = Color.parseColor("#0000FF")
         private val CONTENT_CARD_COLOR = Color.parseColor("#00A651")
 
+        // `<AutoSkeleton.Ignore>` bug-fix gate: `ignored` sits INSIDE
+        // `<AutoSkeleton.Ignore>`, `ignoredSibling` is its NOT-ignored sibling
+        // in the same frame.
+        private val CONTENT_IGNORED_COLOR = Color.parseColor("#FF6600")
+        private val CONTENT_IGNORED_SIBLING_COLOR = Color.parseColor("#8000FF")
+
         // Per-channel ARGB slack for device JPEG/scaling/compositor noise —
         // generous enough to absorb minor rendering variance, far too tight
         // for "wrong solid color entirely" (the failure mode under test) to
@@ -101,6 +107,8 @@ class PaintGateInstrumentedTest {
         private const val LABEL_TOGGLE = "paint-gate-toggle"
         private const val LABEL_IMAGE = "paint-gate-image"
         private const val LABEL_CARD = "paint-gate-rounded-card"
+        private const val LABEL_IGNORED_CONTENT = "paint-gate-ignored-content"
+        private const val LABEL_IGNORED_SIBLING = "paint-gate-ignored-sibling"
 
         // ADR-16 defaults (`core/handoff.ts`): handoffTimeoutMs=250,
         // handoffFadeMs=120. Waiting past both, plus slack, before sampling
@@ -250,6 +258,59 @@ class PaintGateInstrumentedTest {
                 "hidden while isLoading=true, but it was directly visible at " +
                 "${hex(pixel)} — no skeleton is covering it.",
             colorsClose(pixel, CONTENT_IMAGE_COLOR),
+        )
+        scenario.close()
+    }
+
+    /**
+     * `<AutoSkeleton.Ignore>` bug-fix gate (this session's brief): with
+     * `isLoading` true, the region wrapped in `<AutoSkeleton.Ignore>` must
+     * show NO skeleton pixels (only its own fixture color), while its
+     * NOT-ignored sibling in the exact same frame DOES show real skeleton
+     * pixels. Both halves are asserted from the SAME `screenshotBitmap`
+     * capture — asserting only the ignored half would pass even if the
+     * whole skeleton failed to render at all, which is exactly why the
+     * sibling assertion is not optional.
+     */
+    @RequiresApi(Build.VERSION_CODES.O)
+    @Test
+    fun ignoredRegionPaintsNoSkeletonWhileSiblingDoes() {
+        val scenario = launchAndWaitForMount()
+        val ignoredBounds = boundsOf(LABEL_IGNORED_CONTENT)
+        val siblingBounds = boundsOf(LABEL_IGNORED_SIBLING)
+        val bitmap = screenshotBitmap(scenario)
+
+        val ignoredPixel = centerPixel(bitmap, ignoredBounds)
+        val siblingPixel = centerPixel(bitmap, siblingBounds)
+
+        assertTrue(
+            "Expected the <AutoSkeleton.Ignore>-wrapped region to show its own " +
+                "fixture color (${hex(CONTENT_IGNORED_COLOR)}) while isLoading=true " +
+                "(no skeleton should ever be painted over ignored content), but the " +
+                "pixel was ${hex(ignoredPixel)}.",
+            colorsClose(ignoredPixel, CONTENT_IGNORED_COLOR),
+        )
+        assertFalse(
+            "Expected NO skeleton ramp pixel over the <AutoSkeleton.Ignore>-wrapped " +
+                "region while isLoading=true, but the pixel at " +
+                "(${(ignoredBounds.left + ignoredBounds.right) / 2}, " +
+                "${(ignoredBounds.top + ignoredBounds.bottom) / 2}) was " +
+                "${hex(ignoredPixel)} — inside the shimmer ramp.",
+            colorInRamp(ignoredPixel, SKELETON_BASE_COLOR, SKELETON_HIGHLIGHT_COLOR),
+        )
+        assertTrue(
+            "Expected the NOT-ignored sibling region to show a real skeleton pixel " +
+                "within the shimmer ramp (${hex(SKELETON_BASE_COLOR)}..${hex(SKELETON_HIGHLIGHT_COLOR)}) " +
+                "in the SAME frame the ignored region was sampled from — proving the " +
+                "skeleton itself painted at all, not just that the ignored region " +
+                "happened to show nothing — but the pixel was ${hex(siblingPixel)}.",
+            colorInRamp(siblingPixel, SKELETON_BASE_COLOR, SKELETON_HIGHLIGHT_COLOR),
+        )
+        assertFalse(
+            "The NOT-ignored sibling's own fixture color " +
+                "(${hex(CONTENT_IGNORED_SIBLING_COLOR)}) should be hidden by the " +
+                "skeleton while isLoading=true, but it was directly visible.",
+            colorsClose(siblingPixel, CONTENT_IGNORED_SIBLING_COLOR),
         )
         scenario.close()
     }

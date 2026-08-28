@@ -1,0 +1,24 @@
+{
+  "class": "container",
+  "frame": { "x": 0, "y": 0, "w": 300, "h": 300 },
+  "nativeID": "root",
+  "children": [
+    {
+      "class": "text",
+      "frame": { "x": 10, "y": 10, "w": 100, "h": 30 },
+      "nativeID": "visible-text"
+    },
+    {
+      "class": "container",
+      "frame": { "x": 10, "y": 60, "w": 200, "h": 100 },
+      "nativeID": "__autoskeleton-ignore__",
+      "children": [
+        {
+          "class": "text",
+          "frame": { "x": 10, "y": 70, "w": 80, "h": 30 },
+          "nativeID": "ignored-text"
+        }
+      ]
+    }
+  ]
+}

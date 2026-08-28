@@ -40,6 +40,9 @@ export const PAINT_GATE_FIXTURE = {
     text: 'paint-gate-text',
     image: 'paint-gate-image',
     card: 'paint-gate-rounded-card',
+    // `<AutoSkeleton.Ignore>` bug-fix gate.
+    ignoredContent: 'paint-gate-ignored-content',
+    ignoredSibling: 'paint-gate-ignored-sibling',
   },
   colors: {
     // Real, opaque, mutually distinct fills — never derived from a shared
@@ -49,6 +52,14 @@ export const PAINT_GATE_FIXTURE = {
     text: '#101010',
     image: '#0000FF',
     card: '#00A651',
+    // `<AutoSkeleton.Ignore>` bug-fix gate (both new, distinct from every
+    // other color above and from the skeleton ramp on at least one
+    // channel): `ignored` sits INSIDE `<AutoSkeleton.Ignore>`, `ignoredSibling`
+    // is its NON-ignored sibling in the exact same frame — see
+    // `PaintGateInstrumentedTest.kt`'s/`PaintGateUITests.swift`'s
+    // `ignoredRegionPaintsNoSkeletonWhileSiblingDoes` assertion.
+    ignored: '#FF6600',
+    ignoredSibling: '#8000FF',
   },
 } as const;
 
@@ -132,6 +143,34 @@ function PaintGateScreen() {
             testID="paint-gate-rounded-card"
             style={[styles.roundedCard, { backgroundColor: PAINT_GATE_FIXTURE.colors.card }]}
           />
+          {/* `<AutoSkeleton.Ignore>` bug-fix gate (this session's brief):
+           *  `ignoredContent` sits INSIDE `<AutoSkeleton.Ignore>` — it must
+           *  show NO skeleton pixels while `isLoading` is true, only its own
+           *  fixture color. `ignoredSibling` is a plain, NOT-ignored sibling
+           *  right next to it, in the SAME frame — it must show real skeleton
+           *  pixels. Both halves matter: asserting only the first would pass
+           *  even if the whole skeleton failed to render at all. */}
+          <View
+            accessible={false}
+            accessibilityLabel="paint-gate-ignore-row"
+            testID="paint-gate-ignore-row"
+            style={styles.ignoreRow}
+          >
+            <AutoSkeleton.Ignore>
+              <View
+                accessible
+                accessibilityLabel={PAINT_GATE_FIXTURE.labels.ignoredContent}
+                testID="paint-gate-ignored-content"
+                style={[styles.ignoredBlock, { backgroundColor: PAINT_GATE_FIXTURE.colors.ignored }]}
+              />
+            </AutoSkeleton.Ignore>
+            <View
+              accessible
+              accessibilityLabel={PAINT_GATE_FIXTURE.labels.ignoredSibling}
+              testID="paint-gate-ignored-sibling"
+              style={[styles.ignoredBlock, { backgroundColor: PAINT_GATE_FIXTURE.colors.ignoredSibling }]}
+            />
+          </View>
         </View>
       </AutoSkeleton>
     </View>
@@ -351,6 +390,14 @@ const styles = StyleSheet.create({
     width: 240,
     height: 90,
     borderRadius: 16,
+  },
+  ignoreRow: {
+    flexDirection: 'row',
+    gap: 16,
+  },
+  ignoredBlock: {
+    width: 100,
+    height: 60,
   },
   counterLabel: {
     color: '#000000',

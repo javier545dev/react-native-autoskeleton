@@ -96,6 +96,18 @@ class AutoskeletonSensorTest {
         assertShapesMatch(measure("ignore-subtree", hints = ignoring), "ignore-subtree")
     }
 
+    /** `<AutoSkeleton.Ignore>` bug fix (`src/native/Ignore.tsx`): the sentinel
+     *  `nativeID` marker excludes the subtree DIRECTLY, with the DEFAULT
+     *  `AutoskeletonEmptyHintRegistry` (no registry entry configured at
+     *  all) — proving the marker channel is self-sufficient, exactly
+     *  mirroring `ignoreSubtreeExcludesEntireSubtree` above but without any
+     *  `HintRegistry` override. Same expected output as `ignore-subtree`:
+     *  only `visible-text` remains. */
+    @Test
+    fun ignoreMarkerNativeIdExcludesSubtreeWithoutRegistryEntry() {
+        assertShapesMatch(measure("ignore-marker-subtree"), "ignore-subtree")
+    }
+
     // MARK: - Leaf classification
     //
     // `ReactTextView` is classified via a real constructed instance below.

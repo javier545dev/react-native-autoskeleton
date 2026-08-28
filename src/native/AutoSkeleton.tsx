@@ -59,6 +59,7 @@ import { shouldRunHandoffCycle } from '../core/refresh-gate';
 import { MemoryShapeStore } from '../core/snapshot';
 import { applyThemeOverride } from '../core/theme-override';
 import type { AnimationKind, OnMetrics, RendererKind, ShapeSnapshot } from '../core/types';
+import { Ignore } from './Ignore';
 import { nativeSensor } from './nativeSensorInstance';
 import { resolveAutoskeletonOverlayNativeComponent } from './renderer/AutoskeletonOverlayHostComponent';
 import type { NativeSensorTarget } from './sensor';
@@ -125,10 +126,6 @@ export function SkeletonProvider(props: SkeletonProviderProps): React.JSX.Elemen
     handoffFadeMs: props.handoffFadeMs ?? defaultContextValue.handoffFadeMs,
   };
   return <SkeletonContext.Provider value={value}>{props.children}</SkeletonContext.Provider>;
-}
-
-function Ignore(props: { readonly children: ReactNode }): React.JSX.Element {
-  return <>{props.children}</>;
 }
 
 export interface AutoSkeletonProps {
