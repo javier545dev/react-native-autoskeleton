@@ -70,11 +70,22 @@ class PaintGateInstrumentedTest {
     companion object {
         private const val MOUNT_TIMEOUT_MS = 20_000L
 
-        // native/AutoSkeleton.tsx's DEFAULT_THEME.baseColor — not redefined
-        // anywhere else, deliberately hardcoded here so this test fails loudly
-        // (wrong expected color) rather than silently (drifted alongside a
+        // native/AutoSkeleton.tsx's DEFAULT_THEME.baseColor/highlightColor — not
+        // redefined anywhere else, deliberately hardcoded here so this test fails
+        // loudly (wrong expected color) rather than silently (drifted alongside a
         // shared constant) if the production theme default ever changes.
+        //
+        // AutoskeletonRendererTier1.kt's `ensureShader()` builds ONE
+        // `LinearGradient(baseColor, highlightColor, baseColor)` and translates it
+        // every frame (never rebuilt — NFR-5), so "a skeleton painted here" means
+        // "this pixel sampled at SOME shimmer phase between baseColor and
+        // highlightColor", never "at this exact phase". A single-target-color
+        // assertion against `baseColor` alone is a calibration bug: the
+        // base->highlight per-channel delta (19) exceeds `COLOR_TOLERANCE` (16),
+        // so any capture landing near the true highlight peak would fail this
+        // assertion even on a fully correct implementation.
         private val SKELETON_BASE_COLOR = Color.parseColor("#e2e2e2")
+        private val SKELETON_HIGHLIGHT_COLOR = Color.parseColor("#f5f5f5")
 
         // examples/bare-rn/App.tsx PAINT_GATE_FIXTURE.colors — real, opaque,
         // mutually distinct from SKELETON_BASE_COLOR and from each other.
@@ -162,15 +173,45 @@ class PaintGateInstrumentedTest {
             Math.abs(Color.blue(a) - Color.blue(b)) <= tolerance
     }
 
+    /**
+     * True when every channel of [pixel] falls within the color RAMP spanning
+     * [from]..[to] (inclusive of both ends, in either order), inflated by
+     * [tolerance] at each end for device/compositor noise. This is the correct
+     * "a skeleton painted here" oracle for an animated shimmer surface backed
+     * by a two-stop `LinearGradient`: the sampled pixel can legitimately be at
+     * ANY phase between [from] and [to], not just equal to [from].
+     *
+     * This is STRICTLY STRONGER than widening `COLOR_TOLERANCE`, which would
+     * blur toward arbitrary colors near `baseColor` alone. Here every channel
+     * is still bounded to the real gradient's own per-channel min/max (plus a
+     * small tolerance), so an unrelated fixture color (e.g. `#0000FF`,
+     * `#101010`, `#00A651` — none of which are within tolerance of the grey
+     * 226..245 ramp on at least one channel) can never satisfy this check by
+     * "content bleeding through".
+     */
+    private fun colorInRamp(pixel: Int, from: Int, to: Int, tolerance: Int = COLOR_TOLERANCE): Boolean {
+        fun channelInRange(value: Int, a: Int, b: Int): Boolean {
+            val lo = minOf(a, b) - tolerance
+            val hi = maxOf(a, b) + tolerance
+            return value in lo..hi
+        }
+        return channelInRange(Color.red(pixel), Color.red(from), Color.red(to)) &&
+            channelInRange(Color.green(pixel), Color.green(from), Color.green(to)) &&
+            channelInRange(Color.blue(pixel), Color.blue(from), Color.blue(to))
+    }
+
     private fun hex(color: Int): String = String.format("#%06X", 0xFFFFFF and color)
 
     /**
      * Assertion 1 of the brief: with `isLoading` true, skeleton pixels are
      * actually painted in the region the sensor detected a shape.
      *
-     * CURRENT FAILURE: the sampled pixel is the fixture's own opaque
-     * `#0000FF` fill, not `#e2e2e2` — nothing painted over it. See the class
-     * doc for the exact root cause and why that is the correct failure.
+     * The oracle is a color RAMP, not a single target color: the production
+     * draw pass (`AutoskeletonRendererTier1.ensureShader()`) paints one
+     * `LinearGradient(baseColor, highlightColor, baseColor)` translated every
+     * frame, so any real capture can legitimately land at any phase between
+     * `baseColor` and `highlightColor`. "A skeleton painted here" means "this
+     * pixel is somewhere in the shimmer ramp", not "at this exact phase".
      */
     @RequiresApi(Build.VERSION_CODES.O)
     @Test
@@ -180,11 +221,12 @@ class PaintGateInstrumentedTest {
         val bitmap = screenshotBitmap(scenario)
         val pixel = centerPixel(bitmap, bounds)
         assertTrue(
-            "Expected the skeleton's baseColor (${hex(SKELETON_BASE_COLOR)}) painted over the " +
+            "Expected a skeleton pixel within the shimmer ramp " +
+                "(${hex(SKELETON_BASE_COLOR)}..${hex(SKELETON_HIGHLIGHT_COLOR)}) painted over the " +
                 "detected image-placeholder shape while isLoading=true, but the pixel at " +
                 "(${(bounds.left + bounds.right) / 2}, ${(bounds.top + bounds.bottom) / 2}) " +
-                "was ${hex(pixel)} — nothing painted a skeleton there.",
-            colorsClose(pixel, SKELETON_BASE_COLOR),
+                "was ${hex(pixel)} — outside the ramp, so nothing painted a skeleton there.",
+            colorInRamp(pixel, SKELETON_BASE_COLOR, SKELETON_HIGHLIGHT_COLOR),
         )
         scenario.close()
     }
