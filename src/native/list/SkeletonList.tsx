@@ -20,12 +20,13 @@
 // `useSkeletonCell` bind) supplies one.
 
 import { useContext } from 'react';
-import { I18nManager, PixelRatio, Platform, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { I18nManager, PixelRatio, Platform, View, useWindowDimensions } from 'react-native';
 import { bucketWidth, composeCacheKey, quantizeFontScale } from '../../core/cache-key';
 import { buildSyntheticRowKeys } from '../../core/list';
 import type { AnimationKind } from '../../core/types';
 import { SkeletonContext } from '../AutoSkeleton';
 import { SyntheticRow } from './SyntheticRow';
+import { TemplateMeasurementHost } from './TemplateMeasurementHost';
 import { templateRegistry } from './listRuntime';
 import { useTemplateMeasurement } from './useTemplateMeasurement';
 
@@ -82,17 +83,7 @@ export function SkeletonList(props: SkeletonListProps): React.JSX.Element {
 
   return (
     <View>
-      {pendingTemplateNode && (
-        <View
-          ref={templateRef}
-          onLayout={onTemplateLayout}
-          collapsable={false}
-          style={styles.invisibleTemplate}
-          pointerEvents="none"
-        >
-          {pendingTemplateNode}
-        </View>
-      )}
+      <TemplateMeasurementHost node={pendingTemplateNode} templateRef={templateRef} onLayout={onTemplateLayout} />
       {rowKeys.map((key, index) => (
         <View key={key} style={index > 0 ? { marginTop: props.rowSpacing ?? 12 } : undefined}>
           <SyntheticRow
@@ -110,13 +101,3 @@ export function SkeletonList(props: SkeletonListProps): React.JSX.Element {
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  invisibleTemplate: {
-    position: 'absolute',
-    opacity: 0,
-    left: 0,
-    top: 0,
-    zIndex: -1,
-  },
-});

@@ -20,6 +20,8 @@ export { SkeletonList } from './native/list/SkeletonList';
 export type { SkeletonListProps } from './native/list/SkeletonList';
 export { SkeletonListFooter } from './native/list/SkeletonListFooter';
 export type { SkeletonListFooterProps } from './native/list/SkeletonListFooter';
+export { SkeletonCell } from './native/list/SkeletonCell';
+export type { SkeletonCellProps } from './native/list/SkeletonCell';
 export { useSkeletonCell } from './native/list/useSkeletonCell';
 export type { UseSkeletonCellOptions, UseSkeletonCellResult } from './native/list/useSkeletonCell';
 export type {
