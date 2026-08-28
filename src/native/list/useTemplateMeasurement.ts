@@ -7,10 +7,13 @@
 // (same viewRef+onLayout+`nativeSensor.measure()` mechanism), with two
 // deliberate differences this phase's DoD demands:
 //
-//   1. Deferred via `InteractionManager.runAfterInteractions`, not a single
-//      `requestAnimationFrame` — list template measurement is explicitly
-//      allowed to wait for interactions/scroll to settle, unlike a
-//      whole-screen cold load (tasks.md 6.1/6.3).
+//   1. Deferred via `scheduleAfterInteractions` (`InteractionManager
+//      .runAfterInteractions` when available, `requestIdleCallback`
+//      otherwise — see that file's header for why: `InteractionManager` was
+//      found REMOVED on RN 0.87.1 during this phase's own on-device
+//      testing), not a single `requestAnimationFrame` — list template
+//      measurement is explicitly allowed to wait for interactions/scroll to
+//      settle, unlike a whole-screen cold load (tasks.md 6.1/6.3).
 //   2. Runs AT MOST ONCE per `itemType` for the whole app session
 //      (`templateRegistry`, `src/core/list.ts`, `decideCellBind`) — never
 //      once per mounted list/cell instance. `decideCellBind` is the single
@@ -24,12 +27,13 @@
 // resolves to a measured one for that itemType.
 
 import { useEffect, useRef, useState, type ComponentRef, type ReactNode, type RefObject } from 'react';
-import { findNodeHandle, InteractionManager, View, type LayoutChangeEvent } from 'react-native';
+import { findNodeHandle, View, type LayoutChangeEvent } from 'react-native';
 import type { ShapeCacheKey } from '../../core/cache-key';
 import { decideCellBind, type TemplateRegistry } from '../../core/list';
 import type { MemoryShapeStore } from '../../core/snapshot';
 import { nativeSensor } from '../nativeSensorInstance';
 import { templateTraversalCounter } from './listRuntime';
+import { scheduleAfterInteractions } from './scheduleAfterInteractions';
 
 /** Bounded retry budget while waiting for the invisible template's own
  *  `onLayout` to land before the deferred measurement runs — mirrors this
@@ -66,20 +70,41 @@ export function useTemplateMeasurement(
   const decision = decideCellBind(cacheHit, registry.stateFor(itemType));
   const shouldSchedule = decision.shouldScheduleTemplateMeasurement && renderTemplate !== undefined;
 
+  // REAL, on-device-found race (Phase 6 apply session): when N sibling list
+  // cells for the SAME unseen itemType render in the SAME commit (the
+  // common case — a fresh list mounts with many loading rows at once),
+  // EVERY one of them independently reads `registry.stateFor(itemType)` as
+  // `'idle'` during React's render phase, because render phases for ALL
+  // siblings complete BEFORE any of their effects flush. Claiming the
+  // itemType inside `useEffect` (this file's own first version) is
+  // therefore too late: by the time cell 1's effect calls
+  // `markScheduled`, cells 2..N have ALREADY computed `shouldSchedule=true`
+  // from the same still-`'idle'` read and will ALSO claim it in their own
+  // effects — violating "at most once, ever" (ADR-13/RISK-3) under
+  // concurrent binds, the exact case list rendering guarantees will happen.
+  //
+  // Fix: claim SYNCHRONOUSLY, in the render body, the instant this cell
+  // decides to schedule. React evaluates each sibling's render function
+  // one at a time within a single synchronous pass (component render
+  // execution is never parallel), so cell 1's claim is visible to cell 2's
+  // render a statement later — well before ANY effect for either has run.
+  // This is a deliberate, idempotent, monotonic external-state write during
+  // render (never affects what THIS render produces), the same category of
+  // pattern this codebase already uses for "adjust state during render"
+  // (`everShownContent`/`cycleId` in `AutoSkeleton.tsx`), just against a
+  // shared module-scoped registry instead of local component state.
+  if (shouldSchedule) {
+    registry.markScheduled(itemType);
+  }
+
   const [mounted, setMounted] = useState(false);
   const layoutRef = useRef<{ width: number; height: number } | null>(null);
   const templateRef = useRef<ComponentRef<typeof View> | null>(null);
 
-  // Claims the itemType (markScheduled) the instant this bind decides to
-  // schedule, so no OTHER concurrently-binding cell for the same itemType
-  // can ALSO decide to schedule before this one's deferred callback runs —
-  // this is what makes "at most once, ever" hold under concurrent binds,
-  // not just sequential ones.
   useEffect(() => {
     if (!shouldSchedule) {
       return;
     }
-    registry.markScheduled(itemType);
     setMounted(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldSchedule, itemType]);
@@ -138,11 +163,29 @@ export function useTemplateMeasurement(
       if (result) {
         store.set(result.snapshot.key, result.snapshot);
         templateTraversalCounter.increment();
+        finish();
+        return;
+      }
+      // A resolved `reactTag` with a `null` measure result means the JS-side
+      // shadow-tree layout has committed, but the corresponding NATIVE view
+      // has not finished mounting yet — `Sensor.measure()`'s contract
+      // documents this exact case (`fetchShapesOnce` returns `null` when
+      // native reports an empty array), and `native/AutoSkeleton.tsx`'s own
+      // `useColdMeasurement` hit and fixed the identical timing gap for the
+      // whole-screen cold path (its doc comment: "onLayout fires from the
+      // shadow tree commit... which genuinely precedes the separate native
+      // MOUNTING phase"). This is a REAL, on-device-confirmed instance of
+      // the same gap for the list template path — retry across the SAME
+      // bounded frame budget already used for the layout/reactTag wait,
+      // rather than giving up on the first frame.
+      if (attemptsLeft > 0) {
+        frameHandle = requestAnimationFrame(() => attemptMeasure(attemptsLeft - 1));
+        return;
       }
       finish();
     };
 
-    const interactionHandle = InteractionManager.runAfterInteractions(() => {
+    const interactionHandle = scheduleAfterInteractions(() => {
       attemptMeasure(MAX_LAYOUT_WAIT_FRAMES);
     });
 
