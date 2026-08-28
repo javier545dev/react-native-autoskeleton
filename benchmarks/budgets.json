@@ -1,0 +1,43 @@
+{
+  "$schema": "./budgets.schema.json",
+  "_comment": [
+    "tasks.md 9.1 — every number here is reconciled against spec.md §3 (Non-Functional",
+    "Requirements) and plan.md §6 ADR-1's serialization exit criterion, NOT transcribed from",
+    "tasks.md's own prose. tasks.md 9.1's original text said 'web entry <5 kB gzip' — that figure",
+    "is RETIRED (spec.md NFR-6, revised 2026-08-27 by maintainer decision after the first real",
+    "measurement; see spec.md line 477). The value below is 8192 bytes, matching",
+    "test/packaging/web-bundle.test.ts's NFR6_BUDGET_BYTES exactly. Do not 'restore' 5 kB."
+  ],
+  "traversalP95Ms": {
+    "value": 2,
+    "source": "spec.md NFR-3: native traversal completes in < 2 ms for <=60 shapes (CI benchmark, p95)."
+  },
+  "cacheLookupP95Ms": {
+    "value": 0.2,
+    "source": "spec.md NFR-4: synchronous cache lookup by composite key completes in < 0.2 ms (CI benchmark, p95)."
+  },
+  "serializationP95Ms": {
+    "value": 0.5,
+    "source": "plan.md §6 ADR-1 exit criterion: 'p95 serialization > 25% of the 2 ms budget on the 60-shape reference screen reopens this ADR' — 25% of NFR-3's 2 ms budget = 0.5 ms. Reported as a SEPARATE line item from traversal per ADR-1's own requirement ('the benchmark reports serialization separately so the trigger is observable')."
+  },
+  "serializationRatioOfTraversalBudget": {
+    "value": 0.25,
+    "source": "plan.md §6 ADR-1 exit criterion, expressed as the ratio directly (serializationP95Ms / traversalP95Ms must stay < this value)."
+  },
+  "droppedFramesPerScroll": {
+    "value": 0,
+    "source": "spec.md NFR-1: tier-1 sustains 60 fps / tier-2 sustains 120 Hz; fails if fps drops below target for more than 5% of sampled frames during the CI 50-cell scroll benchmark. Expressed here as the frame-drop-count tolerance for that same scroll."
+  },
+  "webEntryGzipBytes": {
+    "value": 8192,
+    "source": "spec.md NFR-6 (REVISED 2026-08-27 from 5 kB → 8 kB by maintainer decision, after the first real measurement showed 7566 B and the original 5 kB was never validated against an implementation). Identical to test/packaging/web-bundle.test.ts's NFR6_BUDGET_BYTES — both must be changed together or they will silently diverge."
+  },
+  "maxRegressionRatio": {
+    "value": 1.5,
+    "source": "NOT spec-sourced — this session's own choice for the same-CI-job baseline-vs-candidate ratio gate (tasks.md 9.1: 'same-CI-job baseline-vs-candidate RATIO comparison'). spec.md/plan.md specify absolute budgets only; plan.md §7 says only 'measuring baseline and candidate in the same job on the same runner and comparing the ratio' without pinning a numeric threshold. 1.5x (50% slower than baseline) is a deliberately loose noise-tolerant gate for a CI runner with unknown headroom — a maintainer with real CI variance data should tighten this."
+  },
+  "nativeHeapGrowthBytesRecycleStress": {
+    "value": 12582912,
+    "source": "Promoted from examples/bare-rn's PaintGateListInstrumentedTest.kt MAX_NATIVE_HEAP_GROWTH_BYTES (12 MiB), task 6.4. See that file's own doc comment for the honest caveat: a two-point Debug.getNativeHeapAllocatedSize() sample on an ART-managed heap is not authoritative leak detection — it catches a monotonic unbounded climb, not a slow leak. Task 9.3 promotes this constant to a shared budget so the library test and any future CI wiring cannot silently diverge."
+  }
+}

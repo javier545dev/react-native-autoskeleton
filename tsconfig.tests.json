@@ -3,6 +3,6 @@
   "compilerOptions": {
     "lib": ["ESNext", "DOM", "DOM.Iterable"]
   },
-  "include": ["test/web", "test/ssr", "playwright.config.ts", "cli"],
+  "include": ["test/web", "test/ssr", "playwright.config.ts", "cli", "benchmarks"],
   "exclude": ["node_modules", "lib"]
 }

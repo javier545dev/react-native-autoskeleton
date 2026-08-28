@@ -13,6 +13,9 @@ yarn-error.log
 # test/packaging/global-setup.ts shared pack+extract scratch output (never committed)
 .pack-tmp/
 
+# benchmarks/run.ts output — machine-specific, regenerated per run/CI job
+benchmarks/results/*.json
+
 # Xcode
 build/
 *.pbxuser
@@ -70,6 +73,7 @@ dist/
 
 # bob build output
 lib/
+dist-cli/
 
 # packaging artifacts
 .tarball/

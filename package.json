@@ -27,11 +27,22 @@
       "types": "./lib/typescript/module/src/index.ssr.d.ts",
       "default": "./lib/module/index.ssr.js"
     },
+    "./cli": {
+      "default": {
+        "types": "./cli/index.ts",
+        "default": "./dist-cli/index.js"
+      }
+    },
     "./package.json": "./package.json"
+  },
+  "bin": {
+    "autoskeleton-capture": "./dist-cli/capture.js"
   },
   "files": [
     "src",
     "lib",
+    "cli",
+    "dist-cli",
     "android",
     "ios",
     "cpp",
@@ -49,16 +60,22 @@
     "!**/*.test.js.map",
     "!**/*.test.d.ts",
     "!**/*.test.d.ts.map",
+    "!**/*.test.ts",
     "!**/__fixtures__",
     "!**/__mocks__",
     "!**/.*"
   ],
   "scripts": {
-    "prepare": "bob build",
+    "build:cli": "node scripts/build-cli.mjs",
+    "prepare": "bob build && npm run build:cli",
     "typecheck": "tsc && tsc -p tsconfig.tests.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:web": "playwright test",
+    "bench": "vitest run -c vitest.bench.config.ts",
+    "bench:run": "tsx benchmarks/run.ts",
+    "bench:check": "tsx benchmarks/check-budgets.ts",
+    "bench:compare": "tsx benchmarks/compare-cli.ts",
     "pack:tarball": "npm pack --pack-destination ./.tarball",
     "clean": "del-cli android/build ios/build lib .tarball"
   },
@@ -82,8 +99,11 @@
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
   },
-  "devDependencies": {
+  "dependencies": {
     "@playwright/test": "^1.55.0",
+    "esbuild": "^0.28.0"
+  },
+  "devDependencies": {
     "@react-native/babel-preset": "0.85.0",
     "@tailwindcss/cli": "^4.3.3",
     "@types/react": "^19.2.0",
@@ -95,6 +115,7 @@
     "react-native": "0.85.0",
     "react-native-builder-bob": "^0.43.0",
     "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.12",
     "typescript": "^5.9.3",
     "uniwind": "^1.11.0",
     "vite": "^7.3.6",
