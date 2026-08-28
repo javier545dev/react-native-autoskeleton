@@ -31,6 +31,21 @@ import { buildSsrCssBundle } from './media-bundle';
 import type { AutoSkeletonSSRManifest, AutoSkeletonSSRManifestEntry, CaptureReport } from './manifest';
 import { SSR_MANIFEST_VERSION } from './manifest';
 import { resolveCaptureUrl, resolveOutputFile } from './route-safety';
+// Task 9.5 packaging fix: `browser-runtime.ts` is never IMPORTED at runtime
+// (`bundle.ts` resolves it as a raw file path for esbuild, at runtime, via
+// `__dirname` — see that file's header) but its `declare global { interface
+// Window { __autoskeletonCapture__ } }` augmentation is what makes the
+// `window.__autoskeletonCapture__.captureRoot(...)` call inside
+// `page.evaluate` below typecheck at all. In THIS repo, `tsconfig.tests.json`
+// papers over the gap by including the whole `cli/` directory as program
+// roots regardless of import chains. A real external consumer typechecking
+// only `import { runCapture } from 'autoskeleton/cli'` has no such
+// repo-wide include and got a genuine `Property '__autoskeletonCapture__'
+// does not exist` error — caught by actually typechecking from a fresh
+// `npm install`'d consumer, not assumed. This `import type {}` is erased at
+// runtime (zero behavior change) and pulls the ambient augmentation into
+// every consumer's program.
+import type {} from './browser-runtime';
 
 export const DEFAULT_CAPTURE_ROOT_SELECTOR = '#autoskeleton-capture-root';
 export const DEFAULT_NAVIGATION_TIMEOUT_MS = 15_000;

@@ -1,0 +1,180 @@
+name: CI benchmark suite (REQ-OBS-CI-1 / NFR-1..8)
+
+# tasks.md 9.1 / 9.3 — spec.md REQ-OBS-CI-1: "A reproducible CI benchmark
+# suite MUST measure traversal time for 30-shape and 60-shape reference
+# screens, JSI serialization cost, and shimmer frame drops while scrolling a
+# 50-cell list, and MUST fail the pipeline on budget regression."
+#
+# HONEST SCOPE NOTE (apply-progress report has the full account): this
+# workflow file is AUTHORED to express the complete intended benchmark job
+# set. It has NOT been executed by a real GitHub Actions runner in this
+# session — there is no CI runner available in this environment. What HAS
+# been genuinely run, locally, against this exact machine as one pinned
+# image, and is reflected in the job steps below:
+#   - `bench-core-and-web` (Node + Playwright): run for real, passing.
+#   - `bench-android-traversal` (Robolectric/host-JVM): run for real via
+#     `./gradlew :autoskeleton:testDebugUnitTest`, passing (109/109, +2 from
+#     baseline). Host-JVM timing is a regression proxy, not an authoritative
+#     on-device number — see AutoskeletonTraversalPerfTest.kt's own doc
+#     comment.
+#   - `bench-android-frame-drops` (instrumented, real emulator): authored and
+#     attempted against a live local emulator this session — see the
+#     apply-progress report for the exact outcome (pass, or the honest
+#     failure account if it did not complete cleanly).
+#   - `bench-ios-traversal`: AUTHORED ONLY. This environment has one booted
+#     iOS Simulator but no XCTest target wiring this session had time to
+#     build/run for perf specifically (`ios/Tests/` currently covers
+#     correctness, not timing) — real work, explicitly not done here.
+#
+# The baseline-vs-candidate RATIO job (`bench-ratio-gate`) requires two git
+# refs checked out in the same job — this is standard, well-understood CI
+# machinery, but was not exercised against two real commits in this session
+# (no CI runner to exercise it against). `benchmarks/lib/compare.ts`'s own
+# regression MATH is unit-tested and was also proven end-to-end locally with
+# two hand-fed results files (see the apply-progress report) — what remains
+# unexecuted is specifically "did this correctly gate two real git commits
+# inside a real Actions run", not the comparison logic itself.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  # "pinned-image absolute assertion" — meaningful on a single runner image,
+  # no second checkout needed.
+  bench-core-and-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Run benchmark suite (writes benchmarks/results/candidate.json)
+        run: npm run bench:run -- --out benchmarks/results/candidate.json
+      - name: Assert absolute budgets (benchmarks/budgets.json)
+        run: npm run bench:check -- benchmarks/results/candidate.json
+      - name: Run the self-contained absolute-assertion Vitest suite too (belt & suspenders — same measurement, asserted via `expect()`)
+        run: npm run bench
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results-core-web
+          path: benchmarks/results/candidate.json
+          retention-days: 30
+
+  # Same-CI-job baseline-vs-candidate RATIO comparison (plan.md §7:
+  # "measuring baseline and candidate in the same job on the same runner and
+  # comparing the ratio"). AUTHORED, not exercised against two real commits
+  # in this session.
+  bench-ratio-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+
+      - name: Determine baseline ref (merge-base with main, or previous commit on push)
+        id: baseline
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "ref=$(git merge-base origin/main HEAD)" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=HEAD~1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run benchmarks against the CANDIDATE (current HEAD)
+        run: npm run bench:run -- --out benchmarks/results/candidate.json
+
+      - name: Check out the BASELINE ref into a sibling worktree
+        run: git worktree add /tmp/baseline "${{ steps.baseline.outputs.ref }}"
+
+      - name: Run benchmarks against the BASELINE (same job, same runner)
+        working-directory: /tmp/baseline
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run bench:run -- --out "${{ github.workspace }}/benchmarks/results/baseline.json"
+
+      - name: Compare candidate vs baseline (ratio gate)
+        run: npm run bench:compare -- benchmarks/results/baseline.json benchmarks/results/candidate.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results-ratio
+          path: benchmarks/results/*.json
+          retention-days: 30
+
+  # REQ-OBS-CI-1's native traversal line item, Android half. Robolectric
+  # (host-JVM) — no emulator required, so this genuinely runs on a plain
+  # `ubuntu-latest` runner. See AutoskeletonTraversalPerfTest.kt for the
+  # honest host-JVM-vs-real-device caveat.
+  bench-android-traversal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+      - run: npm ci
+      - run: mkdir -p .tarball && npm pack --pack-destination ./.tarball
+      - run: npm install "autoskeleton@file:$(pwd)/.tarball/$(ls .tarball)"
+        working-directory: examples/bare-rn
+      - name: Android unit tests (Robolectric), including AutoskeletonTraversalPerfTest
+        run: ./gradlew :autoskeleton:testDebugUnitTest
+        working-directory: examples/bare-rn/android
+
+  # REQ-OBS-CI-1's "shimmer frame drops while scrolling a 50-cell list" —
+  # genuinely needs a live emulator (real Choreographer vsync sampling), so
+  # this job needs `reactivecircus/android-emulator-runner` or equivalent.
+  # Task 9.3's promoted memory-leak recycling-stress test also runs here,
+  # since both need the same live-emulator + booted-app fixture.
+  bench-android-frame-drops-and-memory:
+    runs-on: macos-latest # android-emulator-runner needs HAXM/hypervisor, macos-latest ships one
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+      - run: npm ci
+      - run: mkdir -p .tarball && npm pack --pack-destination ./.tarball
+      - run: npm install "autoskeleton@file:$(pwd)/.tarball/$(ls .tarball)"
+        working-directory: examples/bare-rn
+      - name: Start Metro
+        run: npx react-native start --port 8081 &
+        working-directory: examples/bare-rn
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          working-directory: examples/bare-rn/android
+          script: |
+            adb reverse tcp:8081 tcp:8081
+            ./gradlew :app:connectedDebugAndroidTest \
+              -Pandroid.testInstrumentationRunnerArguments.class=com.autoskeletonbarern.PaintGateListFrameDropsInstrumentedTest,com.autoskeletonbarern.PaintGateListInstrumentedTest
+
+  # AUTHORED ONLY — see this file's own header comment. iOS traversal timing
+  # needs a dedicated XCTest perf target this session did not build.
+  bench-ios-traversal:
+    if: false # not yet implemented — flip this on once ios/Tests gains a timing target
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "TODO(9.1 follow-up): add an XCTest perf target measuring AutoskeletonSensor.measure() at 30/60 shapes on a booted iOS Simulator, mirroring AutoskeletonTraversalPerfTest.kt."

@@ -38,6 +38,12 @@
     "examples",
     "test/web",
     "test/ssr",
-    "playwright.config.ts"
+    "playwright.config.ts",
+    // Task 9.1: benchmarks/ imports test/web/helpers/* (the ambient
+    // `window.Autoskeleton` typing lives only in tsconfig.tests.json's
+    // scope, alongside test/web itself) and launches a real Playwright
+    // browser — same "test/dev tooling, not shipped" category as test/web,
+    // so it is typechecked there instead. See tsconfig.tests.json.
+    "benchmarks"
   ]
 }

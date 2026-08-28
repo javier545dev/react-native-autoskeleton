@@ -25,6 +25,13 @@ export default defineConfig({
       'test/packaging/**/*.test.ts',
       'test/native/**/*.test.ts',
       'cli/**/*.test.ts',
+      // Task 9.1: pure/fast benchmark-support logic (percentiles,
+      // regression-ratio comparison, budget loading, the absolute-budget
+      // gate) lives in the default suite. The actual timing benchmarks (real
+      // wall-clock measurement + Playwright + a real Vite build) are
+      // intentionally NOT here — see `vitest.bench.config.ts`. The `.bench.`
+      // infix is what keeps the two mutually exclusive (excluded below).
+      'benchmarks/**/*.test.ts',
     ],
     exclude: [
       'node_modules/**',
@@ -33,6 +40,7 @@ export default defineConfig({
       'test/web/**',
       'test/ssr/**',
       'test/fixtures/**',
+      'benchmarks/**/*.bench.test.ts',
     ],
     passWithNoTests: false,
     coverage: {
