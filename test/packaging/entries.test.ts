@@ -32,13 +32,19 @@ let extractDir: string;
 let packageDir: string;
 
 beforeAll(() => {
-  // `npm pack` runs the `prepare` lifecycle script (bob build) itself, so this
-  // exercises the real publishable artifact, not the source tree. `bob build`
-  // writes its own progress logs to stdout, which corrupts `npm pack --json`'s
-  // stdout — so instead of parsing JSON, just look at what landed in the
-  // dedicated pack-destination directory (only ever one tarball).
+  // `lib/` is already fresh — Vitest's `globalSetup`
+  // (`test/packaging/global-setup.ts`) runs `bob build` exactly once, before
+  // any test file starts. `--ignore-scripts` stops `npm pack` from re-running
+  // the `prepare` lifecycle script (which would otherwise rebuild `lib/` a
+  // second, redundant time here); this exercises the real publishable
+  // artifact packed from what global setup already built, not the source
+  // tree directly. `bob build`'s progress logs used to corrupt `npm pack
+  // --json`'s stdout when both ran together — with `--ignore-scripts` there
+  // are no such logs at all, but this still avoids parsing JSON and just
+  // looks at what landed in the dedicated pack-destination directory (only
+  // ever one tarball).
   const tmpPackDir = mkdtempSync(path.join(tmpdir(), 'autoskeleton-pack-'));
-  execFileSync('npm', ['pack', '--pack-destination', tmpPackDir], {
+  execFileSync('npm', ['pack', '--ignore-scripts', '--pack-destination', tmpPackDir], {
     cwd: repoRoot,
     encoding: 'utf8',
   });

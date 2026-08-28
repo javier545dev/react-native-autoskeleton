@@ -1,0 +1,21 @@
+{
+  "class": "container",
+  "frame": { "x": 0, "y": 0, "w": 300, "h": 300 },
+  "nativeID": "root",
+  "children": [
+    {
+      "class": "scroll",
+      "frame": { "x": 0, "y": 0, "w": 300, "h": 300 },
+      "contentOffset": { "x": 0, "y": 50 },
+      "contentSize": { "x": 300, "y": 500 },
+      "nativeID": "scroller",
+      "children": [
+        {
+          "class": "text",
+          "frame": { "x": 10, "y": 80, "w": 100, "h": 30 },
+          "nativeID": "leaf-text"
+        }
+      ]
+    }
+  ]
+}

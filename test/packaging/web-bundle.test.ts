@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -38,11 +37,11 @@ let outDir: string;
 let bundlePath: string;
 
 beforeAll(async () => {
-  // Rebuild `lib/` from current `src/` so this measures today's code, not a
-  // stale artifact left over from an earlier `npm pack` run elsewhere in the
-  // suite.
-  execFileSync('npx', ['bob', 'build'], { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' });
-
+  // `lib/` is rebuilt from current `src/` exactly once, in Vitest's
+  // `globalSetup` (see `test/packaging/global-setup.ts`), strictly before this
+  // file's `beforeAll` runs — NOT here. Running `bob build` again in this
+  // file's own `beforeAll` would re-race with `entries.test.ts`'s `npm pack`,
+  // which is the exact structural hazard `global-setup.ts` exists to close.
   const entry = path.join(repoRoot, 'lib/module/index.web.js');
   outDir = mkdtempSync(path.join(tmpdir(), 'autoskeleton-web-bundle-'));
 

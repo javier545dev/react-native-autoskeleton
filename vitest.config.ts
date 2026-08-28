@@ -9,6 +9,13 @@ import { defineConfig } from 'vitest/config';
 // anything that reads layout. Those directories run under Playwright (0.3) instead.
 export default defineConfig({
   test: {
+    // Runs `bob build` exactly ONCE, in a single process, before any test file
+    // (and therefore any worker) starts — fixes a structural race where
+    // `test/packaging/entries.test.ts` and `test/packaging/web-bundle.test.ts`
+    // each independently rebuilt `lib/` in their own `beforeAll` and could
+    // observe each other's concurrent rebuild under default file parallelism.
+    // See `test/packaging/global-setup.ts` for the full explanation.
+    globalSetup: ['./test/packaging/global-setup.ts'],
     // Explicit 'node' environment: no DOM shim of any kind, including jsdom.
     // A DOM-shaped API appearing here would be a smoke test that always passes
     // against nothing — exactly the jsdom trap plan.md §7.3 warns about.

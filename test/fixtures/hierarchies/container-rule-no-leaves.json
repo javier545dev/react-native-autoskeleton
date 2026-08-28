@@ -1,0 +1,14 @@
+{
+  "class": "container",
+  "frame": { "x": 0, "y": 0, "w": 200, "h": 100 },
+  "backgroundColor": "#00FF00",
+  "cornerRadius": 8,
+  "nativeID": "container-no-leaf",
+  "children": [
+    {
+      "class": "container",
+      "frame": { "x": 20, "y": 20, "w": 50, "h": 20 },
+      "nativeID": "empty-wrapper"
+    }
+  ]
+}
