@@ -293,6 +293,39 @@ function useColdMeasurement(
   }, [active, cacheKey]);
 }
 
+/** Withholds the skeleton until `delayMs` has elapsed since this loading
+ *  cycle started, so a load that resolves almost immediately never shows a
+ *  skeleton at all. Closes a real gap found this session: `delay` was
+ *  declared in `AutoSkeletonProps` (and documented as doing exactly this)
+ *  but never read anywhere in this file — a prop that is accepted and
+ *  silently ignored is worse than a missing one. `delayMs <= 0` (the
+ *  default/omitted case) elapses immediately, so every existing consumer
+ *  that never set `delay` keeps today's exact behavior. Mirrors
+ *  `native/AutoSkeleton.tsx`'s identically-named hook so the two platforms
+ *  agree on semantics. */
+function useSkeletonDelayGate(delayMs: number, cycleId: number): boolean {
+  const [state, setState] = useState<{ cycleId: number; elapsed: boolean }>(() => ({
+    cycleId,
+    elapsed: delayMs <= 0,
+  }));
+  if (state.cycleId !== cycleId) {
+    setState({ cycleId, elapsed: delayMs <= 0 });
+  }
+
+  useEffect(() => {
+    if (delayMs <= 0) {
+      return;
+    }
+    const handle = setTimeout(() => {
+      setState((prev) => (prev.cycleId === cycleId ? { cycleId, elapsed: true } : prev));
+    }, delayMs);
+    return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cycleId, delayMs]);
+
+  return state.cycleId === cycleId ? state.elapsed : delayMs <= 0;
+}
+
 /** Calls `requestHandoff()` the render after `isLoading` transitions from
  *  true to false, and assembles/fires `onMetrics` exactly once when the
  *  controller settles (REQ-OBS-METRICS-1). This is genuine synchronization
@@ -429,7 +462,8 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
     () => controller.phase,
     () => controller.phase,
   );
-  const showSkeleton = !skeletonSuppressed && phase !== 'content';
+  const delayElapsed = useSkeletonDelayGate(props.delay ?? 0, cycleId);
+  const showSkeleton = !skeletonSuppressed && phase !== 'content' && delayElapsed;
 
   const widthBucket = useViewportWidthBucket();
   const direction = currentDirection();

@@ -82,8 +82,18 @@
     "vitest": "^3.2.4"
   },
   "peerDependencies": {
+    "@shopify/react-native-skia": "*",
     "react": "*",
-    "react-native": "*"
+    "react-native": "*",
+    "react-native-reanimated": "*"
+  },
+  "peerDependenciesMeta": {
+    "@shopify/react-native-skia": {
+      "optional": true
+    },
+    "react-native-reanimated": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">= 22.11.0"
