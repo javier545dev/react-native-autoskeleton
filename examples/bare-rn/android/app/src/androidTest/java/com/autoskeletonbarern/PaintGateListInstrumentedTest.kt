@@ -139,9 +139,19 @@ class PaintGateListInstrumentedTest {
         return requireNotNull(bitmap) { "PixelCopy reported SUCCESS but produced no bitmap" }
     }
 
-    private fun centerPixel(bitmap: Bitmap, bounds: Rect): Int {
+    /** Samples near the TOP of [bounds] rather than its exact vertical
+     *  center. Real, on-device-found flakiness class: EVERY fixture shape
+     *  in this file (a single card row, and multi-row `SkeletonList`/
+     *  `SkeletonListFooter` containers) is TWO blocks stacked with a gap —
+     *  the exact vertical center reliably lands in that transparent gap
+     *  (sampled #FFFFFF — background white, neither the skeleton ramp nor
+     *  any real content colour), producing a failure or a silently-vacuous
+     *  pass unrelated to the thing under test. Sampling near the top
+     *  lands reliably on the FIRST block (the text bar / text colour)
+     *  instead. */
+    private fun topQuarterPixel(bitmap: Bitmap, bounds: Rect): Int {
         val x = ((bounds.left + bounds.right) / 2).coerceIn(0, bitmap.width - 1)
-        val y = ((bounds.top + bounds.bottom) / 2).coerceIn(0, bitmap.height - 1)
+        val y = (bounds.top + (bounds.height() * 0.25).toInt()).coerceIn(0, bitmap.height - 1)
         return bitmap.getPixel(x, y)
     }
 
@@ -197,10 +207,12 @@ class PaintGateListInstrumentedTest {
     /**
      * REQ-LIST-CELL-1 / ADR-13's HARD RULE, the direct on-device proof:
      * with ~26 loading cells (2 of every 3 of 40 rows) all binding to the
-     * SAME unseen `itemType` on first mount, the real traversal count —
-     * read from the app's own dev-only `templateTraversalCounter`,
-     * rendered into an accessible node — settles at EXACTLY 1, never once
-     * per bind. This is the genuine "traversal-call counter stays flat"
+     * SAME unseen `itemType` on first mount, PLUS the standalone
+     * `SkeletonList` header block's own distinct `itemType`, the real
+     * traversal count — read from the app's own dev-only
+     * `templateTraversalCounter`, rendered into an accessible node —
+     * settles at EXACTLY 2 (one per distinct itemType), never once per
+     * bind. This is the genuine "traversal-call counter stays flat"
      * assertion, exercised against the real running app end to end, not a
      * formatter in isolation.
      */
@@ -217,17 +229,19 @@ class PaintGateListInstrumentedTest {
         val counterText = readTraversalCounterText()
         assertTrue(
             "Expected the real on-screen traversal counter to read exactly " +
-                "'traversalCount:1' after mounting ~26 concurrently-loading cells for the " +
-                "same unseen itemType, but it read '$counterText' — ADR-13's zero-traversal-" +
-                "on-bind rule requires the deferred template measurement to run AT MOST ONCE, " +
+                "'traversalCount:2' (one for the main list's itemType, one for the standalone " +
+                "SkeletonList header's own itemType) after mounting ~26 concurrently-loading " +
+                "cells, but it read '$counterText' — ADR-13's zero-traversal-on-bind rule " +
+                "requires the deferred template measurement to run AT MOST ONCE per itemType, " +
                 "ever, regardless of how many cells bind concurrently.",
-            counterText == "traversalCount:1",
+            counterText == "traversalCount:2",
         )
 
         // Scroll through the whole list and back — REQ-LIST-CELL-1's
-        // "subsequent binds of a known itemType use zero traversal" case.
-        // Rebinding many more cells via recycling must NOT move the
-        // counter at all.
+        // "subsequent binds of a known itemType use zero traversal" case,
+        // and REQ-LIST-PAGE-1's "footer uses cache, no re-traversal" case
+        // (the footer is now reachable). Rebinding many more cells via
+        // recycling must NOT move the counter at all.
         scrollDown(6)
         scrollUp(6)
         device.waitForIdle()
@@ -235,11 +249,73 @@ class PaintGateListInstrumentedTest {
 
         val counterAfterScroll = readTraversalCounterText()
         assertTrue(
-            "Expected the traversal counter to stay EXACTLY at 'traversalCount:1' after " +
-                "scrolling through the list (many more cells rebinding via recycling), but it " +
-                "read '$counterAfterScroll' — a change here means a bind triggered a real " +
-                "traversal instead of a synchronous cache lookup.",
-            counterAfterScroll == "traversalCount:1",
+            "Expected the traversal counter to stay EXACTLY at 'traversalCount:2' after " +
+                "scrolling through the list (many more cells rebinding via recycling, plus the " +
+                "SkeletonListFooter reaching cache), but it read '$counterAfterScroll' — a " +
+                "change here means a bind triggered a real traversal instead of a synchronous " +
+                "cache lookup.",
+            counterAfterScroll == "traversalCount:2",
+        )
+        scenario.close()
+    }
+
+    /**
+     * REQ-LIST-EMPTY-1/2 (task 6.1) and REQ-LIST-PAGE-1 (task 6.2), each
+     * exercised through its own dedicated UI element rather than only
+     * through `SkeletonCell` (which the test above already covers):
+     * `SkeletonList` (the standalone header block, own itemType) must
+     * genuinely paint skeleton content — not a blank/crashed region — and
+     * `SkeletonListFooter` (sharing the main list's ALREADY-cached
+     * itemType) must likewise paint real skeleton content once scrolled
+     * into view, without needing its own template measurement (proven by
+     * the traversal-counter assertions in the test above staying at
+     * exactly 2 even after the footer becomes visible).
+     */
+    @RequiresApi(Build.VERSION_CODES.O)
+    @Test
+    fun skeletonListHeaderAndSkeletonListFooterBothPaintRealSkeletonContent() {
+        val scenario = launchAndOpenListScreen()
+        Thread.sleep(1_500)
+
+        val headerBounds = run {
+            val header = device.findObject(By.desc("paint-gate-list-header-block"))
+            assertTrue("FIXTURE FAILURE: could not locate the SkeletonList header block", header != null)
+            header!!.visibleBounds
+        }
+        val headerBitmap = screenshotBitmap(scenario)
+        val headerPixel = topQuarterPixel(headerBitmap, headerBounds)
+        assertTrue(
+            "Expected the SkeletonList header block to paint shimmer colours " +
+                "(${hex(SKELETON_BASE_COLOR)}..${hex(SKELETON_HIGHLIGHT_COLOR)}) at its own " +
+                "itemType's first-ever measurement, but the sampled pixel ${hex(headerPixel)} " +
+                "falls outside the ramp — REQ-LIST-EMPTY-1/2 requires N synthetic rows to " +
+                "actually render.",
+            colorInRamp(headerPixel, SKELETON_BASE_COLOR, SKELETON_HIGHLIGHT_COLOR),
+        )
+
+        // Scroll until the footer (shares the main list's itemType, cache
+        // already warm) is reachable.
+        var footer = device.findObject(By.desc("paint-gate-list-footer-block"))
+        var attempts = 0
+        while (footer == null && attempts < 15) {
+            scrollDown(1)
+            footer = device.findObject(By.desc("paint-gate-list-footer-block"))
+            attempts += 1
+        }
+        assertTrue("FIXTURE FAILURE: SkeletonListFooter never became reachable by scrolling", footer != null)
+        device.waitForIdle()
+        Thread.sleep(300)
+
+        val footerBounds = footer!!.visibleBounds
+        val footerBitmap = screenshotBitmap(scenario)
+        val footerPixel = topQuarterPixel(footerBitmap, footerBounds)
+        assertTrue(
+            "Expected the SkeletonListFooter to paint shimmer colours " +
+                "(${hex(SKELETON_BASE_COLOR)}..${hex(SKELETON_HIGHLIGHT_COLOR)}) resolved purely " +
+                "from the main list's already-warm cache, but the sampled pixel " +
+                "${hex(footerPixel)} falls outside the ramp — REQ-LIST-PAGE-1 requires the " +
+                "footer to render real skeleton rows from cache.",
+            colorInRamp(footerPixel, SKELETON_BASE_COLOR, SKELETON_HIGHLIGHT_COLOR),
         )
         scenario.close()
     }
@@ -274,7 +350,7 @@ class PaintGateListInstrumentedTest {
         val realCards = visibleRealCards()
         assertTrue("FIXTURE FAILURE: no real (loaded) cards visible after recycling", realCards.isNotEmpty())
         for (card in realCards) {
-            val pixel = centerPixel(bitmap, card.visibleBounds)
+            val pixel = topQuarterPixel(bitmap, card.visibleBounds)
             assertFalse(
                 "Expected real content at ${card.contentDescription} to show its own colour " +
                     "after ${RECYCLE_CYCLES} recycle cycles, but the sampled pixel " +
@@ -288,7 +364,7 @@ class PaintGateListInstrumentedTest {
         val skeletonCards = visibleSkeletonCards()
         assertTrue("FIXTURE FAILURE: no skeleton (loading) cards visible after recycling", skeletonCards.isNotEmpty())
         for (card in skeletonCards) {
-            val pixel = centerPixel(bitmap, card.visibleBounds)
+            val pixel = topQuarterPixel(bitmap, card.visibleBounds)
             assertFalse(
                 "Expected a skeleton at ${card.contentDescription} to show shimmer colours after " +
                     "${RECYCLE_CYCLES} recycle cycles, but the sampled pixel ${hex(pixel)} matches " +
@@ -325,7 +401,7 @@ class PaintGateListInstrumentedTest {
             skeletonCards.size >= 2,
         )
 
-        val samples = skeletonCards.map { centerPixel(bitmap, it.visibleBounds) }
+        val samples = skeletonCards.map { topQuarterPixel(bitmap, it.visibleBounds) }
         val reference = samples.first()
         for ((index, pixel) in samples.withIndex()) {
             assertTrue(

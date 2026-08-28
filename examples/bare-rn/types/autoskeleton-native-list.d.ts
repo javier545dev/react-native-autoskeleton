@@ -52,4 +52,25 @@ declare module 'autoskeleton' {
     reset(): void;
   }
   export const templateTraversalCounter: TraversalCounter;
+
+  export interface SkeletonListProps {
+    readonly itemType: string;
+    readonly estimatedCount: number;
+    readonly skeletonKey?: string;
+    readonly renderTemplate?: () => ReactNode;
+    readonly animation?: AnimationKind;
+    readonly reducedMotion?: boolean;
+    readonly rowSpacing?: number;
+  }
+  export const SkeletonList: ComponentType<SkeletonListProps>;
+
+  export interface SkeletonListFooterProps {
+    readonly itemType: string;
+    readonly estimatedCount: number;
+    readonly skeletonKey?: string;
+    readonly animation?: AnimationKind;
+    readonly reducedMotion?: boolean;
+    readonly rowSpacing?: number;
+  }
+  export const SkeletonListFooter: ComponentType<SkeletonListFooterProps>;
 }

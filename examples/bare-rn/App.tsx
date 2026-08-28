@@ -28,7 +28,7 @@ import {
   SafeAreaProvider,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
-import { AutoSkeleton, SkeletonCell, templateTraversalCounter } from 'autoskeleton';
+import { AutoSkeleton, SkeletonCell, SkeletonList, SkeletonListFooter, templateTraversalCounter } from 'autoskeleton';
 
 /** Exported so the fixture and any future test/tooling share one source of
  *  truth for the deterministic colors the paint gate asserts against. */
@@ -59,6 +59,10 @@ export const PAINT_GATE_FIXTURE = {
 export const PAINT_GATE_LIST_FIXTURE = {
   itemType: 'paint-gate-list-card',
   skeletonKey: 'paint-gate-list-card',
+  // task 6.1: a DISTINCT itemType so `SkeletonList` (below the traversal
+  // counter, above the FlashList) exercises its own independent
+  // first-ever template measurement.
+  headerItemType: 'paint-gate-list-header-card',
   rowHeight: 96,
   itemCount: 40,
   labels: {
@@ -68,6 +72,14 @@ export const PAINT_GATE_LIST_FIXTURE = {
     realCardPrefix: 'paint-gate-list-real-',
     skeletonCardPrefix: 'paint-gate-list-skeleton-',
     accent: 'paint-gate-list-accent',
+    // task 6.1 (REQ-LIST-EMPTY-1/2): a distinct itemType so `SkeletonList`
+    // exercises its OWN first-ever template measurement, independent of
+    // the per-cell itemType `SkeletonCell` rows below already warm.
+    headerListRowPrefix: 'paint-gate-list-header-row-',
+    // task 6.2 (REQ-LIST-PAGE-1): shares `itemType`/`skeletonKey` with the
+    // per-cell rows above — by the time the footer mounts, that itemType
+    // is already cached, so the footer must resolve purely from cache.
+    footerRowPrefix: 'paint-gate-list-footer-row-',
   },
   colors: {
     text: '#101010',
@@ -218,10 +230,35 @@ function PaintGateListScreen() {
       >
         {`traversalCount:${traversalCount}`}
       </Text>
+      {/* task 6.1 (REQ-LIST-EMPTY-1/2): a standalone `SkeletonList`, own
+       *  itemType, own first-ever template measurement — independent of
+       *  the per-cell `SkeletonCell` rows in the FlashList below. */}
+      <View accessible accessibilityLabel="paint-gate-list-header-block" testID="paint-gate-list-header-block">
+        <SkeletonList
+          itemType={PAINT_GATE_LIST_FIXTURE.headerItemType}
+          skeletonKey={PAINT_GATE_LIST_FIXTURE.headerItemType}
+          estimatedCount={2}
+          renderTemplate={() => <ListCardContent accessibilityLabel="paint-gate-list-header-template" />}
+        />
+      </View>
       <FlashList
+        style={styles.flashList}
         data={LIST_DATA}
         renderItem={({ item }) => <ListRow item={item} />}
         keyExtractor={(item) => item.id}
+        ListFooterComponent={
+          // task 6.2 (REQ-LIST-PAGE-1): shares the MAIN list's itemType —
+          // by the time this mounts, that itemType is already cached by
+          // the FlashList's own `SkeletonCell` rows, so the footer must
+          // resolve purely from cache, with zero additional traversal.
+          <View accessible accessibilityLabel="paint-gate-list-footer-block" testID="paint-gate-list-footer-block">
+            <SkeletonListFooter
+              itemType={PAINT_GATE_LIST_FIXTURE.itemType}
+              skeletonKey={PAINT_GATE_LIST_FIXTURE.skeletonKey}
+              estimatedCount={2}
+            />
+          </View>
+        }
       />
     </View>
   );
@@ -266,6 +303,9 @@ function AppContent({
 }
 
 const styles = StyleSheet.create({
+  flashList: {
+    flex: 1,
+  },
   container: {
     flex: 1,
     backgroundColor: '#ffffff',
