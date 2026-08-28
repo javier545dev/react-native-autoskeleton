@@ -62,18 +62,54 @@ enum SyntheticHierarchyBuilder {
         let rotationDegrees: CGFloat?
     }
 
-    /// Repo-root-relative path resolution. Works because the pod is consumed via a
-    /// symlinked `:path` dependency (see `examples/bare-rn/ios/Podfile`), so this
-    /// compiled test binary runs against the real repo checkout on the Simulator
-    /// host filesystem — the Simulator process has ordinary access to the host Mac's
-    /// filesystem, unlike a real device. Real-device fixture loading would need
-    /// bundled test resources instead; out of scope here (this suite only targets
-    /// the Simulator, per tasks.md's `xcodebuild test` runtime harness).
+    /// Walks up from this source file's compile-time location (`#filePath`) until
+    /// it finds the shared `test/fixtures/hierarchies` directory. Mirrors
+    /// `android/src/test/java/com/autoskeleton/SyntheticHierarchyBuilder.kt`'s
+    /// `repoRoot` exactly, for the same reason: `test/` is deliberately excluded
+    /// from `package.json#files` (fixtures are test data, never meant to ship to
+    /// consumers), so a tarball-installed pod at `node_modules/autoskeleton` does
+    /// NOT contain `test/fixtures/hierarchies` — only the real monorepo checkout
+    /// does. A prior version assumed a fixed 3-levels-up offset from `#filePath`,
+    /// which only resolved correctly when the pod was consumed via a symlinked
+    /// `:path` dependency (`node_modules/autoskeleton` -> the repo root itself);
+    /// under the ADR-14-compliant tarball install (`node_modules/autoskeleton` is
+    /// a real, separate directory copied from `npm pack` output), that fixed
+    /// offset lands on `node_modules/autoskeleton/test/...`, which never exists —
+    /// exactly the "file not found" failure this fixes.
+    ///
+    /// `#filePath` reflects wherever the compiler actually read this source from
+    /// (the tarball-installed copy under `node_modules/autoskeleton/ios/Tests/`
+    /// when built via `pod 'Autoskeleton', :path => '../node_modules/autoskeleton'`
+    /// — CocoaPods `:path` dependencies compile files in place, never copying
+    /// them), so walking up from there reaches the real repo root through
+    /// `node_modules/autoskeleton` -> `node_modules` -> `examples/bare-rn` ->
+    /// `examples` -> the monorepo root, because `examples/bare-rn` is itself
+    /// nested inside this monorepo. A real external consumer never runs this
+    /// maintainer-only test suite outside the monorepo, so that nesting
+    /// assumption is safe — the same assumption Android's harness already
+    /// documents and relies on. The Simulator process has ordinary access to the
+    /// host Mac's filesystem, unlike a real device; real-device fixture loading
+    /// would need bundled test resources instead, out of scope here (this suite
+    /// only targets the Simulator, per tasks.md's `xcodebuild test` runtime
+    /// harness).
     static var packageRoot: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent() // SyntheticHierarchyBuilder.swift -> ios/Tests/
-            .deletingLastPathComponent() // ios/Tests/ -> ios/
-            .deletingLastPathComponent() // ios/ -> repo root
+        var dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        while true {
+            let candidate = dir.appendingPathComponent("test/fixtures/hierarchies")
+            var isDirectory: ObjCBool = false
+            let exists = FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDirectory)
+            if exists, isDirectory.boolValue {
+                return dir
+            }
+            let parent = dir.deletingLastPathComponent()
+            guard parent.path != dir.path else {
+                fatalError(
+                    "could not locate repo root containing test/fixtures/hierarchies from " +
+                        URL(fileURLWithPath: #filePath).path
+                )
+            }
+            dir = parent
+        }
     }
 
     static var fixturesDirectory: URL {
