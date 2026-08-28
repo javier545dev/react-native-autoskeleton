@@ -133,6 +133,11 @@
     },
     "android": {
       "javaPackageName": "com.autoskeleton"
+    },
+    "ios": {
+      "componentProvider": {
+        "AutoskeletonOverlayView": "AutoskeletonOverlayView"
+      }
     }
   },
   "create-react-native-library": {

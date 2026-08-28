@@ -60,6 +60,28 @@ final class PaintGateUITests: XCTestCase {
     private static let colorTolerance = 16
 
     private static let mountTimeout: TimeInterval = 20
+    // Task 5.8 (tasks.md Phase 5, task 5.7 follow-up): before the iOS
+    // `AutoskeletonOverlayView` existed, `waitForMount()`'s single
+    // `paint-gate-image` existence check was sufficient — there was no
+    // overlay to race against, so the gate was deterministically RED for
+    // the right reason regardless of sampling timing. Now that a real
+    // overlay exists, it mounts on a LATER React render pass than the
+    // content children: content mounts unconditionally on the FIRST pass,
+    // while `<AutoSkeleton>`'s overlay only appears once its async native
+    // `getShapes` round-trip resolves and `showSkeleton && snapshot` become
+    // true (`src/native/AutoSkeleton.tsx`). Sampling exactly once right
+    // after `waitForMount()` returns races that round-trip — confirmed
+    // empirically this session: a single-shot sample flipped between
+    // passing and failing across otherwise-identical runs (4/4 consecutive
+    // failures once the JS/native bridge round-trip legitimately started
+    // taking slightly longer than the single sample's implicit zero-wait).
+    // `pollUntilPixel` below polls for up to this timeout instead of
+    // sampling once, exactly the same "wait for the real condition, don't
+    // guess a sleep duration" discipline `waitForMount` itself already
+    // uses — never a widened colour tolerance, which would be the wrong
+    // kind of fix.
+    private static let overlaySettleTimeout: TimeInterval = 5
+    private static let pollInterval: TimeInterval = 0.1
     // ADR-16 defaults (`core/handoff.ts`): handoffTimeoutMs=250,
     // handoffFadeMs=120. Waiting past both, plus slack, before sampling
     // post-toggle pixels is real production timing, not an arbitrary sleep.
@@ -149,6 +171,34 @@ final class PaintGateUITests: XCTestCase {
         abs(a.r - b.r) <= tolerance && abs(a.g - b.g) <= tolerance && abs(a.b - b.b) <= tolerance
     }
 
+    /// Polls `frame`'s center pixel every `pollInterval` for up to
+    /// `overlaySettleTimeout`, returning as soon as `predicate` is
+    /// satisfied — never on the first sample, mirroring how `waitForMount`
+    /// waits for a real condition instead of a fixed sleep. Returns the
+    /// LAST sampled pixel (not `nil`) on timeout, so the caller's own
+    /// assertion message still reports the real final color rather than a
+    /// generic timeout error — the color mismatch remains the actual
+    /// reported failure, exactly like a one-shot sample would show.
+    private func pollUntilPixel(
+        frame: @autoclosure () -> CGRect,
+        satisfying predicate: (RGB) -> Bool
+    ) -> RGB? {
+        let deadline = Date().addingTimeInterval(Self.overlaySettleTimeout)
+        var lastPixel: RGB?
+        repeat {
+            let image = screenshotImage()
+            guard let pixel = centerPixelColor(image, frame: frame()) else {
+                return lastPixel
+            }
+            lastPixel = pixel
+            if predicate(pixel) {
+                return pixel
+            }
+            Thread.sleep(forTimeInterval: Self.pollInterval)
+        } while Date() < deadline
+        return lastPixel
+    }
+
     /// True when every channel of `pixel` falls within the color RAMP
     /// spanning `from`..`to` (inclusive of both ends, in either order),
     /// inflated by `tolerance` at each end — the identical semantic fix
@@ -180,8 +230,9 @@ final class PaintGateUITests: XCTestCase {
     func testSkeletonPaintsOverDetectedShapes() {
         waitForMount()
         let frame = element(Self.labelImage).frame
-        let image = screenshotImage()
-        guard let pixel = centerPixelColor(image, frame: frame) else {
+        guard let pixel = pollUntilPixel(frame: frame, satisfying: { pixel in
+            self.colorInRamp(pixel, from: Self.skeletonBaseColor, to: Self.skeletonHighlightColor)
+        }) else {
             XCTFail("FIXTURE FAILURE: could not sample a pixel from the screenshot at \(frame)")
             return
         }
@@ -199,8 +250,9 @@ final class PaintGateUITests: XCTestCase {
     func testRealContentHiddenWhileLoading() {
         waitForMount()
         let frame = element(Self.labelImage).frame
-        let image = screenshotImage()
-        guard let pixel = centerPixelColor(image, frame: frame) else {
+        guard let pixel = pollUntilPixel(frame: frame, satisfying: { pixel in
+            !self.colorsClose(pixel, Self.contentImageColor)
+        }) else {
             XCTFail("FIXTURE FAILURE: could not sample a pixel from the screenshot at \(frame)")
             return
         }

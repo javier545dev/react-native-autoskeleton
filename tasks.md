@@ -747,6 +747,54 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       false` — Watchman cannot crawl this repo in the sandboxed session environment ("Operation
       not permitted"), crashing Metro on startup; the node-crawler fallback (already what Jest
       silently uses here) is unaffected functionally, just slower.
+- [x] **5.8** RED→GREEN the iOS `RCTViewComponentView` overlay subclass — the missing draw
+      surface `AutoskeletonOverlayHostComponent.tsx` resolves but which nothing implemented on
+      iOS, the actual root cause of the "Unimplemented component: `<AutoskeletonOverlayView>`"
+      placeholder 5.7's iOS gate proved was painting instead of a real skeleton.
+      `ios/AutoskeletonOverlayViewHost.swift` (new, unit tested by
+      `ios/Tests/AutoskeletonOverlayViewHostTests.swift`, 13 RED→GREEN cases: wire decode at full
+      fidelity with NO density scaling — iOS's wire is already points, unlike Android's — hex
+      color parsing with a safe fallback, mount/no-mount-on-cache-miss/no-mount-on-zero-size,
+      in-place update without restarting the shimmer phase, reduced-motion/`animation:"none"`
+      degradation, `speedMs` flowing through to the shared clock) hosts the EXISTING, already-
+      tested `AutoskeletonRendererTier1` (task 3.2) — no new drawing logic, only the wiring.
+      `ios/AutoskeletonOverlayView.h`/`.mm` (new) is the thin ObjC++ `RCTViewComponentView`
+      subclass Fabric mounts: `+componentDescriptorProvider` wires the codegen'd
+      `AutoskeletonOverlayViewComponentDescriptor`; `updateProps:oldProps:` and `layoutSubviews`
+      both call into the Swift host (props arrive before layout metrics on first mount, mirroring
+      why Android's own view re-runs `mountOrUpdate()` from `onSizeChanged`); `prepareForRecycle`
+      calls `destroy()`.
+      **Tests**: `PaintGate-UITests` 3/3 green, 3/3 consecutive full-suite runs. Real
+      `xcodebuild test -scheme Autoskeleton-Unit-Tests` 72/72 (was 59/59 + 13 new host tests), no
+      regression. **Observability**: N/A, hosting-only task — `debugOverlay` prop is accepted and
+      stored, not yet wired to a visible rung overlay (matches Android's own current state, not a
+      new gap). **Performance**: N/A, reuses the already-benchmarked tier-1 renderer unmodified.
+      Deps: 5.7, 3.2. Complexity: M. Example app: bare RN (iOS).
+      **Discovery mechanism, corrected mid-session**: the free-function `.mm`-crawl convention
+      (`Class<RCTComponentViewProtocol> <Name>Cls(void)`, the mechanism this task's brief
+      described) does NOT fire for this package — `parseiOSAnnotations` skips any library whose
+      `codegenConfig` has no `ios` key at all before the crawl fallback is ever reached, confirmed
+      empirically (added the free function, ran `pod install`, found no new entry in the
+      generated `RCTThirdPartyComponentsProvider.mm`). Fixed with the non-deprecated, explicit
+      `codegenConfig.ios.componentProvider` map in root `package.json` — the SAME mechanism
+      `react-native-safe-area-context` uses, verified by reading its own `package.json` directly.
+      **Second real defect found and fixed**: `AutoskeletonOverlayView.h` (subclassing
+      `RCTViewComponentView`, which transitively `#include`s the C++ standard header `<atomic>`
+      via RN's own `EventBeat.h`) broke the WHOLE Swift target's build the moment it was left
+      PUBLIC — CocoaPods folds public headers into the pod's auto-generated umbrella header, which
+      Xcode also compiles to build the synthesized Clang module Swift needs to see this pod's
+      ObjC/C++ surface, and that module compilation could not resolve `<atomic>` ("could not build
+      module 'Autoskeleton'"). Fixed by adding it to `Autoskeleton.podspec`'s
+      `private_header_files`, mirroring `Autoskeleton.h`'s existing (opposite-reasoned) entry.
+      **Third real defect found and fixed, in the TEST HARNESS, not production code**: with a real
+      overlay now mounting, `PaintGateUITests`'s original single-shot screenshot sample (taken
+      immediately after `waitForMount()`'s existence check) raced the overlay's own async mount —
+      content children mount on React's FIRST render pass, the overlay only mounts once the async
+      native `getShapes` round-trip resolves on a LATER pass. Confirmed empirically: 4/4
+      consecutive single-shot runs failed, showing the exact raw content color, not a color
+      partway through any animation phase. Fixed by polling each pixel for up to 5s
+      (`pollUntilPixel`) instead of sampling once — the same "wait for a real condition" discipline
+      `waitForMount` itself already used, never a widened color tolerance.
 
 ## Phase 6: Virtualized lists (all three sub-cases)
 
