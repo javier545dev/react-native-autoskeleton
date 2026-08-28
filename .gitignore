@@ -82,3 +82,4 @@ coverage/
 
 # Local agent skill-registry cache (machine-specific)
 .atl/
+.codegraph/
