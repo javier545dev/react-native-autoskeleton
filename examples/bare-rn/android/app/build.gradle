@@ -84,6 +84,10 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+        // Visual paint gate (see app/src/androidTest/.../PaintGateInstrumentedTest.kt):
+        // instrumented tests need their own runner, mirroring the library
+        // module's own androidTest setup (android/build.gradle).
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {
         debug {
@@ -116,4 +120,14 @@ dependencies {
     } else {
         implementation jscFlavor
     }
+
+    // Visual paint gate: real on-device instrumented test that launches the
+    // actual app, waits for the actual JS bundle to mount the actual
+    // `PaintGateScreen` (App.tsx), and rasterizes it with PixelCopy. Same
+    // group/artifact/version pattern already proven working by the library
+    // module's own androidTest harness (android/build.gradle).
+    androidTestImplementation "androidx.test.ext:junit:1.2.1"
+    androidTestImplementation "androidx.test:runner:1.6.2"
+    androidTestImplementation "androidx.test:core:1.6.1"
+    androidTestImplementation "androidx.test.uiautomator:uiautomator:2.3.0"
 }

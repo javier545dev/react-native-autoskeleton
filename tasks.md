@@ -501,6 +501,13 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
 > 199/199, playwright 36/36 (+2 delay-prop cases), Android unit 83/83 (was 73/73), Android
 > instrumented 7/7 (unchanged), iOS 55/55 (was 46/46), typecheck clean. See the apply-progress
 > Engram artifact for the full per-file breakdown.
+>
+> **Session status (2026-08-27, branch `feat/visual-paint-gate`, narrowed continuation)**: task
+> 5.7, the on-device visual paint gate, added and proven RED for the right reason on Android (see
+> 5.7 below). No other Phase 5 remediation was attempted this session by design. Harnesses:
+> vitest 199/199, playwright 36/36, typecheck clean, Android unit 83/83, Android library
+> instrumented 7/7 — all unchanged/still green. New: Android app instrumented (paint gate)
+> 1/3 green, 2/3 RED as intended. iOS 55/55 unchanged (no iOS gate built this session — see 5.7).
 
 - [x] **5.1** RED→GREEN Turbo Module TS spec `src/native/NativeAutoskeleton.ts`
       (`codegenConfig` in `package.json`) declaring sync `getShapes(cacheKey): Array<number>` per
@@ -577,6 +584,49 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       **Tests**: `test/packaging/entries.test.ts` fully GREEN (started RED in 0.6).
       **Observability**: N/A, packaging test. **Performance**: N/A. Deps: 5.5, 2.5. Complexity:
       S. Example app: none/unit-only.
+- [x] **5.7** RED, written FIRST per the RISK-5/0.6 precedent — the ON-DEVICE VISUAL PAINT GATE.
+      Narrowed continuation of Phase 5, not the rest of its remediation: `examples/bare-rn/App.tsx`
+      now renders a real `PaintGateScreen` fixture (known-color text/image/rounded-card content,
+      runtime `isLoading` toggle) wrapped in the real native `<AutoSkeleton>` from the published
+      package; `examples/bare-rn/android/app/src/androidTest/.../PaintGateInstrumentedTest.kt`
+      launches the real app, waits for the real JS bundle to mount it, rasterizes the real
+      on-screen frame with `PixelCopy.request(Window, ...)` (never `View.draw(Canvas)`), and
+      asserts real ARGB pixels at the fixture's real screen location (found via
+      `accessibilityLabel`, never guessed coordinates).
+      **THIS TEST IS DELIBERATELY RED AND MUST NEVER BE WEAKENED, SKIPPED, OR DELETED TO MAKE CI
+      GREEN.** It closes only when a real `AutoskeletonOverlayView` `ViewManager` is registered
+      (Android: `AutoskeletonPackage.createViewManagers`; iOS: an `RCTViewManager`) and actually
+      draws through the already-built `AutoskeletonRendererTier1.mount(surface:...)` — the exact
+      gap 5.5's session note documents as still open.
+      **Tests**: `PaintGateInstrumentedTest.skeletonPaintsOverDetectedShapes` and
+      `.realContentHiddenWhileLoading` fail today for the right reason — real pixel mismatch
+      (`#0000FF` sampled where `#e2e2e2` was expected), not a build error, missing fixture, bad
+      selector, or unregistered-component error; `.realContentVisibleAndSkeletonGoneAfterLoadCompletes`
+      already passes (nothing currently hides the content either, which is the same root cause
+      from the other side) and stands as the regression guard once the other two go green. Not
+      satisfiable by `AutoskeletonDebugOverlay`: the fixture never passes `debugOverlay` to
+      `<AutoSkeleton>`, and every sampled pixel is the geometric center of a large fixture shape,
+      far from any outline stroke, so only a genuine solid-fill production draw pass can turn it
+      into `baseColor`. **iOS**: no equivalent runnable gate was added this session — the existing
+      `Autoskeleton-Unit-Tests` xcodebuild target is a CocoaPods `test_spec` unit-test bundle with
+      no app host (verified: no `TEST_HOST`/`requires_app_host` wiring), so it cannot boot the real
+      `AutoskeletonBareRn.app` process or its JS bundle; a genuine on-device iOS visual gate needs
+      a new XCUITest UI-test target (or a CocoaPods `app_host_name` pointed at the example app),
+      which is real new Xcode-project surgery against a workspace that already hit a reproducible
+      Swift/ObjC++ toolchain bug this phase — judged out of scope for this narrowed continuation
+      and flagged as follow-up rather than attempted half-built. **Observability**: N/A, gate test.
+      **Performance**: N/A. Deps: 5.5. Complexity: M. Example app: bare RN (Android only this
+      session).
+      **Incidental fixes discovered while building this fixture** (both real, both necessary for
+      any bare-rn Jest/Metro use of the published package, neither a design deviation):
+      `examples/bare-rn/jest.config.js` now sets `testEnvironmentOptions.customExportConditions:
+      ['react-native']` — Jest's default resolver applies no `react-native` `exports` condition,
+      so `require('autoskeleton')` was silently resolving to the WEB build (`lib/module/index.js`
+      → `index.web.js`) under Jest even though Metro (real device/simulator builds) always
+      resolves correctly; and `examples/bare-rn/metro.config.js` now sets `resolver.useWatchman:
+      false` — Watchman cannot crawl this repo in the sandboxed session environment ("Operation
+      not permitted"), crashing Metro on startup; the node-crawler fallback (already what Jest
+      silently uses here) is unaffected functionally, just slower.
 
 ## Phase 6: Virtualized lists (all three sub-cases)
 
