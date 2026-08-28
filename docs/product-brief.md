@@ -227,6 +227,8 @@ Deep traversal of the native view tree, post-Yoga-layout.
   its subtree has no detectable leaves.
 - `<AutoSkeleton.Ignore>` subtrees are excluded (channel: nativeID /
   accessibilityIdentifier on native, `data-*` on DOM).
+
+  **VERIFIED 2026-08-28 — the two platforms do NOT share one prop.** JS `nativeID` reaches Android's lookup tag (`view.setTag(R.id.view_tag_native_id)`) correctly, but on iOS it reaches an unrelated `.nativeId` property the sensor never reads. It is **`testID`** that reaches iOS's `accessibilityIdentifier`, which is what the iOS sensor actually reads. `<AutoSkeleton.Ignore>` therefore stamps BOTH props. Anyone building the typed-hint channel (R0 `radius`, `lines`) will hit this same asymmetry — setting only `nativeID` silently no-ops on iOS.
 - **Collapsed text** (data not loaded yet): if a text node measures less than one line,
   synthesize N line rects (height = font lineHeight; width 60–85% varying per line)
   using the `lines` hint when present.

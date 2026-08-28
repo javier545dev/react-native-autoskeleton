@@ -797,7 +797,9 @@ rounded" and refuse to say by how much.
 
 | Rung | Mechanism | API surface | `RadiusSource` |
 |---|---|---|---|
-| **R0** | Explicit typed `radius` hint prop, carried to native on the `nativeID` channel | Fully public, authoritative | `hint` |
+| **R0** | Explicit typed `radius` hint prop, carried to native on the `nativeID` channel **on Android** and the `testID` channel **on iOS** — see the note below; they are NOT the same prop | Fully public, authoritative | `hint` |
+
+> **VERIFIED 2026-08-28 — the two platforms do NOT share one prop.** JS `nativeID` reaches Android's lookup tag (`view.setTag(R.id.view_tag_native_id)`) correctly, but on iOS it reaches an unrelated `.nativeId` property the sensor never reads. It is **`testID`** that reaches iOS's `accessibilityIdentifier`, which is what the iOS sensor actually reads. `<AutoSkeleton.Ignore>` therefore stamps BOTH props. Anyone building the typed-hint channel (R0 `radius`, `lines`) will hit this same asymmetry — setting only `nativeID` silently no-ops on iOS.
 | **R1** | `drawable.getOutline(outline)` on a **copy**; if `outline.getRadius() >= 0`, use it | Public `Drawable`/`Outline` API. Resolves the *square* case and the non-RN-drawable case definitively, and distinguishes "verified square" from "rounded, unknown" | `outline` |
 | **R2** | **Raster corner probe** (see below), run in `Sensor.refine()` off the interaction frame | 100 % public API — `Drawable.getConstantState().newDrawable().mutate()`, `setBounds`, `draw(Canvas)` over a library-owned `Bitmap` | `raster-probe` |
 | **R3** | `SkeletonProvider.defaultRadius`, with `r = -1` recorded in the wire and `radius-unavailable` raised | Public | `default` |
