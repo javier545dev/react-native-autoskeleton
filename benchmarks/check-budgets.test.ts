@@ -35,13 +35,18 @@ describe('checkAbsoluteBudgets', () => {
     expect(violations.some((v) => v.metric === 'cacheLookupP95Ms')).toBe(true);
   });
 
-  it('flags webEntryGzipBytes at or above 8192 (NFR-6, revised)', () => {
-    const violations = checkAbsoluteBudgets({ ...passingResults(), webEntryGzipBytes: 8200 });
+  it('flags webEntryGzipBytes at or above 9216 (NFR-6, revised a second time to 9 kB)', () => {
+    const violations = checkAbsoluteBudgets({ ...passingResults(), webEntryGzipBytes: 9220 });
     expect(violations.some((v) => v.metric === 'webEntryGzipBytes')).toBe(true);
   });
 
   it('does NOT flag webEntryGzipBytes at 7950 (the last real measured value)', () => {
     const violations = checkAbsoluteBudgets({ ...passingResults(), webEntryGzipBytes: 7950 });
+    expect(violations.some((v) => v.metric === 'webEntryGzipBytes')).toBe(false);
+  });
+
+  it('does NOT flag webEntryGzipBytes at 8185 (the pre-revision-2 razor-thin measurement, now comfortably under 9216)', () => {
+    const violations = checkAbsoluteBudgets({ ...passingResults(), webEntryGzipBytes: 8185 });
     expect(violations.some((v) => v.metric === 'webEntryGzipBytes')).toBe(false);
   });
 

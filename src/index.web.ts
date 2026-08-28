@@ -19,7 +19,8 @@ export type { AutoSkeletonProps, SkeletonProviderProps } from './web/AutoSkeleto
 // plain named (non-attached) exports, pulling in `AutoSkeletonSSRHydrate`
 // (which imports `snapshot-io.ts`'s `importIntoShapeStore` — the exact
 // function task 2.5 already fought to keep off this hot path) pushed the
-// gate from 7674 B to ~8175 B of the 8192 B hard-failing budget. SSR is a
+// gate from 7674 B to ~8175 B of the then-8192 B hard-failing budget (since
+// revised to 9216 B — see spec.md NFR-6's second revision). SSR is a
 // genuinely opt-in, Next.js-specific feature (like `uniwind` theming) — it
 // lives at its own subpath, `autoskeleton/ssr` (`src/index.ssr.ts`), which
 // this entry's transitive graph never reaches.

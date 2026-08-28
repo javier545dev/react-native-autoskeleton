@@ -490,11 +490,16 @@ as done unless it emits its metrics and instrumentation.
   < 0.2 ms.
 - Zero per-frame allocations on the animation path (Android: shader created once;
   JSI: reusable Float32Array, subject to Nitro ownership rules).
-- Web bundle (entry `.`, no interops) **< 8 kB gzip** (REVISED from 5 kB on 2026-08-27 by
-  maintainer decision, after Phase 2 measured 7566 B; the 5 kB figure was never validated
-  against an implementation and the dominant cost is product code, not bloat). Hard failing
-  gate. No runtime dependencies beyond
-  React on web.
+- Web bundle (entry `.`, no interops) **< 9 kB gzip** — REVISED TWICE (see spec.md NFR-6 for
+  the full record; a third revision must argue against this precedent):
+  1. 5 kB → 8 kB (2026-08-27), after Phase 2 measured 7566 B; the 5 kB figure was never
+     validated against an implementation and the dominant cost was product code, not bloat.
+  2. 8 kB → 9 kB (2026-08-28), by maintainer decision, to buy back one typed-hint API across
+     web and native (`<AutoSkeleton.Hint>`) instead of shipping a per-platform API divergence
+     at 8185/8192 B — 7 bytes of headroom is not a passing gate, and the asymmetry is a worse
+     outcome than ~250 bytes for a library whose entire proposition is "one package, all
+     platforms".
+  Hard failing gate. No runtime dependencies beyond React on web.
 - Zero React re-renders caused by the animation.
 - No memory leaks under list recycling (verified by a stress test).
 

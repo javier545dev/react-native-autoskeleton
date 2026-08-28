@@ -35,17 +35,20 @@ export const HINT_ID_ATTRIBUTE = 'data-autoskeleton-id';
  *  id+registry (`core/hint-registry.ts`, built for the NATIVE bridge-
  *  crossing constraint — a `HintRegistry`'s functions cannot cross a Turbo
  *  Module boundary, so native genuinely needs a marshaled-array-to-Map
- *  registry) pushed the web entry gzip size over the 8192-byte budget when
- *  reused here. Web has NO equivalent bridge constraint — a consumer sets
- *  this attribute directly as a plain JSX prop on their own element
- *  (`<div data-autoskeleton-radius={20}>`, no wrapper component needed —
- *  see `src/web/AutoSkeleton.tsx`'s header comment for the full rationale,
- *  including why the web `lines` hint is NOT wired: its only consultation
- *  point, the `clientrects-empty` fallback below, is unreachable with
- *  non-degenerate geometry under this module's current `isTextLeaf` gate —
- *  a real, pre-existing structural gap flagged here, not silently
- *  papered over — so wiring it would have spent NFR-6's tight remaining
- *  budget on genuinely dead code). */
+ *  registry) pushed the web entry gzip size over the (then-8192-byte, now
+ *  9216-byte — see spec.md NFR-6's second revision) budget when reused here.
+ *  Web has NO equivalent bridge constraint — a consumer sets this attribute
+ *  directly as a plain JSX prop on their own element
+ *  (`<div data-autoskeleton-radius={20}>`), which is exactly what
+ *  `src/web/Hint.tsx`'s `<AutoSkeleton.Hint>` now stamps too (added after
+ *  the NFR-6 revision, registry-free, `cloneElement`-only) — see that
+ *  module's header comment for the full rationale, including why the web
+ *  `lines` hint is STILL NOT wired even after `<AutoSkeleton.Hint>` was
+ *  added: its only consultation point, the `clientrects-empty` fallback
+ *  below, is unreachable with non-degenerate geometry under this module's
+ *  current `isTextLeaf` gate — a real, pre-existing structural gap flagged
+ *  here, not silently papered over. Wiring it would require redesigning
+ *  `isTextLeaf` itself (real surgery), not just adding an attribute read. */
 export const HINT_RADIUS_ATTRIBUTE = 'data-autoskeleton-radius';
 
 function hintRadiusAttr(el: Element): number | undefined {

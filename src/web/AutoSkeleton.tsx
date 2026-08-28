@@ -42,6 +42,7 @@ import { WIRE_HEADER_SLOTS, WIRE_STRIDE } from '../core/types';
 import { createCssRenderer, createShimmerClock, DEFAULT_BASE_COLOR, DEFAULT_HIGHLIGHT_COLOR } from './css-renderer';
 import { createDomSensor, createEmptyHintRegistry, IGNORE_ATTRIBUTE } from './dom-sensor';
 import { DebugOverlay } from './DebugOverlay';
+import { Hint } from './Hint';
 
 // tasks.md 7.1 / REQ-THEME-1: these MUST be the exact same values
 // `css-renderer.ts`'s stylesheet uses as its `var(--skl-base, DEFAULT)`
@@ -133,23 +134,25 @@ function Ignore(props: { readonly children: ReactNode }): React.JSX.Element {
   );
 }
 
-// NO `<AutoSkeleton.Hint>` component on web — a deliberate, stated
-// cross-platform asymmetry, not an oversight. `src/native/Hint.tsx` exists
-// because RN offers no way to set an arbitrary `data-*`-shaped prop a
-// native sensor can read; native must stamp `nativeID`/`testID` (the two
-// channels `AutoskeletonSensor.kt`/`.swift` actually read) via
-// `cloneElement`. A plain DOM element has no such limitation — a web
-// consumer sets `data-autoskeleton-radius` DIRECTLY as an ordinary JSX prop
+// `<AutoSkeleton.Hint>` (2026-08-28, `src/web/Hint.tsx`) — web now has the
+// SAME typed-hint component native does, restoring one API for one concept
+// across platforms. This did NOT exist originally: a web consumer set
+// `data-autoskeleton-radius` DIRECTLY as an ordinary JSX prop
 // (`<div data-autoskeleton-radius={20}>`), which `dom-sensor.ts`'s
-// `hintRadiusAttr` already reads with zero additional producer-side code.
-// A wrapper component here would cost real bytes (`Children.only` +
-// `cloneElement` + the function itself) for a mechanism the platform does
-// not need at all — proven the hard way this session: attaching one pushed
-// the web entry from 7950 B to ~8360 B of NFR-6's 8192 B hard-failing gzip
-// budget. Removing it, not shrinking it further, is the fix (matches the
-// "move code out, don't raise the budget" precedent Phase 8 already set
-// for SSR). Only `radius` ships on web (see `HINT_RADIUS_ATTRIBUTE`'s doc
-// comment in `dom-sensor.ts` for why `lines` is not wired there today).
+// `hintRadiusAttr` still reads with zero producer-side code either way —
+// THAT channel is unchanged and still works for a consumer who already
+// wired it by hand. `Hint` is sugar over the exact same self-sufficient
+// attribute, not a replacement mechanism (see `src/web/Hint.tsx`'s header
+// comment for the full mechanism/rationale, including why `lines` is
+// deliberately NOT a prop here). This was previously omitted because
+// attaching an id+registry version of it (`core/hint-registry.ts`, the
+// mechanism native's bridge-crossing constraint requires) measured 8390 B
+// against NFR-6's then-8192 B budget. The maintainer's call: a per-platform
+// API divergence is a worse outcome than bytes for a library whose entire
+// proposition is "one package, all platforms" — NFR-6 was revised a SECOND
+// time (8 kB -> 9 kB, spec.md NFR-6) specifically to buy this back, and this
+// lighter registry-free `cloneElement`-only mechanism fits comfortably
+// inside the new budget.
 
 const sensor = createDomSensor();
 const renderer = createCssRenderer();
@@ -751,8 +754,7 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
 }
 
 AutoSkeleton.Ignore = Ignore;
-// No `AutoSkeleton.Hint` static property on web — see the header comment
-// above `const sensor = createDomSensor();` for why.
+AutoSkeleton.Hint = Hint;
 // tasks.md 8.3 / NFR-6 (task 2.5 precedent): `AutoSkeletonSSR`/
 // `AutoSkeletonSSRHydrate` are DELIBERATELY NOT attached here as
 // `AutoSkeleton.SSR`/`AutoSkeleton.SSRHydrate` static properties. Task 2.5
@@ -760,8 +762,9 @@ AutoSkeleton.Ignore = Ignore;
 // assigned onto an object every consumer imports — the same problem that
 // forced `ShapeStore.export()`/`.import()` off the hot-path class entirely.
 // Measured here: attaching them pushed the NFR-6 gzip gate from 7674 B to
-// 8187 B (of an 8192 B hard-failing budget) even though most consumers never
-// touch SSR. `AutoSkeletonSSR`/`AutoSkeletonSSRHydrate` are exported as
+// 8187 B (of the then-8192 B hard-failing budget, since revised to 9216 B —
+// see spec.md NFR-6) even though most consumers never touch SSR.
+// `AutoSkeletonSSR`/`AutoSkeletonSSRHydrate` are exported as
 // PLAIN NAMED exports from `index.web.ts` instead (import them directly:
 // `import { AutoSkeletonSSR } from 'autoskeleton'`) — a bundler CAN
 // tree-shake an unused named re-export from a side-effect-free barrel file,

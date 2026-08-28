@@ -702,14 +702,16 @@ test.describe('AutoSkeleton — debugOverlay (REQ-OBS-OVERLAY-1)', () => {
 });
 
 test.describe('AutoSkeleton — typed-hint channel (radius/lines, public API)', () => {
-  // Web has NO `<AutoSkeleton.Hint>` wrapper component (a stated,
-  // NFR-6-driven cross-platform asymmetry — see `src/web/AutoSkeleton.tsx`'s
-  // header comment above `const sensor = createDomSensor();`): a consumer
-  // sets `data-autoskeleton-radius`/`data-autoskeleton-lines` DIRECTLY as
-  // plain JSX props on their own real-content element. This proves the
-  // FULL real pipeline — a plain consumer attribute, through the real cold
-  // measurement, into `onMetrics`'s `radiusSourceHistogram` — the exact
-  // telemetry ADR-2 makes mandatory in every rung.
+  // `<AutoSkeleton.Hint>` (`src/web/Hint.tsx`, added 2026-08-28 after NFR-6's
+  // second revision, 8 kB -> 9 kB) is sugar over the SAME self-sufficient
+  // `data-autoskeleton-radius` attribute a consumer could already set by
+  // hand — both channels must keep working. This first test proves the raw
+  // hand-set attribute still works (the pre-existing, still-supported
+  // channel); the second test below proves the SAME pipeline through the
+  // new `<AutoSkeleton.Hint>` component itself. Both prove the FULL real
+  // pipeline — through the real cold measurement, into `onMetrics`'s
+  // `radiusSourceHistogram` — the exact telemetry ADR-2 makes mandatory in
+  // every rung.
   test('a plain data-autoskeleton-radius attribute reaches onMetrics.radiusSourceHistogram as "hint"', async ({
     page,
     mountReady,
@@ -762,6 +764,81 @@ test.describe('AutoSkeleton — typed-hint channel (radius/lines, public API)', 
               'data-autoskeleton-radius': 20,
               style: { width: 80, height: 80, background: '#00ff00', borderRadius: 4 },
             }),
+          ),
+        ),
+      );
+    });
+    await page.waitForTimeout(400);
+
+    const histogram = await page.evaluate(() => {
+      const metrics = (window as unknown as { __metrics: { radiusSourceHistogram?: Record<string, number> }[] })
+        .__metrics;
+      return metrics[0]?.radiusSourceHistogram;
+    });
+
+    expect(histogram?.hint).toBe(1);
+    expect(histogram?.measured ?? 0).toBe(0);
+  });
+
+  test('<AutoSkeleton.Hint id radius> reaches onMetrics.radiusSourceHistogram as "hint" (same pipeline, via the component)', async ({
+    page,
+    mountReady,
+  }) => {
+    await mountReady();
+    await page.evaluate(() => {
+      const { React, createRoot, AutoSkeleton, SkeletonProvider, MemoryShapeStore } = window.AutoskeletonComponent;
+      const store = new MemoryShapeStore();
+      const metrics: unknown[] = [];
+      (window as unknown as { __metrics: unknown[] }).__metrics = metrics;
+      (window as unknown as { __root: unknown; __els: unknown }).__root = createRoot(
+        document.getElementById('root')!,
+      );
+      (window as unknown as { __els: unknown }).__els = { React, AutoSkeleton, SkeletonProvider, store };
+      const { __root, __els } = window as unknown as { __root: any; __els: any };
+      const hintedChild = () =>
+        __els.React.createElement(
+          __els.AutoSkeleton.Hint,
+          { id: 'hint-component-target', radius: 20 },
+          __els.React.createElement('div', {
+            style: { width: 80, height: 80, background: '#00ff00', borderRadius: 4 },
+          }),
+        );
+      __root.render(
+        __els.React.createElement(
+          __els.SkeletonProvider,
+          { store: __els.store },
+          __els.React.createElement(
+            __els.AutoSkeleton,
+            { isLoading: true, skeletonKey: 'hint-component-e2e-screen', onMetrics: (m: unknown) => metrics.push(m) },
+            hintedChild(),
+          ),
+        ),
+      );
+    });
+    await settle(page);
+
+    // Same isLoading TRUE -> FALSE transition requirement as the raw-
+    // attribute test above.
+    await page.evaluate(() => {
+      const { __root, __els, __metrics } = window as unknown as { __root: any; __els: any; __metrics: unknown[] };
+      __root.render(
+        __els.React.createElement(
+          __els.SkeletonProvider,
+          { store: __els.store },
+          __els.React.createElement(
+            __els.AutoSkeleton,
+            {
+              isLoading: false,
+              skeletonKey: 'hint-component-e2e-screen',
+              onMetrics: (m: unknown) => __metrics.push(m),
+            },
+            __els.React.createElement(
+              __els.AutoSkeleton.Hint,
+              { id: 'hint-component-target', radius: 20 },
+              __els.React.createElement('div', {
+                style: { width: 80, height: 80, background: '#00ff00', borderRadius: 4 },
+              }),
+            ),
           ),
         ),
       );

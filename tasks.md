@@ -1575,6 +1575,103 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       discovery, applied here), 5.9 (confirmed the exact bridge gap this closes), Phase 9 (final
       regression baseline this built on). Complexity: L.
 
+- [x] **G.7** (2026-08-28, branch `feat/typed-hint-channel`, stacked on G.6) Two coupled changes,
+      maintainer decision: **NFR-6 revised a SECOND time (8 kB → 9 kB)**, and **web now has
+      `<AutoSkeleton.Hint>`**, closing the exact per-platform API asymmetry G.6 shipped as a
+      last resort.
+
+      **The decision, recorded so a third revision faces this precedent rather than a blank
+      page.** G.6's own honest framing — "8185 B / 8192 B gzip — razor-thin, 7 bytes of headroom"
+      — was the gate doing its job: it forced a real design decision (web ships with NO
+      `<AutoSkeleton.Hint>`, only a raw `data-autoskeleton-radius` attribute, while native gets
+      the full typed component) instead of letting the bundle grow silently. The maintainer's
+      judgment: that per-platform API divergence is a WORSE outcome than ~250 bytes, for a
+      library whose entire proposition is "one package, all platforms" — a user reading the docs
+      learned two mechanisms for one concept, and 7 bytes of headroom is not a passing gate, it is
+      one that fails on the very next commit. **NFR-6's full revision history is now recorded in
+      spec.md's NFR-6 row itself (the authoritative source)**: (1) 5 kB → 8 kB, 2026-08-27, first
+      real measurement replacing an unvalidated kickoff-prompt figure; (2) 8 kB → 9 kB,
+      2026-08-28, raised deliberately to buy back API symmetry, NOT because the gate was
+      inconvenient. **NFR-6 remains a HARD FAILING GATE** — a third revision needs to argue
+      against this precedent, not just raise the number again.
+
+      **Every location the budget number lived in, all updated together** (grepped for drift per
+      `budgets.json`'s own comment warning): `spec.md` NFR-6 row (authoritative) + Open Question 5
+      resolution note; `docs/product-brief.md` §12; `plan.md` §11 assumption 5; `docs/
+      image-pipeline.md`; `benchmarks/budgets.json`'s `webEntryGzipBytes` (8192 → 9216, source
+      comment records both revisions); `test/packaging/web-bundle.test.ts`'s `NFR6_BUDGET_BYTES`
+      (8 * 1024 → 9 * 1024); `benchmarks/check-budgets.test.ts` and `benchmarks/support/
+      budgets.test.ts`'s hard-coded expectations; code comments in `src/web/AutoSkeleton.tsx`,
+      `src/web/dom-sensor.ts`, `src/index.web.ts` that cited the 8192 B figure. `lib/**` `.d.ts`
+      copies were left alone — generated/gitignored, rebuilt from source.
+
+      **`<AutoSkeleton.Hint>` on web (`src/web/Hint.tsx`, new file)**: mirrors
+      `src/native/Hint.tsx`'s exact ergonomics — `React.Children.only` + `cloneElement`, hookless
+      (no `useId()`, so it stays directly callable/testable without a renderer, same reasoning as
+      native), `id` required and developer-supplied, layout-neutral (`cloneElement` on the
+      consumer's own element, no wrapper `<div>` — smaller AND avoids the extra DOM node web's
+      `Ignore` needs for an independent boolean marker). Deliberately NOT the id+registry
+      mechanism G.6 measured at 8390 B: no `core/hint-registry.ts` import at all. Stamps
+      `HINT_ID_ATTRIBUTE` (`data-autoskeleton-id`) always, and `HINT_RADIUS_ATTRIBUTE`
+      (`data-autoskeleton-radius`) when `radius` is given — the SAME self-sufficient attribute
+      channel `dom-sensor.ts` already read directly, unchanged. **A consumer who already set
+      `data-autoskeleton-radius` by hand keeps working unchanged** — `Hint` is sugar over the
+      existing channel, not a replacement for it (verified: `dom-sensor.spec.ts`'s pre-existing
+      raw-attribute radius-hint tests pass unmodified). Attached as `AutoSkeleton.Hint = Hint` in
+      `src/web/AutoSkeleton.tsx`, replacing the "NO `<AutoSkeleton.Hint>` on web" header comment
+      with the new rationale.
+
+      **`lines` is deliberately NOT a prop on web's `Hint`** — investigated, not assumed. Verified
+      by reading `dom-sensor.ts`'s `textLeafShapes` directly: `hints.linesFor()` is never called
+      anywhere in the traversal, and its one theoretical consultation point (the
+      `clientrects-empty` fallback, only reached when `Range.getClientRects()` returns zero rects)
+      requires geometry that is also degenerate under the current `isTextLeaf` gate — confirmed
+      unreachable for real non-degenerate content, matching G.6's own live Playwright probing
+      (`display:none`, zero-font-size, zero-width-overflow-hidden constructions, none produced
+      empty rects without also being degenerate). Adding a `lines` prop that stamps an attribute
+      nothing reads would be a silent no-op footgun — exactly the undocumented drift this revision
+      exists to avoid — so it was left out of the type signature entirely and documented explicitly
+      in three places: `src/web/Hint.tsx`'s header comment, `src/web/dom-sensor.ts`'s
+      `HINT_RADIUS_ATTRIBUTE` doc comment, and a new "Typed hints" section in
+      `docs/observability.md` with the full native-vs-web prop table. Making it reachable needs an
+      `isTextLeaf` redesign — real surgery, correctly out of scope here, tracked as an open item.
+
+      **iOS visual gate — G.6's own note was a misdiagnosis, corrected here.** G.6 reported the
+      on-device `PaintGateUITests` visual gate as "blocked by a pre-existing Xcode scheme
+      configuration issue". It was not blocked: G.6 ran `xcodebuild` against `-scheme
+      AutoskeletonBareRn`, which genuinely has no test bundles configured, but the visual gate
+      lives in a DIFFERENT scheme, `-scheme PaintGate-UITests`, which does. Run against the
+      correct scheme (maintainer-verified this session): **`PaintGateUITests` 4/4 TEST SUCCEEDED**,
+      and iOS unit **78/78** on a warm run. The prior "unverified-but-unmodified" framing in G.6
+      is retired — the gate is healthy and now positively re-confirmed, not merely un-broken.
+
+      **TDD Cycle Evidence.** `src/web/Hint.test.ts` (new, co-located per `src/web/css-renderer
+      .test.ts`'s precedent — `test/web/**` is Playwright-only, excluded from vitest's `include`):
+      RED against a nonexistent `./Hint` module (confirmed via `vitest run` failing at the global
+      setup's `bob build` type-check step, `TS2307: Cannot find module './Hint'`) → GREEN
+      (5/5) once `src/web/Hint.tsx` was written. `test/web/auto-skeleton.spec.ts` gained one new
+      Playwright case proving `<AutoSkeleton.Hint id radius>` reaches `onMetrics
+      .radiusSourceHistogram` as `"hint"` through the REAL component (not just the raw attribute)
+      — same isLoading true→false transition pattern the pre-existing raw-attribute test already
+      established.
+
+      **Full regression sweep, this session.** `npm run typecheck`: clean (root +
+      `tsconfig.tests.json`). `npx vitest run`: **372/372** (was 364, +8, verified by diffing the
+      full before/after test-name lists across a stashed baseline run, not estimated: 5
+      `src/web/Hint.test.ts`, 1 new `check-budgets.test.ts` boundary case at the new 9216
+      threshold, 2 auto-generated `src/lint/banned-css-properties.test.ts` per-file cases — that
+      suite iterates every `src/**/*.ts(x)` file, so adding `Hint.tsx` + `Hint.test.ts` added one
+      case each). `npx playwright test`: **54/54** (was 53, +1: the
+      `<AutoSkeleton.Hint>` component E2E case). **NFR-6: 8255 B / 9216 B gzip** — comfortably
+      under the revised budget (was 8185/8192 B before this session; the registry-free
+      `cloneElement`-only web `Hint` mechanism cost far less than the id+registry one G.6 measured
+      at 8390 B). Android/iOS untouched this session (no native source changed) — baselines stand:
+      Android unit 114/114, iOS unit 78/78 (re-verified on a warm run, see above), Android
+      on-device paint gate 5/5 + list gate 5/5, **iOS on-device `PaintGateUITests` visual gate
+      4/4** (re-verified against the correct scheme this session, see misdiagnosis correction
+      above). Deps: G.6 (built the channel this closes the API-symmetry gap on), Phase 9 (final
+      regression baseline G.6 built on). Complexity: M.
+
 ## Phase 8: SSR — build-time snapshot capture CLI + `@media`-bucketed CSS bundle
 
 > **Session status (2026-08-28, branch `feat/phase-8-ssr-capture`)**: 8.1–8.4 all complete and
