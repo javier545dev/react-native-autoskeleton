@@ -57,6 +57,7 @@ import { createHandoffController, type HandoffController } from '../core/handoff
 import { assembleMetrics } from '../core/metrics';
 import { shouldRunHandoffCycle } from '../core/refresh-gate';
 import { MemoryShapeStore } from '../core/snapshot';
+import { applyThemeOverride } from '../core/theme-override';
 import type { AnimationKind, OnMetrics, RendererKind, ShapeSnapshot } from '../core/types';
 import { nativeSensor } from './nativeSensorInstance';
 import { resolveAutoskeletonOverlayNativeComponent } from './renderer/AutoskeletonOverlayHostComponent';
@@ -143,6 +144,16 @@ export interface AutoSkeletonProps {
   readonly skeletonOnRefresh?: boolean;
   readonly onSuccessorPainted?: () => void;
   readonly expectsPlaceholder?: boolean;
+  /** tasks.md 7.2/7.3 (spec REQ-THEME-2): per-instance theme overrides,
+   *  layered on top of (never replacing) `SkeletonProvider`'s context theme
+   *  via `applyThemeOverride` (`core/theme-override.ts`). These are the
+   *  EXACT prop names the theming interops (`autoskeleton/uniwind`,
+   *  `autoskeleton/nativewind`) map a resolved `className`'s
+   *  `backgroundColor`/`color`/`borderRadius` onto — a plain consumer can
+   *  also set them directly without any interop at all. */
+  readonly shimmerBaseColor?: string;
+  readonly shimmerHighlightColor?: string;
+  readonly defaultRadius?: number;
   readonly children?: ReactNode;
 }
 
@@ -390,7 +401,15 @@ function useHandoffAndMetrics(
 
 export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   const ctx = useContext(SkeletonContext);
-  const theme = ctx.theme;
+  // tasks.md 7.2/7.3: per-instance overrides (plain props OR whatever a
+  // theming interop resolved from `className`) layer on top of the
+  // context theme — `applyThemeOverride` only touches fields that are
+  // actually defined, so an unconfigured consumer's theme is unchanged.
+  const theme = applyThemeOverride(ctx.theme, {
+    baseColor: props.shimmerBaseColor,
+    highlightColor: props.shimmerHighlightColor,
+    defaultRadius: props.defaultRadius,
+  });
   const reducedMotion = useReducedMotion();
   const requestedAnimation = props.animation ?? 'shimmer';
   const animation: AnimationKind = reducedMotion && requestedAnimation === 'shimmer' ? 'pulse' : requestedAnimation;

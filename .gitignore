@@ -10,6 +10,9 @@ yarn-error.log
 # test/web/helpers/tailwind.ts scratch compile output (never committed)
 .tailwind-tmp/
 
+# test/packaging/global-setup.ts shared pack+extract scratch output (never committed)
+.pack-tmp/
+
 # Xcode
 build/
 *.pbxuser

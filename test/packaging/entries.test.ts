@@ -1,8 +1,8 @@
-import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import { PACK_EXTRACT_DIR } from './global-setup';
+import { resolveExportsTarget, walkFiles, walkTransitiveSpecifiers } from './helpers/resolve';
 
 // Task 0.6 (tasks.md Phase 0) — the RISK-5 packaging detector, written FIRST per
 // plan.md's ordering (plan.md §9 RISK-5, ADR-3, ADR-14).
@@ -28,89 +28,24 @@ const packageJson = JSON.parse(
   peerDependencies?: Record<string, string>;
 };
 
-/**
- * G.4 gap closure (tasks.md) — a minimal simulation of Node's
- * PACKAGE_IMPORTS_EXPORTS_RESOLVE algorithm (which TypeScript's
- * exports-aware resolution mirrors), restricted to what this package's
- * `exports['.']` shape actually needs: nested condition objects with a
- * `types` sub-condition, and a `default` fallback at every level.
- *
- * Node/TypeScript check an object's OWN keys in the order they appear in the
- * JSON, and take the FIRST key that is either `"default"` or an active
- * condition — this is exactly why the pre-fix flat `exports['.'].types`
- * field broke platform-specific types: `"types"` was listed before
- * `"react-native"`/`"browser"`, so it matched and won regardless of which
- * platform condition was active.
- *
- * This is a structural simulation for a fast, deterministic unit test. The
- * real consumer proof (actually running `tsc` against the packed tarball
- * from `examples/bare-rn` and `examples/vite`) is documented in the apply
- * report and the repository README, not reproduced here.
- */
-function resolveExportsTarget(target: unknown, activeConditions: string[]): string | null {
-  if (typeof target === 'string') return target;
-  if (target && typeof target === 'object') {
-    for (const [key, value] of Object.entries(target as Record<string, unknown>)) {
-      if (key === 'default' || activeConditions.includes(key)) {
-        const resolved = resolveExportsTarget(value, activeConditions);
-        if (resolved !== null) return resolved;
-      }
-    }
-  }
-  return null;
-}
+// `resolveExportsTarget` (G.4 gap closure's exports-resolution simulator)
+// and `walkFiles`/`walkTransitiveSpecifiers` (below) now live in
+// `./helpers/resolve.ts`, shared with `test/packaging/interop-exports.test.ts`
+// (tasks.md 7.4) — see that module's doc comment for the full algorithm
+// rationale. This is a pure extraction; behavior is unchanged.
+//
+// tasks.md 7.4 CORRECTION: this file used to run its own `npm pack` in a
+// `beforeAll` here. That call raced with `interop-exports.test.ts` doing the
+// exact same thing concurrently (`--ignore-scripts` does NOT actually
+// suppress `npm pack`'s `prepare` script — see `global-setup.ts`'s corrected
+// doc comment for the empirical proof). The pack+extract step now runs
+// exactly ONCE, in `global-setup.ts`, and every packaging test file that
+// needs the published artifact reads that same already-extracted directory.
 
-let extractDir: string;
-let packageDir: string;
-
-beforeAll(() => {
-  // `lib/` is already fresh — Vitest's `globalSetup`
-  // (`test/packaging/global-setup.ts`) runs `bob build` exactly once, before
-  // any test file starts. `--ignore-scripts` stops `npm pack` from re-running
-  // the `prepare` lifecycle script (which would otherwise rebuild `lib/` a
-  // second, redundant time here); this exercises the real publishable
-  // artifact packed from what global setup already built, not the source
-  // tree directly. `bob build`'s progress logs used to corrupt `npm pack
-  // --json`'s stdout when both ran together — with `--ignore-scripts` there
-  // are no such logs at all, but this still avoids parsing JSON and just
-  // looks at what landed in the dedicated pack-destination directory (only
-  // ever one tarball).
-  const tmpPackDir = mkdtempSync(path.join(tmpdir(), 'autoskeleton-pack-'));
-  execFileSync('npm', ['pack', '--ignore-scripts', '--pack-destination', tmpPackDir], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-  });
-  const [filename] = readdirSync(tmpPackDir).filter((f) => f.endsWith('.tgz'));
-  if (!filename) {
-    throw new Error(`npm pack did not produce a .tgz file in ${tmpPackDir}`);
-  }
-  const tgzFile = path.join(tmpPackDir, filename);
-
-  extractDir = mkdtempSync(path.join(tmpdir(), 'autoskeleton-extract-'));
-  execFileSync('tar', ['-xzf', tgzFile, '-C', extractDir]);
-  packageDir = path.join(extractDir, 'package');
-}, 120_000);
-
-afterAll(() => {
-  if (extractDir) rmSync(extractDir, { recursive: true, force: true });
-});
+const packageDir = PACK_EXTRACT_DIR;
 
 function tarballPath(...segments: string[]): string {
   return path.join(packageDir, ...segments);
-}
-
-/** Recursively lists every file (not directory) under `dir`, as paths relative to `dir`. */
-function walkFiles(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const abs = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      out.push(...walkFiles(abs).map((f) => path.join(entry.name, f)));
-    } else {
-      out.push(entry.name);
-    }
-  }
-  return out;
 }
 
 describe('RISK-5 packaging detector (entries.test.ts) — RED until 5.6', () => {
@@ -260,52 +195,6 @@ describe('RISK-5 packaging detector (entries.test.ts) — RED until 5.6', () => 
     // walks every relative import reachable from the entry, across the whole
     // resolved file set, which is what "transitive" actually requires.
     const bannedSpecifiers = ['react-native', '@shopify/react-native-skia', 'react-native-reanimated'];
-
-    function collectSpecifiers(filePath: string): string[] {
-      const source = readFileSync(filePath, 'utf8');
-      const specifiers: string[] = [];
-      const importRe = /(?:require\(|from\s+)['"]([^'"]+)['"]/g;
-      let match: RegExpExecArray | null;
-      while ((match = importRe.exec(source))) {
-        specifiers.push(match[1]!);
-      }
-      return specifiers;
-    }
-
-    /** Resolves a relative specifier to a real file within `dir`, trying
-     *  every shape builder-bob's per-file transpile output uses: the
-     *  specifier as-is (it already includes `.js`, e.g. `./web/AutoSkeleton.
-     *  js`), `<path>.js`, and `<path>/index.js`. Returns `undefined` for a
-     *  bare (non-relative) specifier — those are exactly what the
-     *  banned-specifier check below inspects directly, without trying to
-     *  resolve them on disk. */
-    function resolveRelative(fromFile: string, specifier: string): string | undefined {
-      if (!specifier.startsWith('.')) {
-        return undefined;
-      }
-      const base = path.resolve(path.dirname(fromFile), specifier);
-      const candidates = [base, `${base}.js`, path.join(base, 'index.js')];
-      return candidates.find((c) => existsSync(c));
-    }
-
-    function walkTransitiveSpecifiers(entryFile: string): { allSpecifiers: Set<string>; visitedFiles: number } {
-      const visited = new Set<string>();
-      const allSpecifiers = new Set<string>();
-      const queue = [entryFile];
-      while (queue.length > 0) {
-        const file = queue.shift()!;
-        if (visited.has(file)) continue;
-        visited.add(file);
-        for (const specifier of collectSpecifiers(file)) {
-          allSpecifiers.add(specifier);
-          const resolved = resolveRelative(file, specifier);
-          if (resolved && !visited.has(resolved)) {
-            queue.push(resolved);
-          }
-        }
-      }
-      return { allSpecifiers, visitedFiles: visited.size };
-    }
 
     it('lib/module/index.web.js exists so its import graph can be inspected', () => {
       const entry = tarballPath('lib/module/index.web.js');
