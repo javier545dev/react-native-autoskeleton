@@ -1459,6 +1459,122 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       mechanism. Deps: 5.5 (native `AutoSkeleton`), 5.9 (confirmed the
       registry channel is bridge-unreachable). Complexity: M.
 
+- [x] **G.6** (2026-08-28, branch `feat/typed-hint-channel`) Built the general typed-hint channel
+      (`radius`/`lines`) end to end across web, iOS and Android — the last item G.5/Phase 9 both
+      explicitly flagged not built, RED→GREEN, strict TDD throughout.
+      **Marshaling shape, a deliberate deviation from the natural
+      `{ [nodeId]: {...} }` map suggestion, justified**: `NativeAutoskeleton.ts`'s
+      `AutoskeletonGetShapesConfig.hints` is `ReadonlyArray<{ nodeId, lines, radius }>` — a plain
+      required-field array of records, not an index-signature map. Verified directly against a
+      REAL regenerated `AutoskeletonSpec.h`/`.java` (`npx react-native-builder-bob build --target
+      codegen`, inspected before writing any bridge code): codegen has no `Record<string,T>`
+      support at all, but DOES generate a clean `facebook::react::LazyVector<AutoskeletonHintEntry>`
+      for an array-of-object field. Required scalar fields (not optional) with sentinels —
+      `lines: 0` / `radius: -1` mean "no override", mirroring the wire schema's own existing `r=-1`
+      "rounded, unknown" convention — were chosen over nullable fields because a codegen'd
+      array-of-object with OPTIONAL members is a materially less-travelled, unverified path; this
+      repo had no existing precedent for one.
+      **Public API, a stated cross-platform split, not an oversight**: native ships
+      `<AutoSkeleton.Hint id="..." lines={n} radius={r}>` (`src/native/Hint.tsx`), matching
+      `<AutoSkeleton.Ignore>`'s exact ergonomics — `React.Children.only` + `cloneElement`, hookless
+      so it stays directly unit-testable like `Ignore`'s own suite, stamping BOTH `nativeID` and
+      `testID` (the SAME iOS/Android asymmetry `Ignore`'s G.5 fix already discovered and flagged
+      for "whoever eventually builds the typed-hint channel" — verified still true, applied here).
+      `id` is a required, developer-supplied string (not `useId()`): an auto-generated id would
+      force `Hint` to become a hook-based component, breaking the hookless testability `Ignore`
+      established. Web has **NO** `<AutoSkeleton.Hint>` component at all — see the NFR-6 paragraph
+      below for why, and why that is the correct fix, not a shortcut.
+      **Producer mechanism, native**: `core/hint-registry.ts` (new, pure TS, Vitest-tested under
+      `src/core/hint-registry.test.ts`) is a module-level `Map` written synchronously in `Hint`'s
+      own render body (no `useEffect` — safe by construction: React fully renders a subtree,
+      including every `Hint` in it, before any consumer reads the registry; native's own read
+      happens a full `requestAnimationFrame` after `onLayout`, far later). `AutoSkeleton.tsx`
+      (native) takes a snapshot via `snapshotHintEntries()` at the same instant it resolves
+      `reactTag`, threads it through a new `NativeSensorTarget.hintEntries` field into
+      `sensor.ts`'s bridge marshaling (`toWireHintEntries`), which applies the sentinel encoding.
+      **Producer mechanism, web — NOT the same as native, a stated deviation**: web sets
+      `data-autoskeleton-radius` directly as a PLAIN JSX prop on the consumer's own element
+      (`<div data-autoskeleton-radius={20}>`) — no wrapper, no registry, no `core/hint-registry.ts`
+      import. `dom-sensor.ts`'s `hintRadiusAttr()` reads it back with a single `getAttribute` +
+      `Number()` parse. **Why this diverged from the id+registry design the id+registry channel
+      already had wired for `isIgnored` (`HINT_ID_ATTRIBUTE`)**: reusing that registry design for
+      `radius`/`lines` was the FIRST implementation this session, and it pushed the web entry from
+      7950 B to 8390 B against NFR-6's 8192 B hard-failing gzip budget (only ~240 B of headroom
+      existed going in). Removing `<AutoSkeleton.Hint>` (web) entirely and switching to a plain
+      self-sufficient attribute — mirroring `IGNORE_ATTRIBUTE`'s own precedent, and matching this
+      session's own "move code out, don't raise the budget" instruction (Phase 8's SSR-exclusion
+      precedent) — brought it to 8185 B, 7 bytes under budget. Web's `lines` hint was NOT wired:
+      its only consultation point (`textLeafShapes`'s `rects.length === 0` fallback) was proven
+      genuinely unreachable with non-degenerate real-browser geometry (multiple DOM constructions
+      tried live in Playwright — `display:none`, zero-font-size, zero-width containers — none
+      produced an empty `getClientRects()` list without also producing a zero-size, already-
+      degenerate frame) under `isTextLeaf`'s current non-empty-content gate; wiring dead code would
+      have spent budget that does not exist. Flagged here as a real, pre-existing structural gap,
+      not silently dropped — `isTextLeaf` would need to treat a hinted-but-currently-empty element
+      as a text leaf to make it reachable, a separate, larger design decision this session's byte
+      budget did not leave room for.
+      **iOS radius — decided to OVERRIDE, not just fall back**: unlike Android (no public radius
+      API at all — ADR-2's R0 is the PRIMARY mechanism there, brief §9c), iOS always resolves
+      `layer.cornerRadius` directly and never needed a hint. A registered `radius` hint now
+      OVERRIDES the measured value anyway (`AutoskeletonSensor.swift`'s `leafShapes`,
+      `radiusSource: .hint` when it fires) — a deliberate choice so ONE typed prop behaves
+      consistently everywhere instead of silently doing nothing on iOS, stated explicitly in both
+      the production doc comment and this entry, not a silent asymmetry.
+      **Bridge wiring, iOS specifics**: `AutoskeletonGetShapesConfig`/`AutoskeletonModuleBridge`
+      (Swift) gained a `hints: [AutoskeletonHintEntry]` field/param; `Autoskeleton.mm` decodes
+      `config.hints()`'s `LazyVector` into an `NSArray<NSDictionary>` (a Swift struct cannot be
+      `@objc` and cross the ObjC++/Swift boundary directly, so a dictionary array is the crossing
+      shape `AutoskeletonHintEntry.decode(_:)` consumes) and passes it through
+      `getShapesWithReactTag:...hints:resolveView:`. `AutoskeletonMapHintRegistry` (both platforms)
+      replaces `AutoskeletonEmptyHintRegistry` as the production default passed into
+      `computeWireArray`/`AutoskeletonModule`'s sensor options.
+      **On-device proof, the brief's hard requirement — Android radius hint visibly changes the
+      painted corner**: extended `PaintGateScreen` (`examples/bare-rn/App.tsx`) with two NEW
+      80x80dp SQUARE regions (no `borderRadius` style at all) in the same row: `hintedCard`
+      (`#FFD700`) wrapped in `<AutoSkeleton.Hint radius={40}>`, `unhintedCard` (`#FF1493`) with no
+      hint. New instrumented test `hintedRadiusChangesThePaintedCornerOnAndroid`
+      (`PaintGateInstrumentedTest.kt`) samples a pixel 3px in from each region's top-left CORNER
+      (not center, deliberately — a near-circular r=40 clip on an 80dp box excludes a
+      corner-adjacent pixel; a square clip does not) and asserts they DIFFER: the unhinted corner
+      is inside the real shimmer ramp, the hinted corner is NOT — run TWICE against the live
+      `Medium_Phone_API_36.1` emulator (Metro up, `adb reverse tcp:8081 tcp:8081`), both times
+      5/5 `PaintGateInstrumentedTest` green including this one. `PaintGateListInstrumentedTest`
+      re-run 5/5 for regression, unaffected.
+      **RED taken and confirmed for the right reason** at every layer before the fix: `src/core/
+      hint-registry.test.ts`/`test/native/hint.test.ts` against nonexistent modules (`Cannot find
+      module`); `test/native/sensor.test.ts`'s new marshaling assertions against the pre-change
+      `config` shape (missing `hints` key); `AutoskeletonModuleTest.kt`'s new hint-decoding/
+      end-to-end tests against `AutoskeletonEmptyHintRegistry` (wrong radius: `0`/`measured`
+      instead of the hinted value); `AutoskeletonModuleBridgeTests.swift`'s new radius-override
+      tests against the un-overridden `layer.cornerRadius` (12, not the hinted 20); Playwright's
+      `dom-sensor.spec.ts` radius-hint tests against the pre-change hardcoded
+      `createEmptyHintRegistry()` (measured, not hint); the on-device
+      `hintedRadiusChangesThePaintedCornerOnAndroid` test against the pre-fix `AutoskeletonModule`
+      wiring (both corners in the ramp, assertion failed the "must differ" half).
+      **radiusSourceHistogram, mandatory per ADR-2**: new Playwright E2E test in
+      `test/web/auto-skeleton.spec.ts` ("typed-hint channel... reaches onMetrics.
+      radiusSourceHistogram") proves a real `<AutoSkeleton>` mount with a plain
+      `data-autoskeleton-radius` attribute on real content reports `radiusSourceHistogram.hint: 1,
+      measured: 0` through the REAL `onMetrics` callback, not a hand-built metrics object — the
+      full producer-to-telemetry pipeline, not just the sensor layer in isolation.
+      **Tests**: vitest 364/364 (was 344, +20: `src/core/hint-registry.test.ts` 9,
+      `test/native/hint.test.ts` 6, `test/native/sensor.test.ts` marshaling cases, existing
+      `test/native/wire-bridge.test.ts` config updates). Playwright 53/53 (was 49, +4: 3 web radius
+      hint cases in `dom-sensor.spec.ts`, 1 `radiusSourceHistogram` E2E case). `npm run typecheck`
+      clean (root + `tsconfig.tests.json`). **NFR-6: 8185 B / 8192 B gzip — razor-thin, 7 bytes of
+      headroom, flagged honestly, not glossed over: the next change that touches the default web
+      entry at all will need its own budget accounting from the start, not an afterthought.**
+      Android unit 114/114 (was 109, +5). iOS unit 78/78 (was 76, +2). Android on-device paint gate
+      5/5 (`PaintGateInstrumentedTest`, was 4, +1 — the radius-corner gate above), re-run twice,
+      stable; `PaintGateListInstrumentedTest` 5/5 unchanged, re-run once for regression.
+      **Not re-run this session** (no `ios/` PAINT-GATE-SPECIFIC source touched beyond the radius
+      override + bridge wiring already covered by the iOS UNIT suite above): the iOS on-device
+      `PaintGateUITests` visual gate (prior baseline 4/4 stands unverified-but-unmodified — the
+      brief's emphasis and this session's remaining budget went to Android, where a hinted radius
+      is the PRIMARY mechanism, not an override). Deps: G.5 (native Ignore's iOS/Android asymmetry
+      discovery, applied here), 5.9 (confirmed the exact bridge gap this closes), Phase 9 (final
+      regression baseline this built on). Complexity: L.
+
 ## Phase 8: SSR — build-time snapshot capture CLI + `@media`-bucketed CSS bundle
 
 > **Session status (2026-08-28, branch `feat/phase-8-ssr-capture`)**: 8.1–8.4 all complete and

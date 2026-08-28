@@ -11,6 +11,23 @@ import com.facebook.react.uimanager.UIManagerHelper
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
+/** Plain-Kotlin mirror of one `AutoskeletonHintEntry`
+ *  (`src/native/NativeAutoskeleton.ts`) — the typed-hint channel's marshaled
+ *  DATA (never the `HintRegistry` functions themselves, which cannot cross
+ *  a Turbo Module boundary). `lines`/`radius` are already decoded from the
+ *  wire's `0`/`-1` "no override" sentinels back to `null` by
+ *  `ReadableArray.toHintEntries()` below, so `null` here always means
+ *  "genuinely no hint for this field", never a sentinel leaking through.
+ *  NOT `internal`: `AutoskeletonMapHintRegistry` (`AutoskeletonTypes.kt`) is
+ *  public and takes a `List<AutoskeletonHintEntry>` in its own public
+ *  constructor, so this type must be at least as visible (Kotlin forbids a
+ *  public API exposing an internal type). */
+data class AutoskeletonHintEntry(
+  val nodeId: String,
+  val lines: Int?,
+  val radius: Float?,
+)
+
 /** Plain-Kotlin mirror of `AutoskeletonGetShapesConfig`
  *  (`src/native/NativeAutoskeleton.ts`) — the codegen'd param arrives as a
  *  `ReadableMap` (verified against the ACTUAL generated
@@ -26,19 +43,44 @@ internal data class AutoskeletonGetShapesConfig(
   val budgetMs: Double,
   val maxShapes: Int,
   val collectDebugSidecars: Boolean,
+  /** Typed-hint channel. Defaults to empty so every EXISTING call site
+   *  (tests included) that predates this field stays valid — unlike the TS
+   *  wire type, this internal, already-decoded config class has no bridge
+   *  boundary to keep honest about "always present", so a default is safe
+   *  here. */
+  val hints: List<AutoskeletonHintEntry> = emptyList(),
 )
 
-/** All four fields are non-optional on the TS side (`sensor.ts` always
- *  builds a complete object from the caller's real `SensorOptions`), so a
- *  direct read is correct — a missing/mistyped key is a genuine contract
- *  violation, not a value this function should silently paper over. */
+/** The four scalar fields are non-optional on the TS side (`sensor.ts`
+ *  always builds a complete object from the caller's real
+ *  `SensorOptions`), so a direct read is correct — a missing/mistyped key
+ *  is a genuine contract violation, not a value this function should
+ *  silently paper over. `hints` defaults to empty when the key is absent
+ *  (an older JS bundle without this field, or a hand-built test map) rather
+ *  than throwing — a genuinely absent hints channel is not a contract
+ *  violation the way a missing scalar would be. */
 internal fun ReadableMap.toGetShapesConfig(): AutoskeletonGetShapesConfig =
   AutoskeletonGetShapesConfig(
     defaultRadius = getDouble("defaultRadius").toFloat(),
     budgetMs = getDouble("budgetMs"),
     maxShapes = getDouble("maxShapes").toInt(),
     collectDebugSidecars = getBoolean("collectDebugSidecars"),
+    hints = getArray("hints")?.toHintEntries() ?: emptyList(),
   )
+
+/** Decodes the wire's `lines: 0` / `radius: -1` "no override" sentinels
+ *  (`NativeAutoskeleton.ts`'s documented convention) back to `null`. */
+private fun ReadableArray.toHintEntries(): List<AutoskeletonHintEntry> =
+  (0 until size()).map { i ->
+    val entry = requireNotNull(getMap(i)) { "hints[$i] must be a map" }
+    val lines = entry.getDouble("lines").toInt()
+    val radius = entry.getDouble("radius").toFloat()
+    AutoskeletonHintEntry(
+      nodeId = requireNotNull(entry.getString("nodeId")) { "hints[$i].nodeId must be a string" },
+      lines = lines.takeIf { it != 0 },
+      radius = radius.takeIf { it != -1f },
+    )
+  }
 
 /** Package-visible seam (same DI pattern as `AutoskeletonTracing`/
  *  `AutoskeletonWarningEmitter`): resolves a `View` by React tag, or `null`
@@ -183,7 +225,7 @@ class AutoskeletonModule(
       val measured = sensor.measure(
         view,
         AutoskeletonSensorOptions.defaults.copy(
-          hints = AutoskeletonEmptyHintRegistry(),
+          hints = AutoskeletonMapHintRegistry(config.hints),
           radiusResolver = AutoskeletonPublicApiRadiusResolver(defaultRadius = config.defaultRadius),
           budgetMs = config.budgetMs,
           maxShapes = config.maxShapes,

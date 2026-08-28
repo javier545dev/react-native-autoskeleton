@@ -133,6 +133,24 @@ function Ignore(props: { readonly children: ReactNode }): React.JSX.Element {
   );
 }
 
+// NO `<AutoSkeleton.Hint>` component on web — a deliberate, stated
+// cross-platform asymmetry, not an oversight. `src/native/Hint.tsx` exists
+// because RN offers no way to set an arbitrary `data-*`-shaped prop a
+// native sensor can read; native must stamp `nativeID`/`testID` (the two
+// channels `AutoskeletonSensor.kt`/`.swift` actually read) via
+// `cloneElement`. A plain DOM element has no such limitation — a web
+// consumer sets `data-autoskeleton-radius` DIRECTLY as an ordinary JSX prop
+// (`<div data-autoskeleton-radius={20}>`), which `dom-sensor.ts`'s
+// `hintRadiusAttr` already reads with zero additional producer-side code.
+// A wrapper component here would cost real bytes (`Children.only` +
+// `cloneElement` + the function itself) for a mechanism the platform does
+// not need at all — proven the hard way this session: attaching one pushed
+// the web entry from 7950 B to ~8360 B of NFR-6's 8192 B hard-failing gzip
+// budget. Removing it, not shrinking it further, is the fix (matches the
+// "move code out, don't raise the budget" precedent Phase 8 already set
+// for SSR). Only `radius` ships on web (see `HINT_RADIUS_ATTRIBUTE`'s doc
+// comment in `dom-sensor.ts` for why `lines` is not wired there today).
+
 const sensor = createDomSensor();
 const renderer = createCssRenderer();
 const sharedClock = createShimmerClock();
@@ -277,6 +295,12 @@ function useColdMeasurement(
     }
     const result = sensor.measure(wrapper, {
       key: cacheKey as unknown as Parameters<typeof sensor.measure>[1]['key'],
+      // The typed-hint channel (radius/lines) is now self-sufficient
+      // attributes `dom-sensor.ts` reads directly off each element — no
+      // registry needed here at all (see `Hint`'s doc comment above).
+      // `isIgnored` (the one remaining registry-shaped consultation) is
+      // always `false` in production regardless, matching `Ignore`'s own
+      // self-sufficient marker channel.
       hints: createEmptyHintRegistry(),
       budgetMs,
       maxShapes,
@@ -727,6 +751,8 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
 }
 
 AutoSkeleton.Ignore = Ignore;
+// No `AutoSkeleton.Hint` static property on web — see the header comment
+// above `const sensor = createDomSensor();` for why.
 // tasks.md 8.3 / NFR-6 (task 2.5 precedent): `AutoSkeletonSSR`/
 // `AutoSkeletonSSRHydrate` are DELIBERATELY NOT attached here as
 // `AutoSkeleton.SSR`/`AutoSkeleton.SSRHydrate` static properties. Task 2.5

@@ -57,8 +57,10 @@ import { createHandoffController, type HandoffController } from '../core/handoff
 import { assembleMetrics } from '../core/metrics';
 import { shouldRunHandoffCycle } from '../core/refresh-gate';
 import { MemoryShapeStore } from '../core/snapshot';
+import { createHintRegistry, snapshotHintEntries } from '../core/hint-registry';
 import { applyThemeOverride } from '../core/theme-override';
 import type { AnimationKind, OnMetrics, RendererKind, ShapeSnapshot } from '../core/types';
+import { Hint } from './Hint';
 import { Ignore } from './Ignore';
 import { nativeSensor } from './nativeSensorInstance';
 import { resolveAutoskeletonOverlayNativeComponent } from './renderer/AutoskeletonOverlayHostComponent';
@@ -265,18 +267,24 @@ function useColdMeasurement(
         onNativeModuleUnavailable();
         return;
       }
+      // Typed-hint channel: `hintEntries` is the raw, serializable snapshot
+      // of every currently-registered `<AutoSkeleton.Hint>` — taken HERE,
+      // at the same instant as `reactTag`, so `sensor.ts`'s
+      // `toWireHintEntries` marshals exactly what was mounted for this
+      // measurement. `hints:` (the `HintRegistry` functions) still satisfies
+      // the shared `SensorOptions` contract for API conformance, even though
+      // the native bridge path (`sensor.ts`) never reads it — only
+      // `target.hintEntries` crosses the Turbo Module boundary.
+      const hintEntries = snapshotHintEntries();
       const target: NativeSensorTarget = {
         reactTag,
         frameWidth: layout.width,
         frameHeight: layout.height,
+        hintEntries,
       };
       const result = nativeSensor.measure(target, {
         key: cacheKey as unknown as Parameters<typeof nativeSensor.measure>[1]['key'],
-        hints: {
-          linesFor: () => undefined,
-          radiusFor: () => undefined,
-          isIgnored: () => false,
-        },
+        hints: createHintRegistry(hintEntries),
         budgetMs,
         maxShapes,
         defaultRadius,
@@ -564,3 +572,4 @@ const styles = StyleSheet.create({
 });
 
 AutoSkeleton.Ignore = Ignore;
+AutoSkeleton.Hint = Hint;

@@ -20,7 +20,8 @@ final class AutoskeletonModuleBridgeTests: XCTestCase {
         defaultRadius: 0,
         budgetMs: 2,
         maxShapes: 60,
-        collectDebugSidecars: true
+        collectDebugSidecars: true,
+        hints: []
     )
 
     // MARK: - AutoskeletonModuleBridge
@@ -72,7 +73,10 @@ final class AutoskeletonModuleBridgeTests: XCTestCase {
     func testGetShapesReturnsAnEmptyArrayForANilView() {
         let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor(), shapeCache: freshCache())
         XCTAssertEqual(
-            bridge.getShapes(view: nil, cacheKey: "k", defaultRadius: 0, budgetMs: 2, maxShapes: 60, collectDebugSidecars: true),
+            bridge.getShapes(
+                view: nil, cacheKey: "k", defaultRadius: 0, budgetMs: 2, maxShapes: 60,
+                collectDebugSidecars: true, hints: []
+            ),
             []
         )
     }
@@ -98,7 +102,8 @@ final class AutoskeletonModuleBridgeTests: XCTestCase {
             defaultRadius: defaultConfig.defaultRadius,
             budgetMs: defaultConfig.budgetMs,
             maxShapes: 1,
-            collectDebugSidecars: defaultConfig.collectDebugSidecars
+            collectDebugSidecars: defaultConfig.collectDebugSidecars,
+            hints: defaultConfig.hints
         )
         let tightened = try XCTUnwrap(bridge.computeWireArray(view: root, cacheKey: "truncated", config: tightenedConfig))
 
@@ -121,7 +126,8 @@ final class AutoskeletonModuleBridgeTests: XCTestCase {
             defaultRadius: defaultConfig.defaultRadius,
             budgetMs: -1,
             maxShapes: defaultConfig.maxShapes,
-            collectDebugSidecars: defaultConfig.collectDebugSidecars
+            collectDebugSidecars: defaultConfig.collectDebugSidecars,
+            hints: defaultConfig.hints
         )
 
         let result = try XCTUnwrap(bridge.computeWireArray(view: root, cacheKey: "budget", config: config))
@@ -148,18 +154,56 @@ final class AutoskeletonModuleBridgeTests: XCTestCase {
         let withZero = try XCTUnwrap(
             bridge.computeWireArray(
                 view: view, cacheKey: "r0",
-                config: AutoskeletonGetShapesConfig(defaultRadius: 0, budgetMs: 2, maxShapes: 60, collectDebugSidecars: true)
+                config: AutoskeletonGetShapesConfig(defaultRadius: 0, budgetMs: 2, maxShapes: 60, collectDebugSidecars: true, hints: [])
             )
         )
         let withNinetyNine = try XCTUnwrap(
             bridge.computeWireArray(
                 view: view, cacheKey: "r99",
-                config: AutoskeletonGetShapesConfig(defaultRadius: 99, budgetMs: 2, maxShapes: 60, collectDebugSidecars: true)
+                config: AutoskeletonGetShapesConfig(defaultRadius: 99, budgetMs: 2, maxShapes: 60, collectDebugSidecars: true, hints: [])
             )
         )
 
         XCTAssertEqual(withZero[5], 12, "real layer.cornerRadius, not config.defaultRadius")
         XCTAssertEqual(withNinetyNine[5], 12, "real layer.cornerRadius, not config.defaultRadius")
+    }
+
+    // MARK: - Typed-hint channel (radius OVERRIDE, a deliberate iOS-specific
+    // design decision — see `AutoskeletonSensor.swift`'s
+    // `leafShapes(for:root:source:ctx:)` doc comment): a registered `radius`
+    // hint entry now OVERRIDES `layer.cornerRadius` on iOS, unlike
+    // `defaultRadius` above (which the previous test proves has no effect).
+
+    func testComputeWireArrayAppliesARegisteredRadiusHintOverridingLayerCornerRadius() throws {
+        let view = UIView(frame: CGRect(x: 0, y: 0, width: 40, height: 40))
+        view.accessibilityIdentifier = "card"
+        view.backgroundColor = .red
+        view.layer.cornerRadius = 12
+        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor(), shapeCache: freshCache())
+        let config = AutoskeletonGetShapesConfig(
+            defaultRadius: 0, budgetMs: 2, maxShapes: 60, collectDebugSidecars: true,
+            hints: [AutoskeletonHintEntry(nodeId: "card", lines: nil, radius: 20)]
+        )
+
+        let result = try XCTUnwrap(bridge.computeWireArray(view: view, cacheKey: "hinted", config: config))
+
+        XCTAssertEqual(result[5], 20, "hinted radius overrides the real layer.cornerRadius (12)")
+    }
+
+    func testComputeWireArrayIgnoresAHintRegisteredUnderADifferentAccessibilityIdentifier() throws {
+        let view = UIView(frame: CGRect(x: 0, y: 0, width: 40, height: 40))
+        view.accessibilityIdentifier = "card"
+        view.backgroundColor = .red
+        view.layer.cornerRadius = 12
+        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor(), shapeCache: freshCache())
+        let config = AutoskeletonGetShapesConfig(
+            defaultRadius: 0, budgetMs: 2, maxShapes: 60, collectDebugSidecars: true,
+            hints: [AutoskeletonHintEntry(nodeId: "unrelated", lines: nil, radius: 20)]
+        )
+
+        let result = try XCTUnwrap(bridge.computeWireArray(view: view, cacheKey: "unhinted", config: config))
+
+        XCTAssertEqual(result[5], 12, "no matching hint -> real layer.cornerRadius stands")
     }
 
     // MARK: - AutoskeletonNativeShapeCache

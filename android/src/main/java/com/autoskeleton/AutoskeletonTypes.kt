@@ -87,12 +87,31 @@ interface AutoskeletonHintRegistry {
     fun isIgnored(nodeId: String): Boolean
 }
 
-/** A `HintRegistry` with nothing configured — every lookup misses. The production
- *  default until Phase 5 wires a real typed-prop-backed registry through the
- *  bridge. */
+/** A `HintRegistry` with nothing configured — every lookup misses. Used by
+ *  tests and as a documented degenerate case; production now uses
+ *  `AutoskeletonMapHintRegistry` (below), built from the bridge's marshaled
+ *  `config.hints` (`AutoskeletonModule.kt`'s `toGetShapesConfig()`). */
 class AutoskeletonEmptyHintRegistry : AutoskeletonHintRegistry {
     override fun lines(nodeId: String): Int? = null
     override fun radius(nodeId: String): Float? = null
+    override fun isIgnored(nodeId: String): Boolean = false
+}
+
+/** Typed-hint channel (plan.md ADR-2 R0): the real registry built from
+ *  `AutoskeletonHintEntry` entries that crossed the Turbo Module boundary —
+ *  the production default `AutoskeletonModule.kt`'s `computeWireArray` now
+ *  passes instead of `AutoskeletonEmptyHintRegistry`. `isIgnored` stays
+ *  always `false`: `<AutoSkeleton.Ignore>` uses its own self-sufficient
+ *  `AUTOSKELETON_IGNORE_MARKER_NATIVE_ID` marker channel, checked directly
+ *  by `AutoskeletonSensor.traverse()` before this registry is ever
+ *  consulted (task G.5's remediation) — the same deliberate split
+ *  `core/hint-registry.ts`'s `createHintRegistry` makes on the JS side. */
+class AutoskeletonMapHintRegistry(entries: List<AutoskeletonHintEntry>) : AutoskeletonHintRegistry {
+    private val linesByNodeId: Map<String, Int> = entries.mapNotNull { e -> e.lines?.let { e.nodeId to it } }.toMap()
+    private val radiusByNodeId: Map<String, Float> = entries.mapNotNull { e -> e.radius?.let { e.nodeId to it } }.toMap()
+
+    override fun lines(nodeId: String): Int? = linesByNodeId[nodeId]
+    override fun radius(nodeId: String): Float? = radiusByNodeId[nodeId]
     override fun isIgnored(nodeId: String): Boolean = false
 }
 

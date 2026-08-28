@@ -21,8 +21,10 @@
 // contract requires `TTarget` to literally be `number` — so this stays
 // within the actual type contract while diverging from its example.
 
+import type { HintEntry } from '../core/hint-registry';
 import type { HintRegistry, Sensor, SensorOptions, SensorResult } from '../core/contracts';
 import type { ShapeInfo, ShapeSnapshot } from '../core/types';
+import type { AutoskeletonHintEntry } from './NativeAutoskeleton';
 import type { Spec } from './NativeAutoskeleton';
 import { fetchShapesOnce, type WireBridgeTracing } from './wire-bridge';
 
@@ -30,6 +32,32 @@ export interface NativeSensorTarget {
   readonly reactTag: number;
   readonly frameWidth: number;
   readonly frameHeight: number;
+  /** Typed-hint channel (radius/lines): the raw, serializable snapshot from
+   *  `core/hint-registry.ts`'s `snapshotHintEntries()`, taken by the caller
+   *  (`AutoSkeleton.tsx`) at the same moment it reads `reactTag`. Marshaled
+   *  verbatim into `config.hints` below — `SensorOptions.hints` (a
+   *  `HintRegistry` of live functions) cannot cross the Turbo Module
+   *  boundary at all, so this is the ONLY channel that can carry hint DATA
+   *  across it. Absent/empty is a legitimate "no hints registered" state,
+   *  not an error. */
+  readonly hintEntries?: readonly HintEntry[];
+}
+
+/** `lines: 0` / `radius: -1` are the "no override" sentinels
+ *  `NativeAutoskeleton.ts`'s `AutoskeletonGetShapesConfig.hints` documents —
+ *  chosen because codegen'd array-of-object fields are a materially safer,
+ *  more-travelled path with required scalar fields than with optional ones
+ *  (verified against a real generated `AutoskeletonSpec.h` before this
+ *  sentinel convention was chosen). */
+function toWireHintEntries(entries: readonly HintEntry[] | undefined): AutoskeletonHintEntry[] {
+  if (!entries) {
+    return [];
+  }
+  return entries.map((entry) => ({
+    nodeId: entry.nodeId,
+    lines: entry.lines ?? 0,
+    radius: entry.radius ?? -1,
+  }));
 }
 
 export function createEmptyHintRegistry(): HintRegistry {
@@ -80,6 +108,7 @@ export function createNativeSensor(options: CreateNativeSensorOptions): Sensor<N
         budgetMs: sensorOptions.budgetMs,
         maxShapes: sensorOptions.maxShapes,
         collectDebugSidecars: sensorOptions.collectDebugSidecars,
+        hints: toWireHintEntries(target.hintEntries),
       };
       const fetched = fetchShapesOnce(nativeModule, target.reactTag, sensorOptions.key, config, options.tracing);
       if (!fetched) {

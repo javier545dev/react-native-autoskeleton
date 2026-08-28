@@ -250,6 +250,7 @@ class AutoskeletonModuleTest {
             "budgetMs", 4.0,
             "maxShapes", 1.0,
             "collectDebugSidecars", true,
+            "hints", JavaOnlyArray.of(),
         )
 
         val config = map.toGetShapesConfig()
@@ -258,6 +259,126 @@ class AutoskeletonModuleTest {
             AutoskeletonGetShapesConfig(defaultRadius = 16f, budgetMs = 4.0, maxShapes = 1, collectDebugSidecars = true),
             config,
         )
+    }
+
+    // MARK: - Typed-hint channel (plan.md ADR-2 R0): `config.hints` decoding
+    // and end-to-end wiring into a real `AutoskeletonMapHintRegistry`.
+
+    @Test
+    fun toGetShapesConfigDecodesHintEntriesApplyingTheNoOverrideSentinels() {
+        // Mirrors `NativeAutoskeleton.ts`'s documented sentinel convention:
+        // `lines: 0` / `radius: -1` mean "no override" and decode to `null`,
+        // never a wrong "real" value of exactly 0 or -1.
+        val map = JavaOnlyMap.of(
+            "defaultRadius", 0.0,
+            "budgetMs", 2.0,
+            "maxShapes", 60.0,
+            "collectDebugSidecars", true,
+            "hints",
+            JavaOnlyArray.of(
+                JavaOnlyMap.of("nodeId", "title", "lines", 3.0, "radius", -1.0),
+                JavaOnlyMap.of("nodeId", "avatar", "lines", 0.0, "radius", 24.0),
+            ),
+        )
+
+        val config = map.toGetShapesConfig()
+
+        assertEquals(
+            listOf(
+                AutoskeletonHintEntry(nodeId = "title", lines = 3, radius = null),
+                AutoskeletonHintEntry(nodeId = "avatar", lines = null, radius = 24f),
+            ),
+            config.hints,
+        )
+    }
+
+    @Test
+    fun toGetShapesConfigDefaultsHintsToEmptyWhenTheKeyIsAbsent() {
+        val map = JavaOnlyMap.of(
+            "defaultRadius", 0.0,
+            "budgetMs", 2.0,
+            "maxShapes", 60.0,
+            "collectDebugSidecars", true,
+        )
+
+        assertEquals(emptyList<AutoskeletonHintEntry>(), map.toGetShapesConfig().hints)
+    }
+
+    @Test
+    fun computeWireArrayAppliesARegisteredRadiusHintOverridingTheMeasuredValue() {
+        // Real production proof: a leaf with NO backgroundRadius set (so R1
+        // alone would resolve `MEASURED`/radius 0) but a `nativeID` matching
+        // a `config.hints` entry gets the HINTED radius instead — the exact
+        // ADR-2 R0 rung, exercised through the REAL bridge decode path
+        // (`toGetShapesConfig`) and the REAL `AutoskeletonMapHintRegistry`,
+        // not a hand-built fake registry (that unit is already covered by
+        // `AutoskeletonRadiusResolverTest`).
+        AutoskeletonNativeShapeCache.clear()
+        val context = RuntimeEnvironment.getApplication()
+        DisplayMetricsHolder.initDisplayMetricsIfNotInitialized(context)
+        val leaf = FrameLayout(context)
+        leaf.layout(0, 0, 40, 40)
+        leaf.setTag(com.facebook.react.R.id.view_tag_native_id, "card")
+        BackgroundStyleApplicator.setBackgroundColor(leaf, Color.RED)
+        val module = moduleFor(leaf)
+        val density = leaf.resources.displayMetrics.density
+
+        val hinted = module.computeWireArray(
+            42.0,
+            "hinted",
+            defaultConfig.copy(hints = listOf(AutoskeletonHintEntry(nodeId = "card", lines = null, radius = 20f))),
+        )!!
+
+        assertEquals(6, hinted.size)
+        assertEquals(20.0 / density, hinted[5], 0.0001) // slot 5 = r
+    }
+
+    @Test
+    fun computeWireArrayAppliesARegisteredLinesHintProducingTheHintedShapeCount() {
+        // Full production pipeline, `ReadableMap` decode through to the real
+        // `AutoskeletonSensor` shape count: the same "collapsed-text" fixture
+        // `AutoskeletonSensorTest.collapsedTextHonorsLinesHint` already
+        // proves the SENSOR honors (nodeId "collapsed-text-1", h=2 collapses
+        // below defaultLineHeight) — this test proves the BRIDGE config
+        // reaches that same registry consultation, not a hand-built fake.
+        AutoskeletonNativeShapeCache.clear()
+        val fixture = SyntheticHierarchyBuilder.loadFixture("collapsed-text")
+        val root = SyntheticHierarchyBuilder.build(fixture)
+        val module = moduleFor(root)
+
+        val hinted = module.computeWireArray(
+            42.0,
+            "lines-hinted",
+            defaultConfig.copy(
+                hints = listOf(AutoskeletonHintEntry(nodeId = "collapsed-text-1", lines = 3, radius = null)),
+            ),
+        )!!
+        val unhinted = module.computeWireArray(42.0, "lines-unhinted", defaultConfig)!!
+
+        val hintedShapeCount = (hinted.size - 1) / 5
+        val unhintedShapeCount = (unhinted.size - 1) / 5
+        assertEquals("hinted lines=3 must produce exactly 3 synthesized line shapes", 3, hintedShapeCount)
+        assertEquals("unhinted collapsed text (h=2) defaults to 1 line", 1, unhintedShapeCount)
+    }
+
+    @Test
+    fun computeWireArrayIgnoresAHintRegisteredUnderADifferentNodeId() {
+        AutoskeletonNativeShapeCache.clear()
+        val context = RuntimeEnvironment.getApplication()
+        DisplayMetricsHolder.initDisplayMetricsIfNotInitialized(context)
+        val leaf = FrameLayout(context)
+        leaf.layout(0, 0, 40, 40)
+        leaf.setTag(com.facebook.react.R.id.view_tag_native_id, "card")
+        BackgroundStyleApplicator.setBackgroundColor(leaf, Color.RED)
+        val module = moduleFor(leaf)
+
+        val unhinted = module.computeWireArray(
+            42.0,
+            "unhinted",
+            defaultConfig.copy(hints = listOf(AutoskeletonHintEntry(nodeId = "unrelated", lines = null, radius = 20f))),
+        )!!
+
+        assertEquals(0.0, unhinted[5], 0.0001) // no background radius set, no matching hint -> R1 MEASURED 0
     }
 
     @Test

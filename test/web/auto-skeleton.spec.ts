@@ -701,6 +701,84 @@ test.describe('AutoSkeleton — debugOverlay (REQ-OBS-OVERLAY-1)', () => {
   });
 });
 
+test.describe('AutoSkeleton — typed-hint channel (radius/lines, public API)', () => {
+  // Web has NO `<AutoSkeleton.Hint>` wrapper component (a stated,
+  // NFR-6-driven cross-platform asymmetry — see `src/web/AutoSkeleton.tsx`'s
+  // header comment above `const sensor = createDomSensor();`): a consumer
+  // sets `data-autoskeleton-radius`/`data-autoskeleton-lines` DIRECTLY as
+  // plain JSX props on their own real-content element. This proves the
+  // FULL real pipeline — a plain consumer attribute, through the real cold
+  // measurement, into `onMetrics`'s `radiusSourceHistogram` — the exact
+  // telemetry ADR-2 makes mandatory in every rung.
+  test('a plain data-autoskeleton-radius attribute reaches onMetrics.radiusSourceHistogram as "hint"', async ({
+    page,
+    mountReady,
+  }) => {
+    await mountReady();
+    await page.evaluate(() => {
+      const { React, createRoot, AutoSkeleton, SkeletonProvider, MemoryShapeStore } = window.AutoskeletonComponent;
+      const store = new MemoryShapeStore();
+      const metrics: unknown[] = [];
+      (window as unknown as { __metrics: unknown[] }).__metrics = metrics;
+      (window as unknown as { __root: unknown; __els: unknown }).__root = createRoot(
+        document.getElementById('root')!,
+      );
+      (window as unknown as { __els: unknown }).__els = { React, AutoSkeleton, SkeletonProvider, store };
+      const { __root, __els } = window as unknown as { __root: any; __els: any };
+      const child = () =>
+        __els.React.createElement('div', {
+          id: 'hint-target',
+          'data-autoskeleton-radius': 20,
+          style: { width: 80, height: 80, background: '#00ff00', borderRadius: 4 },
+        });
+      __root.render(
+        __els.React.createElement(
+          __els.SkeletonProvider,
+          { store: __els.store },
+          __els.React.createElement(
+            __els.AutoSkeleton,
+            { isLoading: true, skeletonKey: 'hint-e2e-screen', onMetrics: (m: unknown) => metrics.push(m) },
+            child(),
+          ),
+        ),
+      );
+    });
+    await settle(page);
+
+    // `onMetrics`/`requestHandoff()` fires on the isLoading TRUE -> FALSE
+    // transition (matches the REQ-PTR-1 tests' own established pattern
+    // above) — a single isLoading:true render never fires it.
+    await page.evaluate(() => {
+      const { __root, __els, __metrics } = window as unknown as { __root: any; __els: any; __metrics: unknown[] };
+      __root.render(
+        __els.React.createElement(
+          __els.SkeletonProvider,
+          { store: __els.store },
+          __els.React.createElement(
+            __els.AutoSkeleton,
+            { isLoading: false, skeletonKey: 'hint-e2e-screen', onMetrics: (m: unknown) => __metrics.push(m) },
+            __els.React.createElement('div', {
+              id: 'hint-target',
+              'data-autoskeleton-radius': 20,
+              style: { width: 80, height: 80, background: '#00ff00', borderRadius: 4 },
+            }),
+          ),
+        ),
+      );
+    });
+    await page.waitForTimeout(400);
+
+    const histogram = await page.evaluate(() => {
+      const metrics = (window as unknown as { __metrics: { radiusSourceHistogram?: Record<string, number> }[] })
+        .__metrics;
+      return metrics[0]?.radiusSourceHistogram;
+    });
+
+    expect(histogram?.hint).toBe(1);
+    expect(histogram?.measured ?? 0).toBe(0);
+  });
+});
+
 test.describe('AutoSkeleton — delay prop (session gap closure: declared but never read)', () => {
   test('withholds the skeleton overlay until `delay` ms have elapsed', async ({ page, mountReady }) => {
     await mountReady();

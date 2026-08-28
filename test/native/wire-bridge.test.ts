@@ -25,6 +25,7 @@ const CONFIG = {
   budgetMs: 2,
   maxShapes: 60,
   collectDebugSidecars: false,
+  hints: [],
 };
 
 describe('fetchShapesOnce (task 5.1 bridge)', () => {
@@ -41,7 +42,13 @@ describe('fetchShapesOnce (task 5.1 bridge)', () => {
   // substitutes a compiled default cannot pass by accident.
   it('forwards the config object to native getShapes unchanged', () => {
     const getShapes = vi.fn().mockReturnValue(wireArrayFor([[0, 0, 1, 1, 0]]));
-    const nonDefaultConfig = { defaultRadius: 16, budgetMs: 4, maxShapes: 1, collectDebugSidecars: true };
+    const nonDefaultConfig = {
+      defaultRadius: 16,
+      budgetMs: 4,
+      maxShapes: 1,
+      collectDebugSidecars: true,
+      hints: [{ nodeId: 'title', lines: 3, radius: -1 }],
+    };
     fetchShapesOnce({ getShapes }, 7, 'k' as never, nonDefaultConfig);
     expect(getShapes).toHaveBeenCalledWith(7, 'k', nonDefaultConfig);
   });

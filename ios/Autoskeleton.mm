@@ -67,16 +67,33 @@
 // style dynamic map the way Android's codegen generates it). Only visible
 // here, in Objective-C++ — decoded into four primitive scalars and handed
 // to the Swift bridge, which has no C++ interop configured in this pod.
+// Typed-hint channel: `config.hints()` is a `facebook::react::LazyVector`
+// over the codegen'd `AutoskeletonHintEntry` struct (verified against the
+// actual generated `AutoskeletonSpec.h`, same file the header comment above
+// already cites) — decoded HERE, in Objective-C++, into an
+// `NSArray<NSDictionary *> *` because a Swift STRUCT cannot be `@objc` and
+// therefore cannot cross this boundary directly; a dictionary array is the
+// simplest `@objc`-bridgeable shape `AutoskeletonHintEntry.decode(_:)`
+// (`AutoskeletonTypes.swift`) can consume on the Swift side.
 - (NSArray<NSNumber *> *)getShapes:(double)reactTag
                           cacheKey:(NSString *)cacheKey
                             config:(JS::NativeAutoskeleton::AutoskeletonGetShapesConfig &)config {
     __weak Autoskeleton *weakSelf = self;
+    NSMutableArray<NSDictionary *> *hints = [NSMutableArray array];
+    for (const auto &entry : config.hints()) {
+        [hints addObject:@{
+            @"nodeId": entry.nodeId(),
+            @"lines": @(entry.lines()),
+            @"radius": @(entry.radius()),
+        }];
+    }
     return [self->_bridge getShapesWithReactTag:@(reactTag)
                                         cacheKey:cacheKey
                                    defaultRadius:config.defaultRadius()
                                         budgetMs:config.budgetMs()
                                        maxShapes:config.maxShapes()
                             collectDebugSidecars:config.collectDebugSidecars()
+                                           hints:hints
                                      resolveView:^UIView * _Nullable(NSNumber * _Nonnull tag) {
         Autoskeleton *strongSelf = weakSelf;
         return [strongSelf.viewRegistry_DEPRECATED viewForReactTag:tag];

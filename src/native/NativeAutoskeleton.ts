@@ -27,16 +27,27 @@
 // reached native and REQ-OBS-BUDGET-1's "budgets MUST be configurable" was
 // structurally unmet there. `config` carries exactly the SCALAR fields of
 // `SensorOptions` (`core/contracts.ts`) that both native `SensorOptions`
-// structs already declare and a bridge crossing can represent — `hints`
-// (a `HintRegistry` of live JS functions) cannot cross a Turbo Module
-// boundary and stays out of scope here: verified (see apply-progress) that
-// BOTH native bridge paths already hardcode an EMPTY hint registry
-// regardless of this change, and no JS-side producer of non-empty per-node
-// hints exists anywhere in this codebase yet (`createEmptyHintRegistry()`
-// is the only implementation in `native/sensor.ts` and `AutoSkeleton.tsx`
-// hardcodes empty hint functions too) — threading real hint DATA end-to-end
-// is a distinct, materially larger feature with no existing JS producer,
-// not a config-shape omission, and is out of this change's scope.
+// structs already declare and a bridge crossing can represent.
+//
+// Typed-hint channel (radius/lines): `hints` closes the gap this file's own
+// history flagged — `HintRegistry` (`core/contracts.ts`) is a set of live JS
+// FUNCTIONS and genuinely cannot cross a Turbo Module boundary, but the DATA
+// behind it (`nodeId -> { lines?, radius? }`) is a plain, serializable list
+// and codegen supports an array of typed records as a spec field (verified
+// against a real generated `AutoskeletonSpec.h`/`AutoskeletonSpec.java` for
+// this exact shape before this field was added — see `hint-registry.ts`'s
+// header comment for the full producer-side story). Each entry uses the
+// SAME sentinel convention the wire schema already uses for "no value"
+// (`radius: -1` mirrors `ShapeInfo.r === -1`, "rounded, amount unknown");
+// `lines: 0` is never a legal synthesized line count (`synthesizeLines`
+// always returns at least 1), so it is free to mean "no override" without a
+// nullable field — nullable fields inside a codegen'd array-of-object are a
+// materially riskier, less-travelled path than a plain required number, and
+// this repo has no existing precedent for one, so the sentinel is the safer
+// choice for a field that must build cleanly on both platforms.
+// `nodeId` is the SAME string carried on the `nativeID`/`testID` channel
+// plan.md §4 already names for both `Ignore` and typed hints — one Hint
+// registration produces one entry in this array.
 //
 // A per-call parameter (not a separate `setConfig()`) per ADR-1's own
 // call-frequency discipline: `getShapes` already runs once per cache miss
@@ -47,6 +58,20 @@
 // no benefit at this call frequency.
 
 import { TurboModuleRegistry, type TurboModule } from 'react-native';
+
+export interface AutoskeletonHintEntry {
+  /** The view's `nativeID`/`testID` (native) or `data-autoskeleton-id`
+   *  (web) — the same public channel plan.md §4 names for typed hints. */
+  readonly nodeId: string;
+  /** Synthesized line count override for a collapsed text leaf. `0` means
+   *  "no override" (see the sentinel-convention note above); a real hint is
+   *  always `>= 1`. */
+  readonly lines: number;
+  /** Corner-radius override, in the same units as `ShapeInfo.r`. `-1` means
+   *  "no override" (mirrors the wire schema's own "rounded, unknown"
+   *  sentinel). */
+  readonly radius: number;
+}
 
 export interface AutoskeletonGetShapesConfig {
   /** Mirrors `SensorOptions.defaultRadius` — Android's ADR-2 rung R3
@@ -63,6 +88,11 @@ export interface AutoskeletonGetShapesConfig {
   readonly maxShapes: number;
   /** Mirrors `SensorOptions.collectDebugSidecars`. */
   readonly collectDebugSidecars: boolean;
+  /** The typed-hint channel's marshaled entries — see the header comment
+   *  above. Always a complete, real array (never omitted): the JS caller
+   *  builds it from every currently-mounted `<AutoSkeleton.Hint>`, which is
+   *  empty, not absent, when none are mounted. */
+  readonly hints: ReadonlyArray<AutoskeletonHintEntry>;
 }
 
 export interface Spec extends TurboModule {

@@ -43,6 +43,19 @@ export const PAINT_GATE_FIXTURE = {
     // `<AutoSkeleton.Ignore>` bug-fix gate.
     ignoredContent: 'paint-gate-ignored-content',
     ignoredSibling: 'paint-gate-ignored-sibling',
+    // Typed-hint channel gate: `hintedCard` is wrapped in
+    // `<AutoSkeleton.Hint radius={40}>` over a SQUARE 80x80 view (no
+    // `borderRadius` style at all — the hint is the ONLY source of
+    // roundedness); `unhintedCard` is the identically-sized, identically
+    // square sibling with NO hint. On Android specifically (brief §9c: no
+    // public API otherwise recovers a rounded view's radius), a corner
+    // pixel a few px inset from the top-left corner must differ between
+    // the two: painted (skeleton ramp) for the square sibling, unpainted
+    // (clipped away by the r=40 rounded/near-circular hint) for the hinted
+    // one — see `PaintGateInstrumentedTest.kt`'s
+    // `hintedRadiusChangesThePaintedCornerOnAndroid`.
+    hintedCard: 'paint-gate-hinted-card',
+    unhintedCard: 'paint-gate-unhinted-card',
   },
   colors: {
     // Real, opaque, mutually distinct fills — never derived from a shared
@@ -60,6 +73,8 @@ export const PAINT_GATE_FIXTURE = {
     // `ignoredRegionPaintsNoSkeletonWhileSiblingDoes` assertion.
     ignored: '#FF6600',
     ignoredSibling: '#8000FF',
+    hintedCard: '#FFD700',
+    unhintedCard: '#FF1493',
   },
 } as const;
 
@@ -169,6 +184,33 @@ function PaintGateScreen() {
               accessibilityLabel={PAINT_GATE_FIXTURE.labels.ignoredSibling}
               testID="paint-gate-ignored-sibling"
               style={[styles.ignoredBlock, { backgroundColor: PAINT_GATE_FIXTURE.colors.ignoredSibling }]}
+            />
+          </View>
+          {/* Typed-hint channel gate (this session's brief): `hintedCard` is
+           *  a SQUARE view (no `borderRadius` style) wrapped in
+           *  `<AutoSkeleton.Hint radius={40}>` — the hint is the ONLY
+           *  source of roundedness, proving R0 end to end. `unhintedCard`
+           *  is the identically-sized, identically square sibling with no
+           *  hint at all, in the SAME frame, for direct comparison. */}
+          <View
+            accessible={false}
+            accessibilityLabel="paint-gate-hint-row"
+            testID="paint-gate-hint-row"
+            style={styles.hintRow}
+          >
+            <AutoSkeleton.Hint id="paint-gate-hint-card" radius={40}>
+              <View
+                accessible
+                accessibilityLabel={PAINT_GATE_FIXTURE.labels.hintedCard}
+                testID="paint-gate-hinted-card"
+                style={[styles.hintBlock, { backgroundColor: PAINT_GATE_FIXTURE.colors.hintedCard }]}
+              />
+            </AutoSkeleton.Hint>
+            <View
+              accessible
+              accessibilityLabel={PAINT_GATE_FIXTURE.labels.unhintedCard}
+              testID="paint-gate-unhinted-card"
+              style={[styles.hintBlock, { backgroundColor: PAINT_GATE_FIXTURE.colors.unhintedCard }]}
             />
           </View>
         </View>
@@ -398,6 +440,14 @@ const styles = StyleSheet.create({
   ignoredBlock: {
     width: 100,
     height: 60,
+  },
+  hintRow: {
+    flexDirection: 'row',
+    gap: 16,
+  },
+  hintBlock: {
+    width: 80,
+    height: 80,
   },
   counterLabel: {
     color: '#000000',
