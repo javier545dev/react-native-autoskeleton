@@ -120,14 +120,14 @@ plan.md §7 preamble).
 
 ## Phase 1: Core + contracts + snapshot cache, with tests
 
-- [ ] **1.1** RED→GREEN `src/core/cache-key.ts` — `bucketWidth` against `WIDTH_BUCKETS`,
+- [x] **1.1** RED→GREEN `src/core/cache-key.ts` — `bucketWidth` against `WIDTH_BUCKETS`,
       `quantizeFontScale` (2 decimals), `composeCacheKey`/`parseCacheKey` round-trip with `|`
       percent-escaping, `keyMatches`.
       **Tests**: `cache-key.test.ts` (Vitest, no DOM). **Observability**: N/A — pure key algebra
       on no lifecycle path; exempt. **Performance**: feeds NFR-4 indirectly but not measured
       standalone here — measured in 1.3 and authoritatively in 9.1. Deps: 0.2. Complexity: M.
       Example app: none/unit-only.
-- [ ] **1.2** RED→GREEN `src/core/wire.ts` — `[VERSION,x,y,w,h,r]xN` Float32Array codec, modulus
+- [x] **1.2** RED→GREEN `src/core/wire.ts` — `[VERSION,x,y,w,h,r]xN` Float32Array codec, modulus
       check, version negotiation (reject newer, forward-migrate older, raise
       `snapshot-version-mismatch`), `byteOffset===0` assertion.
       **Tests**: `wire.test.ts` — round-trip N=0/1/60; malformed-length rejection; version
@@ -135,7 +135,7 @@ plan.md §7 preamble).
       `onMetrics.degraded` (assembled in 1.8) — no emission call here. **Performance**: not
       measured here (pure codec); covered by Phase 9.1 CI benchmark. Deps: 1.1. Complexity: M.
       Example app: none/unit-only.
-- [ ] **1.3** RED→GREEN `src/core/snapshot.ts` — `serializeSnapshot`/`deserializeSnapshot`
+- [x] **1.3** RED→GREEN `src/core/snapshot.ts` — `serializeSnapshot`/`deserializeSnapshot`
       (dev sidecars stripped in prod) + `MemoryShapeStore` (sync `get`/`has`/`set`/`delete`/
       `invalidate`/`clear`/`export`/`import`/`subscribe`, LRU cap 128 default per ASSUMPTION
       plan.md §11.6).
@@ -144,19 +144,19 @@ plan.md §7 preamble).
       directly; underlies `onMetrics.cacheHit` correctness downstream. **Performance**: NFR-4
       (<0.2 ms p95 sync lookup) — a Vitest micro-benchmark (1000-iteration p95) as a fast local
       guard; authoritative gate is 9.1. Deps: 1.2. Complexity: L. Example app: none/unit-only.
-- [ ] **1.4** RED→GREEN `src/core/lines.ts` — collapsed-text line synthesis (N rects, height =
+- [x] **1.4** RED→GREEN `src/core/lines.ts` — collapsed-text line synthesis (N rects, height =
       lineHeight, width 60–85% variance, `lines` hint honored).
       **Tests**: `lines.test.ts` — no-hint default, hinted count, width bounds, height equality.
       **Observability**: tags synthesized shapes `source:'synthetic-line'` in the dev sidecar
       (§4.4). **Performance**: N/A standalone; folded into traversal budget once called from
       sensors (Phase 2–4). Deps: 1.2. Complexity: S. Example app: none/unit-only.
-- [ ] **1.5** RED→GREEN `src/core/clip-path.ts` — union-of-rounded-rects → SVG `path()` string,
+- [x] **1.5** RED→GREEN `src/core/clip-path.ts` — union-of-rounded-rects → SVG `path()` string,
       reused by the web renderer (2.2) and the capture CLI (8.1).
       **Tests**: `clip-path.test.ts` — single rect, overlapping rects, `r=-1`→`defaultRadius`
       substitution, RTL mirroring. **Observability**: N/A, pure geometry. **Performance**: N/A
       here; contributes to NFR-6, verified in 2.5. Deps: 1.2. Complexity: M. Example app:
       none/unit-only.
-- [ ] **1.6** RED→GREEN `src/core/metrics.ts` — budget checks (`budgetMs` default 2,
+- [x] **1.6** RED→GREEN `src/core/metrics.ts` — budget checks (`budgetMs` default 2,
       `maxShapes` default 60, both configurable), dev-warning formatter with actionable
       suggestion text, `onMetrics` payload shape per spec §2.1/§3.7.
       **Tests**: `metrics.test.ts` — REQ-OBS-BUDGET-1 scenarios (3.4 ms/2 ms warning text,
@@ -165,7 +165,7 @@ plan.md §7 preamble).
       task IS the observability deliverable. **Performance**: NFR-3 threshold (2 ms) and
       shape-cap (60) asserted as constants matching spec §3 exactly. Deps: 1.3. Complexity: M.
       Example app: none/unit-only.
-- [ ] **1.7** RED→GREEN `src/core/handoff.ts` — `HandoffController` state machine
+- [x] **1.7** RED→GREEN `src/core/handoff.ts` — `HandoffController` state machine
       (`skeleton→placeholder→content`), `requestHandoff()` stamps `displayDurationMs`
       immediately, idempotent `notifyPainted()`, `handoffTimeoutMs`/`handoffFadeMs` defaults
       250/120 (ASSUMPTION §11.8), `ImageLeafDescriptor`/`HandoffOptions`/`HandoffReason` (ADR-16).
@@ -178,7 +178,7 @@ plan.md §7 preamble).
       control. Deps: 1.6. Complexity: L. Example app: none/unit-only. **Resolves spec Open
       Question 6** (image pipeline hand-off) at the type/state-machine level; behavioral no-flash
       proof is Phase 8.4/9.
-- [ ] **1.8** RED→GREEN `src/core/contracts.ts` — finalize `Sensor<TTarget>`,
+- [x] **1.8** RED→GREEN `src/core/contracts.ts` — finalize `Sensor<TTarget>`,
       `Renderer<TSurface>`, `ShimmerClock`, `HintRegistry`, `SensorOptions`/`SensorResult` (types
       only; platform layers implement in Phases 2–5). Add `assembleMetrics(...)` in `metrics.ts`
       composing all `onMetrics` fields from the other core modules.
@@ -186,7 +186,7 @@ plan.md §7 preamble).
       `assemble-metrics.test.ts` covering REQ-OBS-METRICS-1's cold-load and hot-load scenarios.
       **Observability**: this task IS the metrics-assembly module. **Performance**: N/A, pure
       composition. Deps: 1.7. Complexity: M. Example app: none/unit-only.
-- [ ] **1.9** Consolidate `src/core/types.ts` (`ShapeInfo`, `ShapeSnapshot`,
+- [x] **1.9** Consolidate `src/core/types.ts` (`ShapeInfo`, `ShapeSnapshot`,
       `SerializedShapeSnapshot`, `DegradationFlag`, `RadiusSource`, `ShapeSource`) — no new logic.
       **Tests**: `types.test.ts` asserting `DegradationFlag` enumerates all 8 documented flags
       (drift guard). **Observability**: N/A. **Performance**: N/A. Deps: 1.8. Complexity: S.

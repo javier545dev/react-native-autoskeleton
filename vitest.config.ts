@@ -28,5 +28,20 @@ export default defineConfig({
       'test/fixtures/**',
     ],
     passWithNoTests: false,
+    coverage: {
+      provider: 'v8',
+      reporter: ['text'],
+      // plan.md §7 unit-coverage table: "100% of src/core/ branches on the
+      // wire codec, key algebra and handoff state machine" — only these three
+      // modules carry a hard coverage gate; the rest of src/core is measured
+      // but not threshold-enforced at this phase.
+      include: ['src/core/cache-key.ts', 'src/core/wire.ts', 'src/core/handoff.ts'],
+      thresholds: {
+        branches: 100,
+        statements: 100,
+        functions: 100,
+        lines: 100,
+      },
+    },
   },
 });
