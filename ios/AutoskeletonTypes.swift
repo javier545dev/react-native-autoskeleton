@@ -108,6 +108,23 @@ struct AutoskeletonSensorOptions {
     )
 }
 
+/// Plain-Swift mirror of `AutoskeletonGetShapesConfig`
+/// (`src/native/NativeAutoskeleton.ts`) — the codegen'd param arrives as the
+/// C++ struct `JS::NativeAutoskeleton::AutoskeletonGetShapesConfig` (verified
+/// against the actual generated `AutoskeletonSpec.h`), visible only to
+/// Objective-C++, so `Autoskeleton.mm` decodes it into four primitive
+/// scalars at the ObjC++/Swift boundary; `AutoskeletonModuleBridge` collects
+/// them back into this struct so `computeWireArray` and its tests stay
+/// pure Swift. See `AutoskeletonModuleBridge.getShapes(reactTag:cacheKey:
+/// defaultRadius:budgetMs:maxShapes:collectDebugSidecars:resolveView:)`'s
+/// doc comment for the full rationale.
+struct AutoskeletonGetShapesConfig {
+    let defaultRadius: CGFloat
+    let budgetMs: Double
+    let maxShapes: Int
+    let collectDebugSidecars: Bool
+}
+
 /// Mirrors `SensorResult` in `src/core/contracts.ts`.
 struct AutoskeletonSensorResult {
     let shapes: [AutoskeletonShapeInfo]

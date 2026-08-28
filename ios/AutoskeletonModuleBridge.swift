@@ -80,8 +80,29 @@ public final class AutoskeletonModuleBridge: NSObject {
     /// since `RCTViewRegistry` is an ObjC type most naturally driven from
     /// the module's own ObjC++ side). Returns `nil` when `view` has no
     /// laid-out size yet, mirroring `Sensor.measure`'s contract.
-    func computeWireArray(view: UIView, cacheKey: String) -> [Double]? {
-        guard let measured = sensor.measure(root: view, options: .defaults) else {
+    ///
+    /// Phase-5-remediation (post-7.2 gap closure): `config` used to be
+    /// hardcoded to `.defaults` here regardless of what a consumer
+    /// configured via `SkeletonProvider`/per-instance props — every real
+    /// traversal ran against compiled `budgetMs`/`maxShapes`/`defaultRadius`
+    /// constants. `defaultRadius` is architecturally inert on iOS today
+    /// (`leafShapes(for:root:source:ctx:)` in `AutoskeletonSensor.swift`
+    /// always resolves via `view.layer.cornerRadius` directly — no
+    /// degradation ladder/fallback rung exists on this platform), so it is
+    /// threaded through anyway for honesty end-to-end, but `budgetMs`/
+    /// `maxShapes` are the fields with an observable effect here (a
+    /// tightened `maxShapes` visibly truncates the emitted shape count via
+    /// `AutoskeletonTraversalContext.reserveCapacity`).
+    func computeWireArray(view: UIView, cacheKey: String, config: AutoskeletonGetShapesConfig) -> [Double]? {
+        let options = AutoskeletonSensorOptions(
+            hints: AutoskeletonEmptyHintRegistry(),
+            budgetMs: config.budgetMs,
+            maxShapes: config.maxShapes,
+            defaultRadius: config.defaultRadius,
+            defaultLineHeight: AutoskeletonSensorOptions.defaults.defaultLineHeight,
+            collectDebugSidecars: config.collectDebugSidecars
+        )
+        guard let measured = sensor.measure(root: view, options: options) else {
             return nil
         }
         let wire = Self.encodeWireArray(measured.shapes)
@@ -89,8 +110,21 @@ public final class AutoskeletonModuleBridge: NSObject {
         return wire
     }
 
-    @objc public func getShapes(view: UIView?, cacheKey: String) -> [NSNumber] {
-        guard let view = view, let wire = computeWireArray(view: view, cacheKey: cacheKey) else {
+    @objc public func getShapes(
+        view: UIView?,
+        cacheKey: String,
+        defaultRadius: Double,
+        budgetMs: Double,
+        maxShapes: Double,
+        collectDebugSidecars: Bool
+    ) -> [NSNumber] {
+        let config = AutoskeletonGetShapesConfig(
+            defaultRadius: CGFloat(defaultRadius),
+            budgetMs: budgetMs,
+            maxShapes: Int(maxShapes),
+            collectDebugSidecars: collectDebugSidecars
+        )
+        guard let view = view, let wire = computeWireArray(view: view, cacheKey: cacheKey, config: config) else {
             return []
         }
         return wire.map { NSNumber(value: $0) }
@@ -107,13 +141,39 @@ public final class AutoskeletonModuleBridge: NSObject {
     /// Objective-C++ rather than exposing `RCTViewRegistry` to Swift, which
     /// would need an additional cross-pod Swift module import) and reading
     /// UIKit geometry both require the main thread. Everything from
-    /// resolution through `getShapes(view:cacheKey:)` runs as ONE unit
-    /// inside `uiThreadDispatcher.runAndWait`, mirroring
+    /// resolution through `getShapes(view:cacheKey:defaultRadius:budgetMs:
+    /// maxShapes:collectDebugSidecars:)` runs as ONE unit inside
+    /// `uiThreadDispatcher.runAndWait`, mirroring
     /// `AutoskeletonModule.computeWireArray`'s dispatch on Android.
-    @objc public func getShapes(reactTag: NSNumber, cacheKey: String, resolveView: @escaping (NSNumber) -> UIView?) -> [NSNumber] {
+    ///
+    /// Config arrives as four primitive scalars, not the codegen'd
+    /// `JS::NativeAutoskeleton::AutoskeletonGetShapesConfig` C++ struct
+    /// itself — that struct is only visible to Objective-C++ (`Autoskeleton.mm`
+    /// decodes it there via `config.defaultRadius()` etc., verified against
+    /// the actual generated `AutoskeletonSpec.h`), not to Swift, which has
+    /// no C++ interop configured in this pod. Flattening to primitives at
+    /// this exact boundary keeps the ObjC++ file thin (pure decode + hop)
+    /// and everything else Swift-testable, matching this file's own
+    /// established `reactTag`/`cacheKey` convention.
+    @objc public func getShapes(
+        reactTag: NSNumber,
+        cacheKey: String,
+        defaultRadius: Double,
+        budgetMs: Double,
+        maxShapes: Double,
+        collectDebugSidecars: Bool,
+        resolveView: @escaping (NSNumber) -> UIView?
+    ) -> [NSNumber] {
         let result: [NSNumber]? = uiThreadDispatcher.runAndWait(timeoutMs: 200) { [weak self] in
             guard let self = self else { return [] }
-            return self.getShapes(view: resolveView(reactTag), cacheKey: cacheKey)
+            return self.getShapes(
+                view: resolveView(reactTag),
+                cacheKey: cacheKey,
+                defaultRadius: defaultRadius,
+                budgetMs: budgetMs,
+                maxShapes: maxShapes,
+                collectDebugSidecars: collectDebugSidecars
+            )
         }
         return result ?? []
     }

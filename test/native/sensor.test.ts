@@ -43,7 +43,43 @@ describe('createNativeSensor (task 5.1)', () => {
     });
     sensor.measure({ reactTag: 77, frameWidth: 375, frameHeight: 800 }, OPTIONS);
     expect(getShapes).toHaveBeenCalledTimes(1);
-    expect(getShapes).toHaveBeenCalledWith(77, OPTIONS.key);
+    expect(getShapes).toHaveBeenCalledWith(77, OPTIONS.key, {
+      defaultRadius: OPTIONS.defaultRadius,
+      budgetMs: OPTIONS.budgetMs,
+      maxShapes: OPTIONS.maxShapes,
+      collectDebugSidecars: OPTIONS.collectDebugSidecars,
+    });
+  });
+
+  // Phase-5-remediation (post-7.2 gap closure): proves the CALLER's real
+  // SensorOptions scalars arrive at the native call verbatim, not compiled
+  // defaults. Uses values that all differ from `OPTIONS` above (and from
+  // the native compiled defaults: Android `budgetMs=2/maxShapes=60/
+  // defaultRadius=0`, iOS `budgetMs=2/maxShapes=60/defaultRadius=0`) so a
+  // regression that silently drops back to defaults cannot pass this
+  // assertion by accident.
+  it('forwards a non-default defaultRadius/budgetMs/maxShapes/collectDebugSidecars set to native getShapes unchanged', () => {
+    const getShapes = vi.fn().mockReturnValue(wireArrayFor([[0, 0, 10, 10, 2]]));
+    const sensor = createNativeSensor({
+      platform: 'android',
+      getNativeModule: () => ({ getShapes, evictShapes: vi.fn() }),
+    });
+    const nonDefaultOptions = {
+      ...OPTIONS,
+      defaultRadius: 16,
+      budgetMs: 4,
+      maxShapes: 1,
+      collectDebugSidecars: true,
+    };
+
+    sensor.measure({ reactTag: 9, frameWidth: 375, frameHeight: 800 }, nonDefaultOptions);
+
+    expect(getShapes).toHaveBeenCalledWith(9, nonDefaultOptions.key, {
+      defaultRadius: 16,
+      budgetMs: 4,
+      maxShapes: 1,
+      collectDebugSidecars: true,
+    });
   });
 
   it('decodes the wire array into a ShapeSnapshot carrying the caller-supplied frame size', () => {

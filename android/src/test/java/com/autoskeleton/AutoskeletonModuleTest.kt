@@ -1,11 +1,13 @@
 package com.autoskeleton
 
 import android.content.Context
+import android.graphics.Color
 import android.view.View
 import android.widget.FrameLayout
 import com.facebook.react.bridge.Callback
 import com.facebook.react.bridge.CatalystInstance
 import com.facebook.react.bridge.JavaOnlyArray
+import com.facebook.react.bridge.JavaOnlyMap
 import com.facebook.react.bridge.JavaScriptContextHolder
 import com.facebook.react.bridge.JavaScriptModule
 import com.facebook.react.bridge.NativeModule
@@ -13,7 +15,11 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.RuntimeExecutor
 import com.facebook.react.bridge.UIManager
 import com.facebook.react.turbomodule.core.interfaces.CallInvokerHolder
+import com.facebook.react.uimanager.BackgroundStyleApplicator
 import com.facebook.react.uimanager.DisplayMetricsHolder
+import com.facebook.react.uimanager.LengthPercentage
+import com.facebook.react.uimanager.LengthPercentageType
+import com.facebook.react.uimanager.style.BorderRadiusProp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -71,6 +77,16 @@ private class FakeReactApplicationContext(context: Context) : ReactApplicationCo
 @RunWith(RobolectricTestRunner::class)
 class AutoskeletonModuleTest {
 
+    /** Mirrors `AutoskeletonSensorOptions.defaults` exactly, as a plain
+     *  `AutoskeletonGetShapesConfig` — the "nothing configured" baseline
+     *  most tests below use so only the field under test diverges. */
+    private val defaultConfig = AutoskeletonGetShapesConfig(
+        defaultRadius = 0f,
+        budgetMs = AUTOSKELETON_DEFAULT_BUDGET_MS,
+        maxShapes = AUTOSKELETON_DEFAULT_MAX_SHAPES,
+        collectDebugSidecars = true,
+    )
+
     private fun moduleFor(view: View, cache: AutoskeletonNativeShapeCache = AutoskeletonNativeShapeCache): AutoskeletonModule {
         DisplayMetricsHolder.initDisplayMetricsIfNotInitialized(RuntimeEnvironment.getApplication())
         val reactContext = FakeReactApplicationContext(RuntimeEnvironment.getApplication())
@@ -81,13 +97,34 @@ class AutoskeletonModuleTest {
         )
     }
 
+    /** Same production `BackgroundStyleApplicator` path
+     *  `AutoskeletonSensorObservabilityTest` already verified produces RN's
+     *  real `CompositeBackgroundDrawable` — whose `getOutline()` never
+     *  reports a radius (plan.md ADR-2 R1 dead end), so a rounded leaf
+     *  reliably falls through to the R3 `defaultRadius` fallback rung this
+     *  task wires from `config`. */
+    private fun roundedLeaf(radiusPx: Float, w: Int = 40, h: Int = 40): FrameLayout {
+        val context = RuntimeEnvironment.getApplication()
+        DisplayMetricsHolder.initDisplayMetricsIfNotInitialized(context)
+        val view = FrameLayout(context)
+        view.layout(0, 0, w, h)
+        BackgroundStyleApplicator.setBackgroundColor(view, Color.RED)
+        BackgroundStyleApplicator.setBorderRadius(
+            view,
+            BorderRadiusProp.BORDER_RADIUS,
+            LengthPercentage(radiusPx, LengthPercentageType.POINT),
+        )
+        view.background?.setBounds(0, 0, view.width, view.height)
+        return view
+    }
+
     @Test
     fun computeWireArrayReturnsNullWhenTheReactTagDoesNotResolveToAView() {
         val fixture = SyntheticHierarchyBuilder.loadFixture("nested-offsets")
         val root = SyntheticHierarchyBuilder.build(fixture)
         val module = moduleFor(root)
 
-        assertNull(module.computeWireArray(999.0, "k"))
+        assertNull(module.computeWireArray(999.0, "k", defaultConfig))
     }
 
     @Test
@@ -97,7 +134,7 @@ class AutoskeletonModuleTest {
         val root = SyntheticHierarchyBuilder.build(fixture)
         val module = moduleFor(root)
 
-        val result = module.computeWireArray(42.0, "cache-key-1")
+        val result = module.computeWireArray(42.0, "cache-key-1", defaultConfig)
 
         assertTrue(result != null)
         assertTrue("expected at least a VERSION slot + one shape (6 slots)", result!!.size >= 6)
@@ -113,12 +150,114 @@ class AutoskeletonModuleTest {
         val root = SyntheticHierarchyBuilder.build(fixture)
         val module = moduleFor(root, cache)
 
-        val result = module.computeWireArray(42.0, "cache-key-2")
+        val result = module.computeWireArray(42.0, "cache-key-2", defaultConfig)
         val cached = cache.get("cache-key-2")
 
         assertTrue(result != null)
         assertTrue(cached != null)
         assertEquals(result!!.toList(), cached!!.toList())
+    }
+
+    // MARK: - Phase-5-remediation (post-7.2 gap closure): config actually
+    // arrives at the real `sensor.measure()` options, proven by the wire
+    // GEOMETRY changing, not merely that the signature accepts a config.
+
+    @Test
+    fun computeWireArrayTruncatesTheShapeCountWhenMaxShapesIsTightened() {
+        AutoskeletonNativeShapeCache.clear()
+        // "ignore-subtree" has multiple real leaves (used by
+        // `AutoskeletonSensorObservabilityTest`'s own shape-cap case for the
+        // same reason) — a fixture whose UNTRUNCATED traversal produces more
+        // than one shape is required to prove truncation actually happened.
+        val fixture = SyntheticHierarchyBuilder.loadFixture("ignore-subtree")
+        val root = SyntheticHierarchyBuilder.build(fixture)
+        val module = moduleFor(root)
+
+        val untruncated = module.computeWireArray(42.0, "untruncated", defaultConfig)!!
+        val untruncatedShapeCount = (untruncated.size - 1) / 5
+        assertTrue(
+            "fixture must produce >1 shape for this test to prove anything; got $untruncatedShapeCount",
+            untruncatedShapeCount > 1,
+        )
+
+        val tightened = module.computeWireArray(
+            42.0,
+            "truncated",
+            defaultConfig.copy(maxShapes = 1),
+        )!!
+
+        assertEquals(1.0, tightened[0], 0.0001) // WIRE_VERSION untouched
+        assertEquals("maxShapes=1 must truncate to exactly one shape (6 slots total)", 6, tightened.size)
+    }
+
+    @Test
+    fun computeWireArrayUsesTheConfiguredDefaultRadiusForAnR3FallbackShape() {
+        AutoskeletonNativeShapeCache.clear()
+        val leaf = roundedLeaf(radiusPx = 8f)
+        val module = moduleFor(leaf)
+        val density = leaf.resources.displayMetrics.density
+
+        val withRadius16 = module.computeWireArray(42.0, "r16", defaultConfig.copy(defaultRadius = 16f))!!
+        val withRadius3 = module.computeWireArray(42.0, "r3", defaultConfig.copy(defaultRadius = 3f))!!
+
+        assertEquals(6, withRadius16.size)
+        assertEquals(6, withRadius3.size)
+        // Slot 5 is the single container shape's `r` (VERSION + x,y,w,h,r).
+        assertEquals(16.0 / density, withRadius16[5], 0.0001)
+        assertEquals(3.0 / density, withRadius3[5], 0.0001)
+    }
+
+    @Test
+    fun computeWireArrayThreadsBudgetMsAndCollectDebugSidecarsIntoTheRealSensorOptions() {
+        // budgetMs = -1 is a deterministic real trigger (any real
+        // traversalMs >= 0 exceeds -1) — same technique
+        // `AutoskeletonSensorObservabilityTest` already uses for the
+        // equivalent Android/iOS assertions. A real traversal against a
+        // -1ms budget truncates to ZERO shapes (the very first
+        // `overBudget()` check trips before any shape is reserved), which
+        // is only reachable if `config.budgetMs` genuinely replaced the
+        // compiled `AutoskeletonSensorOptions.defaults.budgetMs` (2.0) used
+        // before this task.
+        val fixture = SyntheticHierarchyBuilder.loadFixture("nested-offsets")
+        val root = SyntheticHierarchyBuilder.build(fixture)
+        val module = moduleFor(root)
+
+        val result = module.computeWireArray(42.0, "budget", defaultConfig.copy(budgetMs = -1.0))!!
+
+        assertEquals(1, result.size) // VERSION slot only — zero shapes survived the budget
+        assertEquals(1.0, result[0], 0.0001)
+    }
+
+    @Test
+    fun toGetShapesConfigDecodesARealReadableMapVerbatim() {
+        // The real codegen'd parameter type (verified against the actual
+        // generated `NativeAutoskeletonSpec.java`:
+        // `getShapes(double, String, ReadableMap)`) decoded by
+        // `toGetShapesConfig()`. `JavaOnlyMap` is the pure-JVM `ReadableMap`
+        // implementation, safe under Robolectric with no JNI involved
+        // (mirrors `JavaOnlyArray`'s already-established use in
+        // `evictShapesRemovesOnlyTheRequestedKeys` below). `getShapes()`
+        // itself is deliberately NOT exercised here — same reason
+        // `computeWireArray` exists as a separate seam (see this class's
+        // own header comment): `Arguments.createArray()` needs a JNI
+        // native-library loader Robolectric does not provide, confirmed
+        // empirically when this exact case was first written against
+        // `getShapes()` directly and failed with
+        // `ExceptionInInitializerError`/`IllegalStateException`, not a
+        // config-decoding defect.
+        val map = JavaOnlyMap.of(
+            "defaultRadius", 16.0,
+            "budgetMs", 4.0,
+            "maxShapes", 1.0,
+            "collectDebugSidecars", true,
+        )
+
+        val config = map.toGetShapesConfig()
+
+        assertEquals(
+            AutoskeletonGetShapesConfig(defaultRadius = 16f, budgetMs = 4.0, maxShapes = 1, collectDebugSidecars = true),
+            config,
+        )
     }
 
     @Test

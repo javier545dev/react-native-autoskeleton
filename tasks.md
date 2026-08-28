@@ -796,6 +796,100 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       (`pollUntilPixel`) instead of sampling once — the same "wait for a real condition" discipline
       `waitForMount` itself already used, never a widened color tolerance.
 
+- [x] **5.9** Phase-5-remediation (post-7.2 gap closure): thread `budgetMs`/
+      `maxShapes`/`defaultRadius`/`collectDebugSidecars` from JS
+      `SensorOptions` (`SkeletonProvider`/per-instance theme) through
+      `getShapes` into the REAL native `sensor.measure()` options on both
+      platforms — task 7.2 found and flagged (not fixed, out of scope then)
+      that `getShapes(reactTag, cacheKey)` accepted no configuration at all,
+      so every native traversal ran against compiled defaults
+      (`AutoskeletonSensorOptions.defaults` / `.defaults`), leaving
+      REQ-OBS-BUDGET-1's "budgets MUST be configurable" structurally unmet
+      on native and `SkeletonProvider.defaultRadius` — the primary mechanism
+      for rounded Android content per on-device measurement (RN's real
+      `CompositeBackgroundDrawable` never reports a radius via the public
+      `getOutline()` API) — unreachable.
+      **Verified before designing the fix (this session's own explicit
+      instruction)**: the empty hint registry hardcoded on both bridge paths
+      (`AutoskeletonEmptyHintRegistry()`/`.defaults`) means the typed
+      `radius` hint (ADR-2 R0) genuinely does NOT reach the sensor via
+      `getShapes` — confirmed by reading `AutoskeletonSensor.kt`/`.swift`'s
+      `leafShapes`: `nativeID`/`accessibilityIdentifier` is only the LOOKUP
+      KEY into the hint registry OBJECT passed via `SensorOptions.hints`,
+      never an independent channel bypassing it — so an empty registry
+      disables R0 unconditionally, on both platforms, regardless of this
+      task. Sized accordingly: threading real per-node hint DATA end-to-end
+      is a distinct, materially larger feature (`src/native/sensor.ts` and
+      `AutoSkeleton.tsx` both hardcode empty hint functions today; there is
+      no JS-side producer of non-empty hints anywhere in this codebase) and
+      stays explicitly out of this task's scope — flagged as a real, larger
+      follow-up, not silently absorbed.
+      **Config shape**: a per-call `AutoskeletonGetShapesConfig` parameter on
+      `getShapes` (not a separate `setConfig()`), matching ADR-1's own
+      call-frequency discipline (`getShapes` already runs once per cache
+      miss per mount, never per frame, never on list-cell bind —
+      `test/native/wire-bridge.test.ts` keeps asserting that call-count
+      contract unchanged). Carries exactly the SCALAR fields of
+      `SensorOptions` a bridge crossing can represent
+      (`defaultRadius`/`budgetMs`/`maxShapes`/`collectDebugSidecars`);
+      `hints` (live JS functions) cannot cross the boundary and is out of
+      scope per the finding above.
+      **Real second defect found and fixed while wiring Android** (not
+      merely "accept and drop" — genuinely threading the value): Android's
+      R3 fallback radius was ALSO hardcoded independently of
+      `SensorOptions.defaultRadius` — `AutoskeletonModule`'s
+      constructor-injected `radiusResolver` (`AutoskeletonPublicApiRadiusResolver()`,
+      never overridden in production) baked its own `defaultRadius = 0f` at
+      construction time, decoupled from the options object entirely, so
+      even fixing only the options field would NOT have changed the emitted
+      radius. Fixed by constructing the resolver fresh per call from
+      `config.defaultRadius`, mirroring `AutoskeletonSensor.refine()`'s
+      already-established pattern; the dead constructor DI seam (confirmed
+      via repo-wide grep: never exercised in production, never overridden
+      by any test) was removed rather than left as accidental duplicate
+      state.
+      **Codegen verified regenerated, not assumed**: ran
+      `generate-codegen-artifacts.js` standalone and re-ran `pod install`
+      after the TS spec change, then read the actual generated interfaces —
+      Android: `getShapes(double, String, ReadableMap)` (`NativeAutoskeletonSpec.java`);
+      iOS: `getShapes:cacheKey:config:` taking the typed C++ struct
+      `JS::NativeAutoskeleton::AutoskeletonGetShapesConfig` with
+      `defaultRadius()`/`budgetMs()`/`maxShapes()`/`collectDebugSidecars()`
+      accessors (`AutoskeletonSpec.h`) — confirming Android's codegen
+      generates a dynamic `ReadableMap`, not a typed struct, unlike iOS.
+      **Tests prove the value ARRIVES** (wire geometry changes), not merely
+      that the signature accepts it: `test/native/sensor.test.ts` /
+      `wire-bridge.test.ts` assert a non-default config forwards to native
+      `getShapes` verbatim; `AutoskeletonModuleTest.kt` (Android, real
+      `AutoskeletonSensor`/laid-out `View`s via `SyntheticHierarchyBuilder`)
+      asserts `maxShapes=1` truncates a real multi-shape traversal to
+      exactly one shape and a real R3-fallback rounded leaf's wire `r`
+      value changes with `defaultRadius` (16 vs 3, density-normalized);
+      `AutoskeletonModuleBridgeTests.swift` (iOS, real `AutoskeletonSensor`)
+      asserts the same `maxShapes` truncation and a `budgetMs=-1` zero-shape
+      truncation, plus documents (as a passing assertion, not silently)
+      that `defaultRadius` is architecturally inert on iOS — always
+      `view.layer.cornerRadius`, no fallback rung exists there.
+      **Tests**: `vitest run test/native/wire-bridge.test.ts test/native/sensor.test.ts`
+      (16/16, 2 new); Android JUnit `AutoskeletonModuleTest` (via
+      `:autoskeleton:testDebugUnitTest` against the tarball-installed copy,
+      106/106, 4 new); iOS XCTest `Autoskeleton-Unit-Tests` (75/75, 3 new).
+      **Observability**: N/A directly — `collectDebugSidecars` now
+      genuinely reaches native rather than always being forced `false`/`true`
+      by a bridge-layer constant. **Performance**: N/A, same one-call-per-
+      cache-miss-per-mount shape; one extra small marshaled object, no new
+      allocation on the animation path. Deps: 5.1, 5.2, 5.8. Complexity: M.
+      Example app: bare RN (both platforms) — Expo not touched this task
+      (no native Kotlin/Swift/ObjC++ divergence between the two autolinkers
+      for this bridge-only change; `useTemplateMeasurement.ts`'s Phase 6
+      list-cell path already built full `SensorOptions` and benefits from
+      this fix automatically, no separate change needed there).
+      **Harnesses (no regressions)**: vitest 266/266 (was 264, +2), Playwright
+      38/38 unchanged, typecheck clean, Android unit 106/106 (was 102, +4),
+      iOS unit 75/75 (was 72, +3), Android paint gate 3/3 unchanged, Android
+      list gate 5/5 unchanged, iOS visual gate 3/3 (see this task's own
+      session notes below for confirmation run).
+
 ## Phase 6: Virtualized lists (all three sub-cases)
 
 > **Session status (2026-08-28, branch `feat/phase-6-virtualized-lists`)**: 6.1-6.5 DONE on

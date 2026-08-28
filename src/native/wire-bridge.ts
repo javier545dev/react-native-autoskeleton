@@ -14,7 +14,7 @@
 // injectable seam mirroring `AutoskeletonTracing`'s pattern on iOS/Android,
 // so tests can assert it fired without depending on a real profiler.
 
-import type { Spec } from './NativeAutoskeleton';
+import type { AutoskeletonGetShapesConfig, Spec } from './NativeAutoskeleton';
 
 export interface WireBridgeTracing {
   begin(section: string): unknown;
@@ -37,20 +37,27 @@ export interface FetchShapesResult {
   readonly data: Float32Array;
 }
 
-/** Calls `NativeAutoskeleton.getShapes(reactTag, cacheKey)` exactly once and
- *  converts the boxed result into a core-owned `Float32Array` (plan.md
- *  §4.5 rule 2: core never retains a buffer it did not allocate — the
- *  boxed JS array from the bridge is not a buffer at all, so this IS the
- *  copy). Returns `null` when the native module is unavailable (ADR-15) or
- *  the target is not laid out yet (native returns an empty array). */
+/** Calls `NativeAutoskeleton.getShapes(reactTag, cacheKey, config)` exactly
+ *  once and converts the boxed result into a core-owned `Float32Array`
+ *  (plan.md §4.5 rule 2: core never retains a buffer it did not allocate —
+ *  the boxed JS array from the bridge is not a buffer at all, so this IS
+ *  the copy). Returns `null` when the native module is unavailable
+ *  (ADR-15) or the target is not laid out yet (native returns an empty
+ *  array).
+ *
+ *  `config` (Phase-5-remediation, post-7.2 gap closure) is forwarded to the
+ *  native call VERBATIM — this is the entire fix for the bridge's own
+ *  half of the gap; `sensor.ts` is what builds `config` from the caller's
+ *  real `SensorOptions` rather than a compiled default. */
 export function fetchShapesOnce(
   nativeModule: Pick<Spec, 'getShapes'>,
   reactTag: number,
   cacheKey: string,
+  config: AutoskeletonGetShapesConfig,
   tracing: WireBridgeTracing = noopTracing,
 ): FetchShapesResult | null {
   const token = tracing.begin(JSI_SERIALIZATION_TRACE_SECTION);
-  const raw = nativeModule.getShapes(reactTag, cacheKey);
+  const raw = nativeModule.getShapes(reactTag, cacheKey, config);
   tracing.end(JSI_SERIALIZATION_TRACE_SECTION, token);
   if (!raw || raw.length === 0) {
     return null;
