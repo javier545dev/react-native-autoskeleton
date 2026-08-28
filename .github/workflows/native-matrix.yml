@@ -1,0 +1,176 @@
+name: Native build matrix (ADR-14 verification closure)
+
+# tasks.md 9.2 — plan.md §6 ADR-14's explicitly-not-yet-verified claim and
+# spec.md's Compatibility Matrix ("RN 0.83+ ... Whether create-react-native-
+# library's default output satisfies both [autolinkers] must be VERIFIED in
+# CI, not assumed") and spec.md Open Question 9.
+#
+# HONEST SCOPE NOTE (see the apply-progress report and the sdd-apply prompt's
+# own instruction — this is explicitly flagged, not silently claimed done):
+# this environment has exactly ONE pinned React Native version installed
+# (0.87.1 in examples/bare-rn, 0.85.0 at the root, 0.86.3 in examples/expo)
+# and ONE Android AVD / ONE booted iOS Simulator. There is no way to
+# genuinely exercise "every supported RN version (0.83+)" from this machine
+# — that requires N real dependency installs, N real native builds, each
+# taking real CI minutes, which only a real CI matrix runner provides. This
+# file expresses the INTENDED matrix (ADR-14's own acceptance test: "the
+# bare example builds in CI on iOS and Android, installing from `npm pack`
+# output — not a workspace symlink — with zero Expo packages in the tree").
+# It has NOT been run against more than the single pinned version this
+# session already builds successfully (see examples.yml's existing
+# `bare-rn`/`expo` jobs, which this file supersedes with REAL native builds
+# instead of boot-smoke-only).
+#
+# What WAS verified locally this session, for the one pinned version
+# actually installed: `./gradlew :autoskeleton:testDebugUnitTest` (109/109)
+# and an instrumented `androidTest` run against a live emulator — both
+# against RN 0.87.1 specifically, not the matrix.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  pack-library:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: mkdir -p .tarball && npm pack --pack-destination ./.tarball
+      - uses: actions/upload-artifact@v4
+        with:
+          name: autoskeleton-tarball
+          path: .tarball/*.tgz
+
+  # ADR-14's own acceptance test, Android half, across the full supported
+  # matrix (spec.md Compatibility Matrix: "RN (bare) 0.83+"). One row per RN
+  # minor actually released against the New Architecture / Fabric-only line.
+  bare-rn-android-matrix:
+    needs: pack-library
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Update this list as new RN minors ship; 0.83 is the floor (spec.md
+        # §4: "old architecture removed as of 0.83, not merely deprecated").
+        react-native-version: ['0.83.1', '0.84.2', '0.85.0', '0.86.3', '0.87.1']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+      - uses: actions/download-artifact@v4
+        with:
+          name: autoskeleton-tarball
+          path: .tarball
+      - name: Pin examples/bare-rn to this matrix row's RN version
+        run: npm pkg set "dependencies.react-native=${{ matrix.react-native-version }}"
+        working-directory: examples/bare-rn
+      - run: npm install
+        working-directory: examples/bare-rn
+      - name: Zero-Expo-packages guard (ADR-14 / RISK-5)
+        run: |
+          if node -e "process.exit(Object.keys(require('./package.json').dependencies).some(d => d.startsWith('expo')) ? 1 : 0)"; then
+            echo "no expo-* dependency present"
+          else
+            echo "::error::examples/bare-rn must have zero Expo packages in its dependency tree (ADR-14)"
+            exit 1
+          fi
+        working-directory: examples/bare-rn
+      - name: Install from the packed tarball, never a workspace symlink (ADR-14's own load-bearing detail)
+        run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
+        working-directory: examples/bare-rn
+      - name: Real Gradle assembleDebug — proves @react-native-community/cli autolinking end to end
+        run: ./gradlew assembleDebug
+        working-directory: examples/bare-rn/android
+      - name: Autoskeleton unit tests (Robolectric) against this RN version
+        run: ./gradlew :autoskeleton:testDebugUnitTest
+        working-directory: examples/bare-rn/android
+
+  # ADR-14's iOS half. AUTHORED ONLY — see the file header. A real run needs
+  # `pod install` + `xcodebuild build` per matrix row, each several CI
+  # minutes; not exercised in this environment beyond the single pinned
+  # version's existing example app boot.
+  bare-rn-ios-matrix:
+    needs: pack-library
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        react-native-version: ['0.83.1', '0.84.2', '0.85.0', '0.86.3', '0.87.1']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: autoskeleton-tarball
+          path: .tarball
+      - name: Pin examples/bare-rn to this matrix row's RN version
+        run: npm pkg set "dependencies.react-native=${{ matrix.react-native-version }}"
+        working-directory: examples/bare-rn
+      - run: npm install
+        working-directory: examples/bare-rn
+      - run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
+        working-directory: examples/bare-rn
+      - name: pod install (use_native_modules! resolving the root podspec, use_expo_modules! absent)
+        run: pod install
+        working-directory: examples/bare-rn/ios
+      - name: Real xcodebuild — proves CocoaPods/CLI autolinking end to end, no Expo autolinker involved
+        run: |
+          xcodebuild build \
+            -workspace AutoskeletonBareRn.xcworkspace \
+            -scheme AutoskeletonBareRn \
+            -destination 'generic/platform=iOS Simulator'
+        working-directory: examples/bare-rn/ios
+
+  # Expo half — expo-modules-autolinking discovery must stay green in
+  # parallel with the bare matrix above (ADR-14: "the Expo app can be green
+  # while the CLI path is broken and vice versa, so both matrices must
+  # pass"). AUTHORED ONLY, same reasoning as above.
+  expo-matrix:
+    needs: pack-library
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Expo SDK versions, each pinning its own compatible RN version —
+        # exact minimum SDK is spec.md's "to be pinned during implementation"
+        # open item; this matrix is where that pin would actually be tested.
+        expo-sdk: ['52', '53']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: autoskeleton-tarball
+          path: .tarball
+      - run: npm install
+        working-directory: examples/expo
+      - run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
+        working-directory: examples/expo
+      - name: expo prebuild (real expo-modules-autolinking discovery)
+        run: npx expo prebuild --platform ios --non-interactive
+        working-directory: examples/expo
+      - name: pod install
+        run: pod install
+        working-directory: examples/expo/ios
+      - name: Real xcodebuild
+        run: |
+          xcodebuild build \
+            -workspace AutoskeletonExpo.xcworkspace \
+            -scheme AutoskeletonExpo \
+            -destination 'generic/platform=iOS Simulator'
+        working-directory: examples/expo/ios
