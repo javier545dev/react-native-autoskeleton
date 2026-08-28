@@ -52,7 +52,7 @@ waive the budget itself.
 | 4 | Android sensor + radius ladder + tier-1 renderer + debugOverlay | PR 5 | `./gradlew testDebugUnitTest connectedAndroidTest` | `examples/bare-rn` Android build + boot in emulator | Revert `android/**`; R2 rung individually feature-flaggable to R0/R1/R3 without reverting the PR |
 | 5 | `getShapes` Turbo Module bridge + tier-2 Skia renderer + Expo Go guidance | PR 6 | `vitest run test/native/wire-bridge.test.ts && xcodebuild test && ./gradlew connectedAndroidTest` | `examples/bare-rn` + `examples/expo`, both native builds | Revert `src/native/**`; tier-1 renderers (PR 4/5) still function since tier-2 is opt-in |
 | 6 | Virtualized lists (3 sub-cases) + recycling safety | PR 7 | native E2E: 50-cell scroll + recycle-stress suite | `examples/bare-rn` FlashList screen | Revert `src/native/list/**`; whole-screen `AutoSkeleton` (PR 6) unaffected |
-| 7 | Theming interops (Uniwind/NativeWind) | PR 8 | `vitest run test/packaging/interop-exports.test.ts` + native E2E | `examples/expo` themed screen | Revert `src/interop/**`; default entries untouched (verified by 7.4) |
+| 7 | Theming interops (Uniwind — sole interop, NativeWind excluded per ADR-17) | PR 8 | `vitest run test/packaging/interop-exports.test.ts` + native E2E | `examples/expo` themed screen | Revert `src/interop/**`; default entries untouched (verified by 7.4/7.5) |
 | 8 | SSR capture CLI + `@media` bundle + hydration bridge + web handoff | PR 9 | `vitest run cli` + `playwright test test/ssr` | `examples/next` build + serve, JS-disabled load | Revert `cli/**`, `src/web/ssr/**`; client runtime (PR 3) unaffected |
 | 9 | CI benchmarks + ADR-14 build-matrix gate + docs | PR 10 | `node benchmarks/run.js` | full CI matrix across all four example apps | Revert `benchmarks/**`, docs; no runtime code depends on this PR |
 
@@ -992,7 +992,7 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       (real, existing native-consumer proof); Vite (temporary web-consumer proof, both
       directions).
 
-## Phase 7: Theming interops (Uniwind / NativeWind)
+## Phase 7: Theming interops (Uniwind — sole interop; NativeWind excluded, see 7.5/ADR-17)
 
 - [x] **7.1** RED→GREEN `--skl-base`/`--skl-highlight` CSS-variable contract wired into 2.2's
       renderer, Tailwind v4 `@theme` cascade, dark mode via cascade with no prop change
@@ -1091,6 +1091,19 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
 - [x] **7.3** RED→GREEN `autoskeleton/nativewind` subpath export — `src/interop/nativewind.ts`,
       `cssInterop` equivalent mapping (current/stable v4; v5 migration documented as a future
       risk, not a v1 blocker).
+
+      **STATUS UPDATE (2026-08-28): OUT OF SCOPE BY MAINTAINER DECISION — see task 7.5 / ADR-17,
+      NOT "DoD unmet".** This is a different state from the "native E2E scenario in the DoD is
+      UNMET" line below, and the record should say which is true: at the time this task was
+      completed, the native E2E genuinely did not run (DoD unmet, for the reasons documented
+      below). Independently, and afterward, the maintainer decided — based on the reason-1
+      finding below (NativeWind 4.2.6 hard-requires Tailwind v3, verified from source,
+      unconditional and not an environment artifact) — that NativeWind support is a non-goal for
+      this project's Tailwind-v4 theming story, regardless of whether the toolchain deadlock
+      below could eventually be worked around. `src/interop/nativewind.ts` and the
+      `autoskeleton/nativewind` subpath export have been REMOVED (task 7.5); `uniwind` is the
+      sole theming interop. The investigation below is preserved verbatim as the evidence trail
+      for that decision — it is the reason the decision is good, not a gap being covered up.
       **Ecosystem correction (verified from source)**: the "NativeWind doesn't work in Expo Go"
       claim traces to NativewindUI, a separate third-party component kit — NativeWind CORE
       (what this file integrates with) has zero native code. Confirmed `cssInterop` is real,
@@ -1210,6 +1223,62 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       **Performance**: NFR-6 — re-ran `test/packaging/web-bundle.test.ts` (existing 2.5 gate):
       unaffected, 7674 B gzip (budget 8192 B), since interops are never in the web entry's
       transitive graph. Deps: 7.3, 5.6. Complexity: S. Example app: none/unit-only.
+- [x] **7.5** Remove the NativeWind theming interop — maintainer decision (ADR-17), reaffirmed
+      2026-08-28: uniwind is the sole theming interop. Not a bugfix, not a DoD-unmet cleanup — a
+      deliberate non-goal, recorded as such rather than silently deleted.
+      **Removed**: `src/interop/nativewind.ts`; `package.json` `exports['./nativewind']`,
+      `devDependencies.nativewind`, `peerDependencies.nativewind`,
+      `peerDependenciesMeta.nativewind`; the NativeWind row of
+      `test/packaging/interop-exports.test.ts`'s `describe.each` (the `./uniwind` row and every
+      other assertion in that file untouched). `exports['./uniwind']` and `exports['.']`'s
+      per-condition `types` nesting (G.4's fix shape) are unchanged — no flat top-level
+      `exports['.'].types` was reintroduced.
+      **Non-vacuousness re-proof (this task's explicit ask)**: repeated 7.4's plant-and-revert
+      experiment against the SURVIVING assertion after removal, not just trusted the original
+      proof. Temporarily added `export { ThemedAutoSkeleton as __TASKS_7_5_PROOF__ } from
+      './interop/uniwind';` to `src/index.native.ts`, rebuilt (`npm install` → `bob build` via
+      `prepare`), re-ran `test/packaging/interop-exports.test.ts` — it correctly FAILED, citing
+      the exact offending specifier (`./interop/uniwind.js`) in its own assertion message:
+      `"lib/module/index.native.js's transitive import graph references the theming interop
+      directory: ./interop/uniwind.js"`. Reverted the throwaway export, rebuilt, re-ran, confirmed
+      GREEN again (5/5) with `git diff --stat src/index.native.ts` empty afterward — byte-identical
+      to the committed state. The assertion that "default entries have zero transitive dependency
+      on the interop module" remains genuinely falsifiable after the removal, not merely
+      un-deleted.
+      **Comments updated** (no behavior change) in `src/core/theme-override.ts`,
+      `src/core/theme-override.test.ts`, `src/native/AutoSkeleton.tsx`, and
+      `examples/expo/metro.config.js` to drop stale NativeWind references and point at uniwind as
+      the sole interop / this task / ADR-17.
+      **Documented as an explicit non-goal**, not deleted from the record: `spec.md` §1.9 (new
+      NON-GOAL block quoting the measured `isV3` throw) and §5 Out of Scope; `docs/product-brief.md`
+      §9 (new "NON-GOAL: NativeWind" subsection) and §13 Out of scope; `plan.md` new ADR-17
+      ("Theming interop: uniwind only; NativeWind is an explicit non-goal"), covering: the
+      measured reason (Tailwind v3 hard requirement, quoted, with file path); that a NativeWind
+      user is a Tailwind v3 user while this project's story is v4; that `uniwind`/`nativewind`
+      could never share one `node_modules` tree anyway (conflicting Tailwind majors); and that
+      task 7.3's toolchain-deadlock finding is corroborating evidence, not the primary reason.
+      Task 7.3 itself is NOT rewritten — its investigation is preserved verbatim as the evidence
+      trail — but a STATUS UPDATE line was added stating plainly that it is now out of scope by
+      maintainer decision, distinct from "DoD unmet" (which remains true of the historical
+      native-E2E attempt, and is left standing).
+      spec.md's compatibility matrix (§4) was already corrected earlier the same day (commit
+      `6781367`, prior to this task) with the NativeWind-v3/uniwind-v1.11.0 facts; this task
+      reconciles with that correction (appends an EXCLUDED status line to the existing NativeWind
+      row) rather than duplicating or contradicting it.
+      **Tests**: full suite re-verified after removal — `vitest run` 264/264 (was 266/266; -2 is
+      expected and accounted for: `src/lint/banned-css-properties.test.ts` is parametrized
+      per-source-file and lost one row for the deleted `nativewind.ts`, and
+      `interop-exports.test.ts`'s `describe.each` lost its NativeWind row — no other test file's
+      count changed). `playwright test` 38/38, unchanged. `npm run typecheck` clean, unchanged.
+      Non-vacuity re-proof above. **Observability**: N/A. **Performance**: N/A — NFR-6 unaffected
+      (NativeWind was never in the web entry's transitive graph). Deps: 7.4. Complexity: S.
+      Example app: `examples/expo` — confirmed no `nativewind` reference in its `package.json` or
+      installed `node_modules` (it was never actually installed there; only mentioned in a
+      comment, now updated).
+      **No regressions, full baseline re-verified this task**: vitest 264/264 (accounted-for -2
+      from file deletion, see above), Playwright 38/38, typecheck clean. Android/iOS native unit
+      and gate suites NOT re-run — zero android/, ios/, or native Kotlin/Swift source touched
+      (JS/TS and docs only).
 
 ## Phase 8: SSR — build-time snapshot capture CLI + `@media`-bucketed CSS bundle
 

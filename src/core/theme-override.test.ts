@@ -3,11 +3,11 @@
 // tasks.md 7.2 (spec REQ-THEME-2): pure per-instance theme-override merge
 // logic used by the native `<AutoSkeleton>`'s `shimmerBaseColor`/
 // `shimmerHighlightColor`/`defaultRadius` props (7.2) — the mapping TARGET
-// the theming interops (`src/interop/uniwind.ts`, `src/interop/
-// nativewind.ts`) write onto. Kept in `src/core/` (ADR-4: platform-agnostic,
-// no styling-system awareness) so the merge itself is genuinely unit
-// testable without any native rendering harness, rather than only provable
-// via native E2E.
+// the theming interop (`src/interop/uniwind.ts`; uniwind is the sole theming
+// interop — see tasks.md 7.5) writes onto. Kept in `src/core/` (ADR-4:
+// platform-agnostic, no styling-system awareness) so the merge itself is
+// genuinely unit testable without any native rendering harness, rather than
+// only provable via native E2E.
 
 import { describe, expect, it } from 'vitest';
 import { applyThemeOverride } from './theme-override';

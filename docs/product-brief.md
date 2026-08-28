@@ -38,7 +38,8 @@ Measured against `react-native-auto-skeleton`, `react-native-skeleton-placeholde
    skeleton from the first frame.
 3. Virtualized lists (FlatList/FlashList) as a first-class case, not an accident.
 4. Built-in observability and debug tooling (review-blocking — see section 7).
-5. First-class Tailwind v4 / Uniwind / NativeWind theming.
+5. First-class Tailwind v4 / Uniwind theming (NativeWind explicitly excluded as a non-goal —
+   see §9).
 6. SSR + Suspense on web.
 
 `auto-skeleton-react-and-native` (npm v1.0.3) is a direct competitor with near-identical
@@ -159,8 +160,8 @@ do not contradict them without new evidence.
     heuristics, and the `Sensor` / `Renderer` / `ShapeStore` contracts.
   - `src/native/` — JSI sensor, Skia/Reanimated renderer, native shimmer fallback.
   - `src/web/` — DOM sensor, CSS renderer.
-  - Optional tree-shakeable subpath exports: `autoskeleton/uniwind`,
-    `autoskeleton/nativewind`.
+  - Optional tree-shakeable subpath export: `autoskeleton/uniwind` — the sole theming
+    interop (§9; NativeWind is an explicit non-goal).
 - `@shopify/react-native-skia` and `react-native-reanimated` are OPTIONAL peer
   dependencies. The default native mode works without them (native fallback renderer).
   They are never imported on web.
@@ -339,25 +340,44 @@ progressive-refinement measurement — the list helper's sizing story must accou
 
 ## 8. Hints and API
 
-- Hints via TYPED PROPS, never by parsing className (Uniwind/NativeWind transform
-  className at build time): `lines`, `radius`, `ignore`. Core translates them to the
-  per-platform channel (nativeID on native, `data-*` on DOM).
+- Hints via TYPED PROPS, never by parsing className (Uniwind transforms className at
+  build time): `lines`, `radius`, `ignore`. Core translates them to the per-platform
+  channel (nativeID on native, `data-*` on DOM).
 - Minimum public API:
   `<AutoSkeleton isLoading skeletonKey animation="shimmer|pulse|none" delay onMetrics debugOverlay>`,
   `<AutoSkeleton.Ignore>`, list helpers, and `SkeletonProvider` for global defaults
   (colors, speed, shared clock).
 - `delay` (ms) to avoid skeleton flash on fast loads.
 
-## 9. Theming — Tailwind v4 / Uniwind / NativeWind
+## 9. Theming — Tailwind v4 / Uniwind
 
 - CSS-variable contract: `--skl-base`, `--skl-highlight` (dark mode by cascade on web;
   definable with Tailwind v4 `@theme`).
 - Native: a `withUniwind` interop mapping className to skeleton props
   (`backgroundColor -> shimmerBaseColor`, `color -> shimmerHighlightColor`,
-  `borderRadius -> defaultRadius`); the `cssInterop` equivalent for NativeWind. Both as
-  optional subpath exports.
+  `borderRadius -> defaultRadius`), as an optional subpath export
+  (`autoskeleton/uniwind`) — the sole theming interop.
 - The sensor is agnostic to the styling system (it reads rendered frames / computed
   styles). Document this explicitly.
+
+### NON-GOAL: NativeWind (maintainer decision, 2026-08-28)
+
+NativeWind is explicitly NOT supported, and this is a verified incompatibility, not
+neglect:
+
+- **Measured reason**: NativeWind 4.2.6 hard-requires Tailwind CSS v3. Verified
+  independently from the published tarball: `dist/metro/tailwind/index.js` and
+  `src/metro/tailwind/index.ts` each throw `"NativeWind only supports Tailwind CSS v3"`
+  at two call sites, gated on an `isV3` check.
+- This project's entire theming story is Tailwind v4 (`@theme`, CSS custom properties,
+  cascade-driven dark mode — see this section above). A NativeWind user is, by
+  construction, a Tailwind v3 user; our story is v4. The two are incompatible at the
+  root.
+- `uniwind` and `nativewind` also cannot share one `node_modules` tree — conflicting
+  Tailwind majors — so the two interops could never have coexisted in one app anyway,
+  independent of this decision.
+- See `spec.md` §1.9 / §4 / §5, and `plan.md` ADR-17 for the full evidence trail and
+  the architectural decision record.
 
 ## 9b. Image loading pipeline: skeleton -> placeholder -> image
 
@@ -482,6 +502,9 @@ as done unless it emits its metrics and instrumentation.
 - Disk persistence of the cache.
 - Per-corner border-radius detection on Android.
 - Vue/Svelte/other frameworks.
+- **NativeWind theming interop (maintainer decision, 2026-08-28)** — verified
+  incompatible with this project's Tailwind-v4 theming story (§9). `uniwind` is the
+  sole theming interop.
 
 ## 14. Required spikes (unresolved, must not be presented as settled)
 

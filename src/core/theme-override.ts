@@ -1,12 +1,13 @@
 // src/core/theme-override.ts
 //
 // tasks.md 7.2 (spec REQ-THEME-2): pure per-instance theme-override merge —
-// the target the theming interops (`src/interop/uniwind.ts`, `src/interop/
-// nativewind.ts`) map className-resolved values onto, via the native
-// `<AutoSkeleton>`'s `shimmerBaseColor`/`shimmerHighlightColor`/
-// `defaultRadius` props. Lives in `src/core/` (ADR-4: zero platform-specific
-// imports, zero styling-system awareness) — this module has no idea a
-// styling system exists; it only merges plain data.
+// the target the theming interop (`src/interop/uniwind.ts`; uniwind is the
+// sole theming interop — see tasks.md 7.5) maps className-resolved values
+// onto, via the native `<AutoSkeleton>`'s `shimmerBaseColor`/
+// `shimmerHighlightColor`/`defaultRadius` props. Lives in `src/core/`
+// (ADR-4: zero platform-specific imports, zero styling-system awareness) —
+// this module has no idea a styling system exists; it only merges plain
+// data.
 
 import type { SkeletonTheme } from './contracts';
 

@@ -144,11 +144,11 @@ export interface AutoSkeletonProps {
   readonly skeletonOnRefresh?: boolean;
   readonly onSuccessorPainted?: () => void;
   readonly expectsPlaceholder?: boolean;
-  /** tasks.md 7.2/7.3 (spec REQ-THEME-2): per-instance theme overrides,
-   *  layered on top of (never replacing) `SkeletonProvider`'s context theme
-   *  via `applyThemeOverride` (`core/theme-override.ts`). These are the
-   *  EXACT prop names the theming interops (`autoskeleton/uniwind`,
-   *  `autoskeleton/nativewind`) map a resolved `className`'s
+  /** tasks.md 7.2 (spec REQ-THEME-2): per-instance theme overrides, layered
+   *  on top of (never replacing) `SkeletonProvider`'s context theme via
+   *  `applyThemeOverride` (`core/theme-override.ts`). These are the EXACT
+   *  prop names the theming interop (`autoskeleton/uniwind` — the sole
+   *  theming interop, see tasks.md 7.5) maps a resolved `className`'s
    *  `backgroundColor`/`color`/`borderRadius` onto — a plain consumer can
    *  also set them directly without any interop at all. */
   readonly shimmerBaseColor?: string;
