@@ -312,7 +312,7 @@ plan.md §7 preamble).
 
 ## Phase 4: Android sensor + fallback renderer + Android `debugOverlay`
 
-- [ ] **4.1** RED→GREEN `android/.../AutoskeletonSensor.kt` — traversal over `ViewGroup`s with
+- [x] **4.1** RED→GREEN `android/.../AutoskeletonSensor.kt` — traversal over `ViewGroup`s with
       `offsetDescendantRectToMyCoords` (scrollX/scrollY subtraction), leaf detection
       (`ReactTextView`/`ReactImageView`/`ReactEditText` — **confirmed present in RN 0.87.1**, spec
       Open Question 4 already resolved by this ground truth), container rule, `Ignore` via
@@ -325,7 +325,7 @@ plan.md §7 preamble).
       name ≤127 chars, same-thread nesting, asserted by a dedicated test). **Performance**: NFR-3
       local guard here; authoritative gate is 9.1. Deps: 1.9, 0.4. Complexity: L. Example app:
       bare RN (CLI autolinking proof) + Expo.
-- [ ] **4.2** RED→GREEN ADR-2 radius ladder rungs R0/R1/R3 (public-API only) —
+- [x] **4.2** RED→GREEN ADR-2 radius ladder rungs R0/R1/R3 (public-API only) —
       `AutoskeletonRadiusResolver.kt`: R0 typed `radius` hint via `nativeID`; R1
       `drawable.getOutline(outline)` on a copy, use `outline.getRadius()` when ≥0; R3
       `SkeletonProvider.defaultRadius` with `r=-1` and `radius-unavailable` flag. **Resolves spec
@@ -336,10 +336,15 @@ plan.md §7 preamble).
       RN behavior so a future RN fix is caught, plan.md §7.2b); R3 fallback + flag emission;
       `radiusSourceHistogram` correctness for every rung — **mandatory in every rung** per this
       session's brief. **Observability**: `radiusSourceHistogram` for `hint`/`outline`/`default`;
-      dev warning when `default` exceeds 30% of a screen's shapes. **Performance**: N/A directly —
+      dev warning when `default` exceeds 30% of a screen's shapes. **CORRECTED (session
+      2026-08-27, G.3)**: that dev-warning claim was NOT actually delivered by this task — only the
+      `radiusSourceHistogram` DATA existed; no `Log.w`/warning-emission code path existed anywhere
+      in `android/` until task G.3 implemented and wired `AutoskeletonObservability.kt` into the
+      real `AutoskeletonSensor.measure()` traversal. See G.3 below for the real deliverable, its
+      in-context tests, and why this line went unnoticed for three phases. **Performance**: N/A directly —
       resolution runs inside 4.1's already-budgeted traversal. Deps: 4.1. Complexity: M. Example
       app: bare RN + Expo.
-- [ ] **4.3** **R2 on-device validation task (gated, proposal not fact).** Raster corner probe
+- [x] **4.3** **R2 on-device validation task (gated, proposal not fact).** Raster corner probe
       `Sensor.refine()`: copy `getConstantState().newDrawable().mutate()`, draw into a
       library-owned 48×48 `ARGB_8888` `Bitmap`, diagonal alpha-transition scan, memoized by
       `(ConstantState identity, bounds)`, capped `maxProbesPerTraversal=8`.
@@ -354,7 +359,7 @@ plan.md §7 preamble).
       on unclassifiable drawables. **Performance**: runs off the interaction frame in `refine()`,
       never counted against NFR-3 — asserted by a test proving R2 never executes synchronously
       inside `measure()`. Deps: 4.2. Complexity: L. Example app: bare RN + Expo.
-- [ ] **4.4** RED→GREEN `android/.../AutoskeletonRendererTier1.kt` — single draw pass, `Path`
+- [x] **4.4** RED→GREEN `android/.../AutoskeletonRendererTier1.kt` — single draw pass, `Path`
       union + `canvas.clipPath`, `LinearGradient` shader created ONCE and translated via
       `Matrix.setTranslate`+`setLocalMatrix` (rebuilding per frame forbidden),
       `postInvalidateOnAnimation` via `Choreographer`, no view-state mutation inside
@@ -365,18 +370,110 @@ plan.md §7 preamble).
       **Observability**: `Trace.beginSection`/`endSection` around draw. **Performance**: NFR-1
       (60 fps), NFR-2 (blocked-thread resilience), NFR-5 (zero per-frame allocation — shader-reuse
       test is the direct proof). Deps: 4.2. Complexity: L. Example app: bare RN + Expo.
-- [ ] **4.5** RED→GREEN Android `debugOverlay` — outline per shape, index/source/hit-miss badge,
+- [x] **4.5** RED→GREEN Android `debugOverlay` — outline per shape, index/source/hit-miss badge,
       **plus the ADR-2-mandated radius-rung badge**, dev-only.
       **Tests**: JUnit/Robolectric — overlay draw count == shape count with correct annotations
       including the rung badge. **Observability**: this task IS the Android REQ-OBS-OVERLAY-1
       deliverable plus ADR-2's per-shape rung badge requirement. **Performance**: N/A, dev-only,
       stripped from release (asserted by a release-build test). Deps: 4.4. Complexity: M. Example
       app: bare RN + Expo.
-- [ ] **4.6** RED→GREEN Android a11y — `importantForAccessibility="no-hide-descendants"` while
+- [x] **4.6** RED→GREEN Android a11y — `importantForAccessibility="no-hide-descendants"` while
       `isLoading`, reduce-motion via animator-duration-scale detection degrading to pulse/static.
       **Tests**: JUnit — REQ-A11Y-1/REQ-A11Y-3 scenarios. **Observability**: REQ-A11Y-2
       announcement verified via `AccessibilityEvent` assertion. **Performance**: N/A. Deps: 4.4.
       Complexity: S. Example app: bare RN + Expo.
+
+## Observability gap closure (session 2026-08-27, post-Phase-4 — outside the 0–9 phase numbering)
+
+Discovered via an explicit audit of `src/`: `checkBudgets`/`emitBudgetWarnings` (task 1.6's own
+deliverable) were never called from any production code path — only exercised by
+`metrics.test.ts`. REQ-OBS-BUDGET-1 was therefore NOT actually met despite task 1.6 being marked
+complete: a formatter unit-tested in isolation but never invoked does not satisfy an emission
+requirement. `spec.md` REQ-OBS-BUDGET-1 was amended to state this explicitly. Separately, a new
+REQ-OBS-BUDGET-2 (the ADR-2/RISK-1-mandated radius-fallback-share warning) did not exist in any
+form — no types, no logic, no tests — despite task 4.2's Observability line already claiming "dev
+warning when default exceeds 30% of a screen's shapes." That claim was never implemented; only
+`radiusSourceHistogram` DATA existed.
+
+- [x] **G.1** RED→GREEN wire `checkBudgets`/`emitBudgetWarnings` into the real web measurement
+      path (`src/web/AutoSkeleton.tsx`'s `useColdMeasurement`), gated
+      `process.env.NODE_ENV !== 'production'` at the platform layer per ADR-4 (core stays
+      platform-agnostic). Discovered and worked around a real architectural constraint:
+      `dom-sensor.ts`'s `pushShape` truncates AT `maxShapes`, so a completed traversal's own
+      snapshot can never literally report a shape count `> maxShapes` — the wiring uses the
+      sensor's real `shape-cap-reached` degradation flag as the authoritative signal instead of a
+      naive count comparison against already-capped data.
+      **Tests**: `test/web/auto-skeleton.spec.ts` — 3 new Playwright cases driving the REAL
+      component + REAL DOM sensor (shape-cap truncation via `maxShapes:1`, `budgetMs:-1`
+      deterministic time-budget trip, and a no-false-positive negative case). **Observability**:
+      this task closes REQ-OBS-BUDGET-1 for real — a developer running the example app now
+      genuinely sees the warning. **Performance**: N/A, dev-only, gated out of production builds.
+      Deps: 1.6, 2.3. Complexity: S. Example app: Vite (any web consumer).
+- [x] **G.2** RED→GREEN implement REQ-OBS-BUDGET-2 (added to `spec.md` §2.4 this session) —
+      `checkRadiusFallback`/`formatRadiusFallbackWarning`/`emitRadiusFallbackWarning` in
+      `src/core/metrics.ts` (default 30% threshold, configurable via
+      `SkeletonProvider.radiusFallbackShare`), wired into the same `useColdMeasurement` path using
+      the real sensor's `radiusSources` dev sidecar.
+      **Tests**: `metrics.test.ts` — 8 new pure-function cases (18/20 exceeds, 6/20 exactly-at-
+      threshold does not fire, undefined sidecar, emission gate). `auto-skeleton.spec.ts` — 1 new
+      Playwright case proving the real wiring stays silent against real (always-`measured`-on-web)
+      traversal data even at an aggressive `radiusFallbackShare:0`. **Platform-scope finding**:
+      `dom-sensor.ts`'s `leafShape` only ever assigns `radiusSource: 'measured' | 'hint'` — a
+      genuine positive trigger (`'default'` rung) is structurally impossible on web, so the
+      positive-fire path is validated at the pure-function layer, which is the correct and only
+      layer capable of exercising it on this platform. **Observability**: this task IS the
+      REQ-OBS-BUDGET-2 deliverable on web. **Performance**: N/A, dev-only. Deps: G.1, 4.2.
+      Complexity: S. Example app: Vite (any web consumer).
+- [x] **G.3** RED→GREEN wire the equivalent REQ-OBS-BUDGET-1/REQ-OBS-BUDGET-2 warnings on iOS and
+      Android, from the REAL traversal path on each platform — `AutoskeletonSensor.measure()` is
+      that path on both (no higher-level JS-triggered call site exists yet; that is Phase 5's job,
+      and this task does NOT need it, confirmed: a same-process `Log.w`/`os_log` write needs no JS
+      round-trip). New `AutoskeletonObservability.kt`/`AutoskeletonObservability.swift` — pure
+      `checkBudgets`/`checkRadiusFallback`/formatters ported 1:1 from `src/core/metrics.ts`'s
+      thresholds and `>`-not-`>=` semantics (2ms budget, 60-shape cap, 30% radius-fallback share),
+      plus an injectable `AutoskeletonWarningEmitter` seam (mirrors `AutoskeletonTracing`'s
+      pattern: `Log.w`/`Logger.warning` in production, a recording double in tests). Wired into
+      `AutoskeletonSensor.measure()` on both platforms, reusing the SAME `shape-cap-reached`-flag
+      -> `maxShapes+1` lower-bound trick G.1 established on web (a completed, capped traversal can
+      never literally report a count `>` maxShapes).
+      **Android dev-gate**: runtime `ApplicationInfo.FLAG_DEBUGGABLE` check inside `measure()`
+      (the mechanism task 4.5 established for the debug overlay — a published AAR is a single
+      already-compiled variant, so a compile-time strip is not available to it).
+      **iOS dev-gate**: `#if DEBUG` around the emission call site in `measure()` (task 3.3's
+      mechanism). Scoped narrower than 3.3's whole-type strip: the warning logic is a lightweight
+      logging seam like `AutoskeletonTracing` (always compiled, always testable), not a full UI
+      subsystem — only the call site inside `measure()` is compile-time-gated, so a Release build
+      never invokes it.
+      **iOS radius-fallback claim VERIFIED this session (previously stated as unverified)**:
+      inspected `AutoskeletonSensor.swift` directly — `radiusSource` is unconditionally `.measured`
+      in `leafShapes` (there is no ladder; `layer.cornerRadius` always returns a concrete value).
+      There is NO code path anywhere in the iOS sensor that ever assigns `.defaultValue`. The
+      REQ-OBS-BUDGET-2 positive-fire branch is therefore PROVABLY UNREACHABLE via any real `UIView`
+      traversal on iOS — not "rare", genuinely impossible by construction, same category of finding
+      as web's G.2 result. The iOS wiring is DEFENSIVE (matches ADR-2: "iOS reports the same
+      histogram so consumers see Android degradation instead of guessing"); its positive-fire
+      branch is validated at the pure-function layer only, the sole layer that can exercise it here.
+      **Tests, all driving the REAL sensor through a REAL traversal, never a formatter in
+      isolation** (the brief's explicit acceptance criterion): Android —
+      `AutoskeletonSensorObservabilityTest.kt` (5 cases: real time-budget trip via `budgetMs=-1`;
+      real shape-cap trip via `maxShapes=1`; a REAL radius-fallback positive fire built from 10 real
+      `View`s through the REAL `AutoskeletonPublicApiRadiusResolver` R0/R1/R3 ladder — 8 rounded
+      unhinted leaves resolve `DEFAULT`, 2 hinted leaves resolve `HINT`, genuinely 80% > 30%; a
+      no-false-positive case with real square-background `OUTLINE` leaves; a dev-gate suppression
+      case proving `FLAG_DEBUGGABLE=false` silences a real trip) plus
+      `AutoskeletonObservabilityTest.kt` (10 pure-function cases mirroring `metrics.test.ts`,
+      including the exactly-at-30%-does-NOT-fire edge case). iOS —
+      `AutoskeletonSensorObservabilityTests.swift` (4 cases: real time-budget and shape-cap trips;
+      a real-traversal radius-fallback silence proof even at an aggressive `radiusFallbackShare: 0`,
+      mirroring web G.2's Playwright case; a no-false-positive case) plus
+      `AutoskeletonObservabilityTests.swift` (10 pure-function cases, the ONLY layer that exercises
+      the positive radius-fallback branch on iOS). **Corrects task 4.2's Observability claim**
+      ("dev warning when default exceeds 30% of a screen's shapes") in place, above — no such
+      warning existed in the shipped Android code before this task; only the histogram-feeding data
+      did. **Observability**: this task IS the REQ-OBS-BUDGET-1/2 deliverable on iOS and Android —
+      a developer running either native example app now genuinely sees the warning.
+      **Performance**: N/A, dev-only, gated out of Release/non-debuggable builds on both platforms.
+      Deps: 4.2, 3.1. Complexity: S–M. Example app: bare RN (both platforms).
 
 ## Phase 5: Bridge (`getShapes` Turbo Module, ADR-1) + Skia/Reanimated tier-2 renderer
 

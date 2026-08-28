@@ -1,13 +1,30 @@
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import type { Platform, RadiusSourceHistogram, RendererKind, SkeletonMetrics } from './types';
+import { RADIUS_SOURCES } from './types';
 import {
   DEFAULT_BUDGET_MS,
   DEFAULT_MAX_SHAPES,
+  DEFAULT_RADIUS_FALLBACK_SHARE,
   checkBudgets,
+  checkRadiusFallback,
   emitBudgetWarnings,
+  emitRadiusFallbackWarning,
   formatBudgetWarning,
+  formatRadiusFallbackWarning,
   formatShapeCapWarning,
 } from './metrics';
+
+/** Builds a `radiusSources` dev sidecar with `defaultCount` shapes resolved
+ *  via the `default` rung and the remainder via `outline` — mirrors what a
+ *  real sensor writes (index-aligned `Uint8Array`, `RADIUS_SOURCES.indexOf`). */
+function buildRadiusSources(defaultCount: number, otherCount: number): Uint8Array {
+  const defaultIndex = RADIUS_SOURCES.indexOf('default');
+  const outlineIndex = RADIUS_SOURCES.indexOf('outline');
+  return Uint8Array.from([
+    ...Array<number>(defaultCount).fill(defaultIndex),
+    ...Array<number>(otherCount).fill(outlineIndex),
+  ]);
+}
 
 // Task 1.6 (tasks.md Phase 1): this module emits onMetrics/REQ-OBS-BUDGET-1
 // warnings — this task IS the observability deliverable.
@@ -62,6 +79,65 @@ describe('emitBudgetWarnings — dev-build console emission', () => {
     expect(spy).toHaveBeenCalledTimes(2);
     expect(spy).toHaveBeenNthCalledWith(1, 'a');
     expect(spy).toHaveBeenNthCalledWith(2, 'b');
+    spy.mockRestore();
+  });
+});
+
+describe('REQ-OBS-BUDGET-2 — radius fallback share exceeds the configured threshold', () => {
+  it('defaults the fallback share threshold to 30%', () => {
+    expect(DEFAULT_RADIUS_FALLBACK_SHARE).toBe(0.3);
+  });
+
+  it('formats an actionable warning citing counts, percentage, threshold, and the remedy', () => {
+    const message = formatRadiusFallbackWarning(18, 20, 0.9, 0.3);
+    expect(message).toContain('18');
+    expect(message).toContain('20');
+    expect(message).toContain('90');
+    expect(message).toContain('30');
+    expect(message.toLowerCase()).toContain('radius');
+    expect(message).toContain('SkeletonProvider.defaultRadius');
+  });
+
+  it('checkRadiusFallback reports shareExceeded: true for 18/20 default-rung shapes (90% > 30%)', () => {
+    const result = checkRadiusFallback(buildRadiusSources(18, 2), { radiusFallbackShare: 0.3 });
+    expect(result.shareExceeded).toBe(true);
+    expect(result.defaultCount).toBe(18);
+    expect(result.totalCount).toBe(20);
+    expect(result.share).toBeCloseTo(0.9, 5);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain('18/20');
+  });
+
+  it('does NOT fire when the share is at or below the threshold (6/20 = exactly 30%)', () => {
+    const result = checkRadiusFallback(buildRadiusSources(6, 14), { radiusFallbackShare: 0.3 });
+    expect(result.shareExceeded).toBe(false);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('reports no shapes/no warning when the radiusSources sidecar is absent', () => {
+    const result = checkRadiusFallback(undefined, { radiusFallbackShare: 0.3 });
+    expect(result.shareExceeded).toBe(false);
+    expect(result.totalCount).toBe(0);
+    expect(result.defaultCount).toBe(0);
+    expect(result.warnings).toEqual([]);
+  });
+});
+
+describe('emitRadiusFallbackWarning — dev-build console emission', () => {
+  it('logs the warning via console.warn when the share is exceeded', () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = checkRadiusFallback(buildRadiusSources(18, 2), { radiusFallbackShare: 0.3 });
+    emitRadiusFallbackWarning(result);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith(result.warnings[0]);
+    spy.mockRestore();
+  });
+
+  it('logs nothing when the share was not exceeded', () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = checkRadiusFallback(buildRadiusSources(1, 19), { radiusFallbackShare: 0.3 });
+    emitRadiusFallbackWarning(result);
+    expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
 });

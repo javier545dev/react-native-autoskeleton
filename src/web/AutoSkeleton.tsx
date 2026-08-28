@@ -25,9 +25,19 @@ import { bucketWidth, composeCacheKey, quantizeFontScale } from '../core/cache-k
 import type { RendererHandle, SkeletonTheme } from '../core/contracts';
 import { createHandoffController } from '../core/handoff';
 import type { HandoffController } from '../core/handoff';
-import { assembleMetrics, DEFAULT_BUDGET_MS, DEFAULT_MAX_SHAPES } from '../core/metrics';
+import {
+  assembleMetrics,
+  checkBudgets,
+  checkRadiusFallback,
+  DEFAULT_BUDGET_MS,
+  DEFAULT_MAX_SHAPES,
+  DEFAULT_RADIUS_FALLBACK_SHARE,
+  emitBudgetWarnings,
+  emitRadiusFallbackWarning,
+} from '../core/metrics';
 import { MemoryShapeStore } from '../core/snapshot';
 import type { AnimationKind, OnMetrics, ShapeSnapshot } from '../core/types';
+import { WIRE_HEADER_SLOTS, WIRE_STRIDE } from '../core/types';
 import { createCssRenderer, createShimmerClock } from './css-renderer';
 import { createDomSensor, createEmptyHintRegistry, IGNORE_ATTRIBUTE } from './dom-sensor';
 import { DebugOverlay } from './DebugOverlay';
@@ -46,6 +56,9 @@ interface SkeletonContextValue {
   readonly theme: SkeletonTheme;
   readonly budgetMs: number;
   readonly maxShapes: number;
+  /** REQ-OBS-BUDGET-2: share of a screen's shapes allowed to resolve their
+   *  corner radius through the `default` rung before a dev warning fires. */
+  readonly radiusFallbackShare: number;
   readonly handoffTimeoutMs: number;
   readonly handoffFadeMs: number;
 }
@@ -62,6 +75,7 @@ const defaultContextValue: SkeletonContextValue = {
   theme: DEFAULT_THEME,
   budgetMs: DEFAULT_BUDGET_MS,
   maxShapes: DEFAULT_MAX_SHAPES,
+  radiusFallbackShare: DEFAULT_RADIUS_FALLBACK_SHARE,
   handoffTimeoutMs: DEFAULT_HANDOFF_TIMEOUT_MS,
   handoffFadeMs: DEFAULT_HANDOFF_FADE_MS,
 };
@@ -73,6 +87,7 @@ export interface SkeletonProviderProps {
   readonly theme?: Partial<SkeletonTheme>;
   readonly budgetMs?: number;
   readonly maxShapes?: number;
+  readonly radiusFallbackShare?: number;
   readonly handoffTimeoutMs?: number;
   readonly handoffFadeMs?: number;
   readonly children?: ReactNode;
@@ -84,6 +99,7 @@ export function SkeletonProvider(props: SkeletonProviderProps): React.JSX.Elemen
     theme: { ...defaultContextValue.theme, ...props.theme },
     budgetMs: props.budgetMs ?? defaultContextValue.budgetMs,
     maxShapes: props.maxShapes ?? defaultContextValue.maxShapes,
+    radiusFallbackShare: props.radiusFallbackShare ?? defaultContextValue.radiusFallbackShare,
     handoffTimeoutMs: props.handoffTimeoutMs ?? defaultContextValue.handoffTimeoutMs,
     handoffFadeMs: props.handoffFadeMs ?? defaultContextValue.handoffFadeMs,
   };
@@ -205,10 +221,25 @@ function useOverlayRenderer(
   );
 }
 
+/** `process.env.NODE_ENV !== 'production'` is this platform layer's dev/prod
+ *  signal (matches `debugOverlayEnabled` below). REQ-OBS-BUDGET-1/2 warnings
+ *  are development-only by requirement; core stays platform-agnostic
+ *  (ADR-4: zero platform imports), so the gate belongs here, not in
+ *  `src/core/metrics.ts`. */
+function devWarningsEnabled(): boolean {
+  return process.env.NODE_ENV !== 'production';
+}
+
 /** Runs the synchronous cold traversal (task 2.1) when there is no cache hit
  *  and no cold snapshot yet for the current `cacheKey`. A real DOM sensor
  *  read is genuine external-system synchronization (the browser's layout
- *  engine), not derivable state — the skill's Rule 4 case. */
+ *  engine), not derivable state — the skill's Rule 4 case.
+ *
+ *  Observability: this is the REAL measurement path REQ-OBS-BUDGET-1 and
+ *  REQ-OBS-BUDGET-2 require — `checkBudgets`/`checkRadiusFallback` run
+ *  against this traversal's OWN real `traversalMs`/shapeCount/radiusSources,
+ *  never a value constructed only for a test. A formatter unit-tested in
+ *  isolation but never invoked here would NOT satisfy either requirement. */
 function useColdMeasurement(
   wrapperRef: React.RefObject<HTMLDivElement | null>,
   active: boolean,
@@ -217,6 +248,7 @@ function useColdMeasurement(
   budgetMs: number,
   maxShapes: number,
   defaultRadius: number,
+  radiusFallbackShare: number,
   store: MemoryShapeStore,
   onMeasured: (snapshot: ShapeSnapshot, traversalMs: number) => void,
 ): void {
@@ -239,6 +271,23 @@ function useColdMeasurement(
     if (result) {
       store.set(result.snapshot.key, result.snapshot);
       onMeasured(result.snapshot, result.traversalMs);
+
+      if (devWarningsEnabled()) {
+        const measuredShapeCount = (result.snapshot.data.length - WIRE_HEADER_SLOTS) / WIRE_STRIDE;
+        // dom-sensor.ts's `pushShape` stops accepting shapes the instant
+        // `ctx.shapes.length` reaches `maxShapes`, so a truncated snapshot's
+        // OWN count can never literally exceed `maxShapes` — the sensor's
+        // `shape-cap-reached` degradation flag is what actually proves the
+        // real traversal found more than the budget allows (it fires
+        // exactly when a shape beyond the cap was rejected), so it is the
+        // authoritative signal `checkBudgets` needs here, not a naive
+        // count > maxShapes comparison against already-capped data.
+        const shapeCountForBudgetCheck = result.degraded.includes('shape-cap-reached')
+          ? maxShapes + 1
+          : measuredShapeCount;
+        emitBudgetWarnings(checkBudgets(result.traversalMs, shapeCountForBudgetCheck, { budgetMs, maxShapes }));
+        emitRadiusFallbackWarning(checkRadiusFallback(result.snapshot.radiusSources, { radiusFallbackShare }));
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, cacheKey]);
@@ -425,6 +474,7 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
     ctx.budgetMs,
     ctx.maxShapes,
     theme.defaultRadius,
+    ctx.radiusFallbackShare,
     ctx.store,
     (measured, traversalMs) => {
       traversalMsRef.current = traversalMs;

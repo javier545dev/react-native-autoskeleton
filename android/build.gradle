@@ -38,6 +38,16 @@ android {
 
   defaultConfig {
     minSdkVersion getExtOrDefault("minSdkVersion")
+    // Real defect found while getting the Phase 4 harness to run end-to-end (task 4.1
+    // prerequisite): with no explicit targetSdkVersion, AGP defaults the library's test
+    // manifest's targetSdkVersion to compileSdkVersion, which is inherited via
+    // getExtOrDefault from whichever example app's root ext values happen to be on the
+    // classpath (examples/bare-rn sets compileSdkVersion=37). Robolectric 4.14.1 (pinned
+    // below) supports SDK <= 35 and throws `targetSdkVersion=37 > maxSdkVersion=35` at
+    // runner construction time — this is a genuine environment mismatch, not a test bug.
+    // Pinning targetSdkVersion here only affects this library's own test manifest merge;
+    // it has no effect on a consuming app's own targetSdkVersion.
+    targetSdkVersion 35
     // task 0.4: instrumented androidTest module needs its own runner.
     testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -70,5 +80,10 @@ dependencies {
   // on a real emulator/device (plan.md §7.2b); Robolectric shadows Canvas/Bitmap
   // so R2 cannot be validated there.
   androidTestImplementation "androidx.test.ext:junit:1.2.1"
-  androidTestImplementation "androidx.test.runner:runner:1.6.2"
+  // Real defect found while getting the Phase 4 instrumented harness to run
+  // end-to-end (task 4.3 prerequisite): the group id was "androidx.test.runner",
+  // which does not exist on Google's Maven — the `runner` artifact is published
+  // under the "androidx.test" group (verified against
+  // dl.google.com/dl/android/maven2/androidx/test/group-index.xml).
+  androidTestImplementation "androidx.test:runner:1.6.2"
 }

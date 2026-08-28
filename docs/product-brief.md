@@ -394,6 +394,29 @@ What v1 DOES owe, and what the spec and design must specify:
 - Documentation must show the full three-phase pipeline end to end with a worked
   `expo-image` example, so a user is not left to discover the handoff themselves.
 
+## 9c. MEASURED LIMITATION — Android corner radius (2026-08-27)
+
+On-device measurement (API 36, RN 0.87.1) proved that no public Android API can recover the
+corner radius of a rounded React Native view:
+
+| requested radius | rung | value |
+|---|---|---|
+| 0 | R1 `Outline` | 0.0 exact |
+| 4 / 12 / 24 / 9999 | R3 `default` | 0.0 |
+
+R1 works only for the square case. R2 (raster probe) attempted zero probes because
+`CompositeBackgroundDrawable.getConstantState()` returns `null` on a real device, and ships
+disabled by default behind a tested opt-in.
+
+**Consequence:** the typed `radius` hint is the PRIMARY radius mechanism on Android for rounded
+content, not a fallback. "Faithful shapes with no manual annotation" holds fully on web and iOS
+and is degraded on Android for rounded elements without a hint or a global `defaultRadius`.
+Document this asymmetry prominently; do not bury it.
+
+The ADR-2 degradation ladder behaved exactly as designed: it anticipated that R2 might not work
+and specified a collapse to R0 -> R1 -> R3, which turned out to be a real, tested path behind a
+config flip rather than a reassuring paragraph.
+
 ## 10. Accessibility
 
 - Content hidden during loading: `accessibilityElementsHidden` /
