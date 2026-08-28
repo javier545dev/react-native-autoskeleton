@@ -1,0 +1,160 @@
+{
+  "v": 1,
+  "widthBuckets": [
+    375,
+    1280
+  ],
+  "capturedKeys": [
+    "dashboard"
+  ],
+  "entries": [
+    {
+      "skeletonKey": "dashboard",
+      "widthBucket": 375,
+      "direction": "ltr",
+      "snapshot": {
+        "v": 1,
+        "key": "v1|dashboard|-|375|1|ltr|web",
+        "capturedAt": 1787939276600,
+        "frame": [
+          375,
+          312
+        ],
+        "data": [
+          1,
+          24,
+          24,
+          220,
+          32,
+          4,
+          24,
+          72,
+          327,
+          160,
+          8,
+          24,
+          248,
+          294.296875,
+          16,
+          4,
+          24,
+          272,
+          228.890625,
+          16,
+          4
+        ]
+      }
+    },
+    {
+      "skeletonKey": "dashboard",
+      "widthBucket": 1280,
+      "direction": "ltr",
+      "snapshot": {
+        "v": 1,
+        "key": "v1|dashboard|-|1280|1|ltr|web",
+        "capturedAt": 1787939276772,
+        "frame": [
+          640,
+          312
+        ],
+        "data": [
+          1,
+          24,
+          24,
+          220,
+          32,
+          4,
+          24,
+          72,
+          592,
+          160,
+          8,
+          24,
+          248,
+          532.796875,
+          16,
+          4,
+          24,
+          272,
+          414.390625,
+          16,
+          4
+        ]
+      }
+    },
+    {
+      "skeletonKey": "dashboard",
+      "widthBucket": 375,
+      "direction": "rtl",
+      "snapshot": {
+        "v": 1,
+        "key": "v1|dashboard|-|375|1|rtl|web",
+        "capturedAt": 1787939276936,
+        "frame": [
+          375,
+          312
+        ],
+        "data": [
+          1,
+          131,
+          24,
+          220,
+          32,
+          4,
+          24,
+          72,
+          327,
+          160,
+          8,
+          56.703125,
+          248,
+          294.296875,
+          16,
+          4,
+          122.109375,
+          272,
+          228.890625,
+          16,
+          4
+        ]
+      }
+    },
+    {
+      "skeletonKey": "dashboard",
+      "widthBucket": 1280,
+      "direction": "rtl",
+      "snapshot": {
+        "v": 1,
+        "key": "v1|dashboard|-|1280|1|rtl|web",
+        "capturedAt": 1787939277101,
+        "frame": [
+          640,
+          312
+        ],
+        "data": [
+          1,
+          396,
+          24,
+          220,
+          32,
+          4,
+          24,
+          72,
+          592,
+          160,
+          8,
+          83.203125,
+          248,
+          532.796875,
+          16,
+          4,
+          201.609375,
+          272,
+          414.390625,
+          16,
+          4
+        ]
+      }
+    }
+  ]
+}

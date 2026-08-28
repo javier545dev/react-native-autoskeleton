@@ -24,7 +24,7 @@ import { createContext, useContext, useEffect, useRef, useState, useSyncExternal
 import { bucketWidth, composeCacheKey, quantizeFontScale } from '../core/cache-key';
 import type { RendererHandle, SkeletonTheme } from '../core/contracts';
 import { createHandoffController } from '../core/handoff';
-import type { HandoffController } from '../core/handoff';
+import type { HandoffController, SkeletonPipelinePhase } from '../core/handoff';
 import {
   assembleMetrics,
   checkBudgets,
@@ -76,7 +76,15 @@ interface SkeletonContextValue {
  *  every consumer to wire a `SkeletonProvider`. `SkeletonProvider` exists to
  *  OPT INTO a custom store/theme (e.g. test isolation), not because one is
  *  required. */
-const defaultStore = new MemoryShapeStore();
+// Exported (not just module-private) so `src/web/ssr/hydrate.tsx`'s client
+// hydration bridge (task 8.3) can `importIntoShapeStore` build-time-captured
+// snapshots into the SAME store `<AutoSkeleton>` reads from by default —
+// without this, a captured snapshot would only ever populate a store a
+// consumer explicitly created and never wired to their own
+// `<SkeletonProvider>`, defeating the whole point of the hydration bridge
+// (a subsequent client-side-only re-render of the same key getting a real
+// cache hit instead of a fresh cold traversal).
+export const defaultStore = new MemoryShapeStore();
 const defaultContextValue: SkeletonContextValue = {
   store: defaultStore,
   theme: DEFAULT_THEME,
@@ -425,6 +433,110 @@ function useHandoffAndMetrics(
   }, [controller, runCycle]);
 }
 
+/** ADR-16 / plan.md §3.8's "unwired default" paint-detection heuristic:
+ *  "a double `requestAnimationFrame` after the content commit, plus
+ *  `img.decode()`/`load` when a same-origin `img` leaf is present." Runs
+ *  automatically whenever the controller enters the `'placeholder'` phase
+ *  (i.e. `requestHandoff()` was called AND a successor is expected) — this
+ *  is what makes `expectsPlaceholder` useful with ZERO consumer wiring,
+ *  closing task 8.4's real gap: `onSuccessorPainted` was declared in
+ *  `AutoSkeletonProps` (and `expectsSuccessor` already gated the
+ *  timeout-vs-immediate-fade branch on it) but nothing ever actually called
+ *  `controller.notifyPainted()` from a real paint signal — the handoff tail
+ *  always silently fell through to the `handoffTimeoutMs` timeout path,
+ *  even with a real, already-painted `<img>` successor in the tree.
+ *
+ *  `onSuccessorPainted` (the prop) is called ALONGSIDE `notifyPainted()`
+ *  once this heuristic confirms paint — an explicit, documented deviation
+ *  from plan.md §3.8's literal "consumer calls this from e.g. expo-image's
+ *  onLoad" phrasing: a plain callback PROP received by `AutoSkeleton` has no
+ *  way to be invoked BY the consumer's own separately-rendered image element
+ *  without additional plumbing (a Context/hook) plan.md never specified.
+ *  Treating it as an OUTPUT notification (fired when this component itself
+ *  detects paint) is the interpretation that is actually wireable from the
+ *  shipped `() => void` prop type without inventing new public API surface —
+ *  flagged here for anyone revisiting this contract later.
+ *
+ *  Idempotent by construction: `HandoffController.notifyPainted()` is
+ *  itself a no-op once `phase !== 'placeholder'` (already timed out, already
+ *  faded, or `expectsSuccessor: false` already fired `beginFade('no-
+ *  successor')` synchronously inside `requestHandoff()`), so this heuristic
+ *  is always safe to run unconditionally rather than gated on
+ *  `expectsPlaceholder` itself. */
+function usePaintDetectionHeuristic(
+  wrapperRef: React.RefObject<HTMLDivElement | null>,
+  phase: SkeletonPipelinePhase,
+  controller: HandoffController,
+  expectsSuccessor: boolean,
+  onSuccessorPainted: (() => void) | undefined,
+): void {
+  const onSuccessorPaintedRef = useRef(onSuccessorPainted);
+  onSuccessorPaintedRef.current = onSuccessorPainted;
+
+  useEffect(() => {
+    // `expectsSuccessor: false` means `requestHandoff()` ALREADY called
+    // `beginFade('no-successor')` synchronously — the controller's
+    // INTERNAL `phase` (checked by `notifyPainted()`'s own guard) stays
+    // `'placeholder'` for the full `handoffFadeMs` window regardless, so
+    // without this guard the heuristic would still race to call
+    // `notifyPainted()` and corrupt `handoffReason`/schedule a second,
+    // orphaned fade timer for a cycle that never expected a successor at
+    // all. Caught by a real regression test (`test/web/handoff.spec.ts`)
+    // during this task — the bug was otherwise invisible because
+    // `HandoffController.settled` resolves with whichever `beginFade` call
+    // fires FIRST, silently masking the corruption for anything reading
+    // metrics only through `settled`/`onMetrics` rather than the live
+    // `controller.handoffReason` getter.
+    if (phase !== 'placeholder' || !expectsSuccessor) {
+      return;
+    }
+    let cancelled = false;
+
+    async function waitForImageDecode(img: HTMLImageElement): Promise<void> {
+      if (img.complete && img.naturalWidth > 0) {
+        return;
+      }
+      if (typeof img.decode === 'function') {
+        try {
+          await img.decode();
+          return;
+        } catch {
+          // Falls through to the load/error listener below — `decode()`
+          // rejects on some browsers for a cross-origin or failed image;
+          // either way, this heuristic must not hang the handoff forever.
+        }
+      }
+      await new Promise<void>((resolve) => {
+        img.addEventListener('load', () => resolve(), { once: true });
+        img.addEventListener('error', () => resolve(), { once: true });
+      });
+    }
+
+    async function detect(): Promise<void> {
+      // "a double requestAnimationFrame after the content commit" —
+      // ensures the browser has had a chance to paint the just-revealed
+      // subtree before this heuristic looks at it.
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+      const wrapper = wrapperRef.current;
+      if (wrapper) {
+        const images = Array.from(wrapper.querySelectorAll('img'));
+        await Promise.all(images.map(waitForImageDecode));
+      }
+      if (!cancelled) {
+        controller.notifyPainted();
+        onSuccessorPaintedRef.current?.();
+      }
+    }
+
+    void detect();
+    return () => {
+      cancelled = true;
+    };
+  }, [phase, controller, wrapperRef, expectsSuccessor]);
+}
+
 export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   const ctx = useContext(SkeletonContext);
   const theme = ctx.theme;
@@ -558,6 +670,14 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
     props.onMetrics,
   );
 
+  usePaintDetectionHeuristic(
+    wrapperRef,
+    phase,
+    controller,
+    props.expectsPlaceholder ?? false,
+    props.onSuccessorPainted,
+  );
+
   // ADR-16 reveal-before-hide: `props.children` is ALWAYS mounted (never
   // `display:none`) so it is already painted underneath the still-visible
   // overlay by the time the overlay is removed — there is no instant where
@@ -607,5 +727,19 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
 }
 
 AutoSkeleton.Ignore = Ignore;
+// tasks.md 8.3 / NFR-6 (task 2.5 precedent): `AutoSkeletonSSR`/
+// `AutoSkeletonSSRHydrate` are DELIBERATELY NOT attached here as
+// `AutoSkeleton.SSR`/`AutoSkeleton.SSRHydrate` static properties. Task 2.5
+// already established that a bundler cannot tree-shake a value ALWAYS
+// assigned onto an object every consumer imports — the same problem that
+// forced `ShapeStore.export()`/`.import()` off the hot-path class entirely.
+// Measured here: attaching them pushed the NFR-6 gzip gate from 7674 B to
+// 8187 B (of an 8192 B hard-failing budget) even though most consumers never
+// touch SSR. `AutoSkeletonSSR`/`AutoSkeletonSSRHydrate` are exported as
+// PLAIN NAMED exports from `index.web.ts` instead (import them directly:
+// `import { AutoSkeletonSSR } from 'autoskeleton'`) — a bundler CAN
+// tree-shake an unused named re-export from a side-effect-free barrel file,
+// unlike a property write. See `src/web/ssr/AutoSkeletonSSR.tsx` and
+// `src/web/ssr/hydrate.tsx`.
 
 export { IGNORE_ATTRIBUTE };

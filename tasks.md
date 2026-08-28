@@ -1461,7 +1461,18 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
 
 ## Phase 8: SSR — build-time snapshot capture CLI + `@media`-bucketed CSS bundle
 
-- [ ] **8.1** RED→GREEN `cli/capture.ts` — Playwright-driven capture over `WIDTH_BUCKETS`
+> **Session status (2026-08-28, branch `feat/phase-8-ssr-capture`)**: 8.1–8.4 all complete and
+> GREEN, proven against a REAL `examples/next` production build (`next build && next start`), a
+> real headless Chromium capture (`cli/capture.ts`), and a real `examples/vite` consuming app —
+> never a hand-rolled harness. Full account below each task. Harnesses this session: vitest
+> 314/314 (was 271, +43: 25 `cli/route-safety.test.ts`+`cli/media-bundle.test.ts`, 8
+> `cli/capture.test.ts`, 6 `AutoSkeletonSSR.test.ts`, 3 `uncaptured-warning.test.ts`, 1 elsewhere),
+> Playwright 49/49 (was 38, +11: 3 new `test/web/handoff.spec.ts`, 8 new `test/ssr/dashboard.spec.ts`),
+> typecheck clean (root + `examples/next` + `examples/vite`), Android/iOS unit + on-device gates
+> untouched this session (no native/`src/native/` file changed) — prior baselines (107/107, 76/76,
+> 9/9, 4/4) stand unverified-but-unmodified.
+
+- [x] **8.1** RED→GREEN `cli/capture.ts` — Playwright-driven capture over `WIDTH_BUCKETS`
       (shared table from 1.1) × LTR/RTL, developer-declared `skeletonKey→route` registry
       (ASSUMPTION §11.1, **spec Open Question 1**: declared registry, no route auto-discovery),
       reuses 2.1's DOM sensor inside `page.evaluate`, `serializeSnapshot` output. **Threat-matrix
@@ -1469,42 +1480,157 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       rejected; `../` route rejected; output-path-escape rejected; metacharacter route passed
       through inertly via a Playwright argument array (never a shell string); navigation timeout
       → non-zero exit naming the offending `skeletonKey`; empty/partial capture never overwrites
-      a previously good bundle. Then functional tests: registry-driven capture over 3 routes ×
-      [360,768,1280] × [ltr,rtl].
-      **Observability**: CLI `--report` summary of covered vs. referenced keys (RISK-4 detection
-      signal); dev-mode console warning naming each uncaptured `skeletonKey`, surfaced at runtime
-      by 8.3. **Performance**: N/A — build-time tool, not part of any runtime NFR. Deps: 2.1,
-      1.5, 1.1. Complexity: L. Example app: Next.js.
-- [ ] **8.2** RED→GREEN `@media`-bucketed CSS bundle — one block per captured width bucket +
-      `[dir]` selectors, using 1.5's `clip-path.ts` (REQ-SSR-3).
-      **Tests**: Vitest — bundle emits exactly one `@media` block per `WIDTH_BUCKETS` entry; CI
-      check that runtime `WIDTH_BUCKETS` and the CSS-baked bucket list stay identical (RISK-2's
-      drift-guard detection signal). **Observability**: N/A, build artifact generation.
-      **Performance**: N/A. Deps: 8.1. Complexity: M. Example app: Next.js.
-- [ ] **8.3** RED→GREEN `<AutoSkeleton.SSR skeletonKey>` server component + client hydration
-      bridge — `ShapeStore.import()` on the client, uncaptured-key neutral generic block produced
-      by the same pure function server AND client (ADR-12, **spec Open Question 2**), zero live
-      layout detection inside `<Suspense>` (REQ-SSR-1).
-      **Tests**: Next.js E2E — REQ-SSR-4 byte-identical server/client markup + zero hydration
-      mismatch for every width bucket × direction with JS disabled first; uncaptured-key
-      byte-identical-neutral-block scenario; fails on **any** React hydration console warning
-      (RISK-2's authoritative signal) plus a pre/post-hydration DOM-equality check.
-      **Observability**: dev-mode console warning naming each uncaptured `skeletonKey` at
-      runtime (RISK-4). **Performance**: N/A — SSR correctness gate; `fontScale`-unknowable-
-      server-side residual limit (spec §1.8 scenario) documented, not fixed, via `rem`-relative
-      sizing where geometrically possible. Deps: 8.2, 1.3. Complexity: L. Example app: Next.js.
-- [ ] **8.4** RED→GREEN web image-handoff wiring — extend 1.7's `HandoffController` into 2.3's
-      `<AutoSkeleton>` and the Next.js example, no-flash reveal-before-hide (ADR-16) proven with a
-      real `<img>` successor.
-      **Tests**: Playwright frame-capture across `isLoading→false` with an artificially slow
-      placeholder, asserting **no frame exists where neither the skeleton nor a successor is
-      painted** (RISK-11's authoritative test — not a "skeleton disappeared" check); metric-
-      boundary assertion (`displayDurationMs` stops at `isLoading===false`; `handoffMs`/
-      `handoffReason:'timeout'` captures the wait; with `onSuccessorPainted` wired,
-      `handoffReason:'successor-painted'` and `handoffMs` shrinks); `displayDurationMs +
-      handoffMs ≈ wall time` invariant. **Observability**: closes REQ-IMG-1/2's runtime proof and
-      ADR-16's telemetry contract end to end on web. **Performance**: N/A, correctness gate.
-      Deps: 8.3, 2.3, 1.7. Complexity: M. Example app: Vite + Next.js.
+      a previously good bundle. Then functional tests: registry-driven capture over 3 width
+      buckets × [ltr,rtl] against a real fixture HTTP server (`cli/capture.test.ts`, 8 tests) plus
+      a real `examples/next` route (`test/ssr/dashboard.spec.ts`'s setup). `<AutoSkeleton.Ignore>`
+      respected end to end (real DOM sensor reuse, no reimplementation) — explicitly asserted:
+      the ignored fixture node's height never appears in the captured wire data.
+      New: `cli/route-safety.ts` (`resolveCaptureUrl`/`resolveOutputFile`, the threat-matrix
+      design response), `cli/browser-runtime.ts` + `cli/bundle.ts` (esbuild-bundles the REAL
+      production DOM sensor into the injected page script, mirroring `test/web/helpers/bundle.ts`'s
+      established pattern rather than reimplementing it), `cli/manifest.ts` (re-exports the
+      canonical manifest types from `src/web/ssr/manifest.ts` — see 8.3).
+      **Observability**: `RunCaptureResult.report` (`capturedKeys`/`failedKeys`/paths) IS the
+      RISK-4 coverage signal at the API level, printed by the CLI's `main()`; a repo-wide static
+      scan for "keys referenced in JSX but never captured" was NOT built (would require parsing
+      consumer source for `<AutoSkeleton.SSR skeletonKey=...>` usages — a separate, larger
+      static-analysis feature, out of scope here) — flagged, not silently dropped. The RUNTIME
+      half of RISK-4 (a warning at replay time, not capture time) is 8.3's `emitUncapturedSkeletonKeyWarning`.
+      **Performance**: N/A — build-time tool, not part of any runtime NFR. Deps: 2.1, 1.5, 1.1.
+      Complexity: L. Example app: Next.js.
+      **Packaging note (deferred to 9.5 by design, not omission)**: `cli/` is NOT yet in
+      `package.json`'s `files`/`exports` — task 9.5 ("Final RISK-5 close-out... against the
+      finished CLI") already explicitly owns CLI packaging verification; this session's tests
+      import `cli/capture.ts` directly from the repo (never through the published tarball), which
+      is sufficient to prove the CLI's own correctness but NOT its distribution shape. A consumer
+      cannot `npm install autoskeleton` and run this CLI today — noted honestly, not hidden.
+- [x] **8.2** RED→GREEN `@media`-bucketed CSS bundle — one block per captured width bucket +
+      `[dir]` selectors, using 1.5's `clip-path.ts` (REQ-SSR-3). New `cli/media-bundle.ts`:
+      `bucketRanges()` mirrors `bucketWidth()`'s exact "smallest bucket >= px, clamp to largest"
+      semantics as contiguous `min-width`/`max-width` CSS ranges (built FROM the real
+      `WIDTH_BUCKETS` constant, never a hand copy — the RISK-2 drift-guard IS this construction,
+      proven by a dedicated test); reuses `buildShimmerStylesheet()` (task 2.2) for the base
+      overlay/animation rules instead of a second implementation.
+      **Tests**: `cli/media-bundle.test.ts` (8 tests, Vitest) — bundle emits exactly one `@media`
+      block per `WIDTH_BUCKETS` entry; a bucket with zero captured entries contributes no block;
+      two captured buckets for the SAME key produce genuinely DIFFERENT `clip-path`/dimensions in
+      the ONE bundle string (the literal "single payload correct at multiple widths" proof); the
+      base stylesheet is included exactly once. Re-verified against the REAL served bytes in
+      `test/ssr/dashboard.spec.ts` (not just the generator's own unit test).
+      **Observability**: N/A, build artifact generation. **Performance**: N/A. Deps: 8.1.
+      Complexity: M. Example app: Next.js.
+- [x] **8.3** RED→GREEN `<AutoSkeleton.SSR skeletonKey>` server component + client hydration
+      bridge. New `src/web/ssr/`: `AutoSkeletonSSR.tsx` (hook-free, RSC-safe, pure function of
+      `skeletonKey`+`manifest`+`direction`), `neutral-block.tsx` (ADR-12's uncaptured-key
+      fallback, the SAME component used server AND client), `manifest.ts` (canonical
+      `AutoSkeletonSSRManifest` type — `cli/manifest.ts` re-exports it, never duplicates it),
+      `hydrate.tsx` (`AutoSkeletonSSRHydrate`, `'use client'`, imports captured entries into the
+      runtime `ShapeStore` via `importIntoShapeStore` once on mount — `AutoSkeleton.tsx`'s
+      `defaultStore` singleton is now exported so this bridge can target the SAME store the
+      runtime `<AutoSkeleton>` reads from by default), `uncaptured-warning.ts` (RISK-4's runtime
+      warning, closing the Observability gap below).
+      **Mechanism (REQ-SSR-1/REQ-SSR-3)**: the server never guesses the viewport — the captured
+      overlay carries only `data-askl-ssr-key`/`data-askl-ssr-dir`; ALL geometry (`clip-path`,
+      width, height) lives in the `@media`-bucketed CSS bundle the consumer imports globally, so
+      the SAME server payload is correct at every captured width. Zero hooks, zero DOM reads, zero
+      live layout detection — pure replay.
+      **NFR-6 finding, real regression caught and fixed this session**: attaching
+      `AutoSkeletonSSR`/`AutoSkeletonSSRHydrate` as `AutoSkeleton.SSR`/`AutoSkeleton.SSRHydrate`
+      static properties (matching the task's literal `<AutoSkeleton.SSR>` naming) pushed the
+      NFR-6 gzip gate from 7674 B to ~8187 B of the 8192 B hard-failing budget — the SAME
+      tree-shaking problem task 2.5 already fixed for `ShapeStore.export()`/`.import()`, because a
+      bundler cannot tree-shake a value ALWAYS assigned onto an object every consumer imports.
+      **Resolution**: a NEW `autoskeleton/ssr` subpath export (`src/index.ssr.ts`,
+      `package.json`'s `./ssr` condition) — SSR is genuinely opt-in like `autoskeleton/uniwind`;
+      `index.web.ts`'s `.` entry never reaches this module graph. Measured back to the exact
+      7674 B / 22949 B baseline after the split. Full account in `src/web/AutoSkeleton.tsx`'s doc
+      comment beside `AutoSkeleton.Ignore =`.
+      **Tests**: `src/web/ssr/AutoSkeletonSSR.test.ts` (6 tests, Vitest, `react-dom/server`
+      `renderToStaticMarkup` — a fast browser-free purity/determinism local guard) plus the
+      authoritative `test/ssr/dashboard.spec.ts` (8 tests, Playwright, against a REAL
+      `examples/next` production build via a two-phase setup: capture under `next dev`, verify
+      under a fresh `next build && next start` so the regenerated manifest/CSS are baked into the
+      compiled server — avoids any dev-mode file-watcher race entirely). Proves, as three
+      SEPARATE, never-conflated aspects (this session's explicit brief): **(1)** server markup
+      genuinely contains skeleton geometry — JS-disabled fetch, real non-empty `clip-path` in the
+      served CSS, not an empty div; **(2)** zero hydration mismatch — no React console warning
+      AND a pre/post-hydration `outerHTML` equality check on the fallback subtree (a real
+      mismatch would make React discard and re-render it, changing the DOM); **(3)** the eventual
+      painted result is correct — real content genuinely replaces the fallback once the simulated
+      fetch resolves, with the fallback fully gone. Also: one server payload proven correct at
+      TWO real captured widths (375/1280) in the SAME served `bundle.css`, with a dedicated
+      assertion that the two buckets' rules are genuinely different (never one rule reused under
+      two `@media` guards); RTL replay (`data-askl-ssr-dir="rtl"`, zero mismatch); ADR-12's
+      uncaptured-key path (byte-identical to `NeutralSkeletonBlock` rendered directly, zero
+      mismatch). REQ-SSR-4's uncaptured-key/fontScale residual limits are documented (spec §1.8),
+      not "fixed" — `direction` defaults to `'ltr'` when the consumer doesn't pass a known
+      request-time value; `fontScale` is not represented in the manifest at all (captured entries
+      are quantized to the neutral 1.0 scale, matching the runtime cache key's own quantization).
+      **Real gap found and closed this session**: 8.1's original Observability line ("dev-mode
+      console warning naming each uncaptured `skeletonKey`, surfaced at runtime by 8.3") was
+      never actually implemented until this pass — `emitUncapturedSkeletonKeyWarning`
+      (`src/web/ssr/uncaptured-warning.ts`, 3 Vitest tests) now fires from `AutoSkeletonSSR`'s own
+      render body when a key isn't in `manifest.capturedKeys`, gated to non-production. Verified
+      it does NOT trip the hydration-mismatch console filter in `test/ssr/dashboard.spec.ts`'s
+      own uncaptured-key test (a `console.warn` side effect during render touches no rendered
+      output, so it cannot affect React's hydration diffing).
+      Deps: 8.2, 1.3. Complexity: L. Example app: Next.js.
+- [x] **8.4** RED→GREEN web image-handoff wiring — extended 1.7's `HandoffController` into 2.3's
+      `<AutoSkeleton>`. **Real gap found and closed** (not previously flagged): `onSuccessorPainted`
+      was declared in `AutoSkeletonProps` since task 1.7/2.3 but NOTHING ever called
+      `controller.notifyPainted()` from any real paint signal — every handoff with
+      `expectsPlaceholder` silently fell through to the `handoffTimeoutMs` timeout path even with
+      an already-painted `<img>` successor in the tree. Implemented plan.md §3.8's own documented
+      "unwired default" heuristic: `usePaintDetectionHeuristic` (double `requestAnimationFrame`
+      after the content commit, plus `img.decode()`/`load` for any same-origin `<img>` found
+      inside the wrapped subtree), runs automatically whenever the controller enters the
+      `'placeholder'` phase — zero consumer wiring required. `props.onSuccessorPainted`, when
+      supplied, fires ALONGSIDE the heuristic's own `notifyPainted()` call. **Documented API
+      deviation**: plan.md's literal phrasing ("consumer calls this from e.g. expo-image's
+      onLoad") describes a plain callback PROP being invoked BY the consumer's own separately-
+      rendered image element — not actually wireable from a `() => void` prop without inventing
+      new public surface (a Context/hook) plan.md never specified. Treating it as an OUTPUT
+      notification (fired when THIS component detects paint) is the interpretation that is
+      genuinely implementable from the shipped type; flagged in `AutoSkeleton.tsx`'s doc comment
+      for anyone revisiting the contract.
+      **Real regression caught and fixed during this task's own verification** (not by an
+      external reviewer): the heuristic's effect ran whenever `phase==='placeholder'` regardless
+      of whether a successor was actually expected — since `requestHandoff()`'s `'no-successor'`
+      path ALSO sets internal `phase='placeholder'` before its OWN immediate fade timer resolves
+      (`HandoffController`'s `phase` only becomes `'content'` once the fade's `setTimeout` fires,
+      ~120ms later), an unguarded heuristic would race to call `notifyPainted()` and corrupt
+      `handoffReason`/schedule a second, orphaned fade timer for a cycle that never expected a
+      successor. Silently masked in practice by `HandoffController.settled`'s "first `settleResolve`
+      wins" Promise semantics (so `onMetrics.handoffReason` came out correct by luck), but a
+      latent bug — fixed by gating the heuristic on `expectsSuccessor` (`props.expectsPlaceholder
+      ?? false`), with a dedicated regression test proving the DEFAULT (no `expectsPlaceholder`)
+      path still reports `handoffReason:'no-successor'`.
+      **Tests**: `test/web/handoff.spec.ts` (3 tests, Playwright, real production `<AutoSkeleton>`
+      component via the established esbuild-harness pattern, a REAL `<img>` served through an
+      artificially-delayed `page.route` handler — never a hand-rolled timer standing in for a
+      load event). RISK-11's authoritative frame-capture check: an in-page `requestAnimationFrame`
+      sampling loop records, every frame across the whole `isLoading→false` transition, whether
+      the overlay OR the successor `<img>` is painted — asserts zero frames where NEITHER is (not
+      "the skeleton disappeared", which a broken implementation could pass). Metric-boundary
+      assertion: `handoffReason:'successor-painted'`, `displayDurationMs + handoffMs ≈ wall time`
+      (±300ms slack, a real-clock proof against real browser scheduling, never a fake-timer
+      stand-in — that invariant is ALSO asserted under fake-timer control at the controller level
+      in `src/core/handoff.test.ts`, task 1.7). Plus the default-path no-misfire regression test
+      above. All stable across repeated runs (`--repeat-each=5`, 10/10 and 3/3 clean).
+      **Example apps wired** (both named in the DoD): `examples/vite/src/App.tsx` — a real,
+      functioning `expectsPlaceholder` demo wrapping the existing hero image (builds clean,
+      `npm run build` verified); `examples/next` — the full `/dashboard` route (task 8.3) already
+      demonstrates reveal-before-hide end to end via its own async `DashboardContent`, though
+      that path exercises the REACT SUSPENSE swap, not this task's `onSuccessorPainted`/heuristic
+      mechanism specifically (no separate slow-`<img>` demo route was added to `examples/next`;
+      `examples/vite`'s new demo covers that mechanism concretely instead).
+      **Observability**: closes REQ-IMG-1/2's runtime proof and ADR-16's telemetry contract end to
+      end on web. **Performance**: N/A, correctness gate. **Out of scope, explicitly flagged**:
+      native (`src/native/AutoSkeleton.tsx`) has the IDENTICAL `onSuccessorPainted`-declared-but-
+      unwired gap — task 8.4's own DoD names only "Example app: Vite + Next.js" (web), so native
+      was left untouched; a native paint-detection heuristic (`Image.getSize`/`onLoad` observation
+      via the native bridge) would need its own design, not a port of this web-only rAF+decode()
+      mechanism. Deps: 8.3, 2.3, 1.7. Complexity: M. Example app: Vite + Next.js.
 
 ## Phase 9: CI benchmarks + docs
 

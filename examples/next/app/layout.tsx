@@ -1,6 +1,12 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { AutoSkeletonSSRHydrate } from "autoskeleton/ssr";
 import "./globals.css";
+// tasks.md 8.3 (REQ-SSR-3): the `@media`-bucketed CSS bundle the capture CLI
+// wrote — one global import, so a single server-rendered payload is correct
+// at every width without this app ever guessing the viewport.
+import "../generated/autoskeleton-ssr/bundle.css";
+import { manifest } from "../generated/autoskeleton-ssr";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -23,7 +29,15 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        {children}
+        {/* tasks.md 8.3: client hydration bridge — imports the capture CLI's
+            build-time snapshots into the runtime ShapeStore ONCE, so a later
+            CLIENT-side-only re-render of the same skeletonKey (e.g. a client
+            navigation elsewhere in the app) gets a real cache hit instead of
+            a fresh cold traversal. */}
+        <AutoSkeletonSSRHydrate manifest={manifest} />
+      </body>
     </html>
   );
 }
