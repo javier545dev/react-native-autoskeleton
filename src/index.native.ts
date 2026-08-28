@@ -15,6 +15,22 @@ export {
   AutoskeletonNativeModuleUnavailableError,
   AUTOSKELETON_NATIVE_MODULE_UNAVAILABLE_DOCS_URL,
 } from './native/nativeModuleAccessor';
+// Phase 6 (tasks.md 6.1-6.5): virtualized-list skeletons.
+export { SkeletonList } from './native/list/SkeletonList';
+export type { SkeletonListProps } from './native/list/SkeletonList';
+export { SkeletonListFooter } from './native/list/SkeletonListFooter';
+export type { SkeletonListFooterProps } from './native/list/SkeletonListFooter';
+export { SkeletonCell } from './native/list/SkeletonCell';
+export type { SkeletonCellProps } from './native/list/SkeletonCell';
+export { useSkeletonCell } from './native/list/useSkeletonCell';
+export type { UseSkeletonCellOptions, UseSkeletonCellResult } from './native/list/useSkeletonCell';
+/** RISK-3/ADR-13 dev-only observability seam: counts template measurements
+ *  that actually executed (never a bind-time count). Exposed for the
+ *  on-device paint-gate harness (`examples/bare-rn`) to prove the
+ *  zero-traversal-on-bind/zero-traversal-under-recycling assertions against
+ *  the REAL running app, not a formatter in isolation. Not a stable public
+ *  API for production consumers. */
+export { templateTraversalCounter } from './native/list/listRuntime';
 export type {
   AnimationKind,
   DegradationFlag,

@@ -55,10 +55,12 @@ import { bucketWidth, composeCacheKey, quantizeFontScale } from '../core/cache-k
 import type { SkeletonTheme } from '../core/contracts';
 import { createHandoffController, type HandoffController } from '../core/handoff';
 import { assembleMetrics } from '../core/metrics';
+import { shouldRunHandoffCycle } from '../core/refresh-gate';
 import { MemoryShapeStore } from '../core/snapshot';
 import type { AnimationKind, OnMetrics, RendererKind, ShapeSnapshot } from '../core/types';
+import { nativeSensor } from './nativeSensorInstance';
 import { resolveAutoskeletonOverlayNativeComponent } from './renderer/AutoskeletonOverlayHostComponent';
-import { createNativeSensor, type NativeSensorTarget } from './sensor';
+import type { NativeSensorTarget } from './sensor';
 import { tier2PeersAvailable } from './tier2/peerAvailability';
 import {
   AutoskeletonNativeModuleUnavailableError,
@@ -77,7 +79,7 @@ const DEFAULT_MAX_SHAPES = 60;
 const DEFAULT_HANDOFF_TIMEOUT_MS = 250;
 const DEFAULT_HANDOFF_FADE_MS = 120;
 
-interface SkeletonContextValue {
+export interface SkeletonContextValue {
   readonly store: MemoryShapeStore;
   readonly theme: SkeletonTheme;
   readonly budgetMs: number;
@@ -100,7 +102,7 @@ const defaultContextValue: SkeletonContextValue = {
   handoffFadeMs: DEFAULT_HANDOFF_FADE_MS,
 };
 
-const SkeletonContext = createContext<SkeletonContextValue>(defaultContextValue);
+export const SkeletonContext = createContext<SkeletonContextValue>(defaultContextValue);
 
 export interface SkeletonProviderProps {
   readonly store?: MemoryShapeStore;
@@ -127,11 +129,6 @@ export function SkeletonProvider(props: SkeletonProviderProps): React.JSX.Elemen
 function Ignore(props: { readonly children: ReactNode }): React.JSX.Element {
   return <>{props.children}</>;
 }
-
-const nativeSensor = createNativeSensor({
-  platform: Platform.OS === 'android' ? 'android' : 'ios',
-  getNativeModule: resolveNativeModule,
-});
 
 export interface AutoSkeletonProps {
   readonly isLoading: boolean;
@@ -293,10 +290,23 @@ function useColdMeasurement(
 
 /** Calls `requestHandoff()` and fires `onMetrics` exactly once when the
  *  controller settles — identical rationale to `web/AutoSkeleton.tsx`'s
- *  `useHandoffAndMetrics`. */
+ *  `useHandoffAndMetrics`.
+ *
+ *  Task 6.5 fix (REQ-PTR-1 observability): when `skeletonSuppressed` is
+ *  true (the default stale-while-revalidate PTR path — REQ-PTR-1's own
+ *  scenario, "existing content remains visible, no skeleton overlay"), NO
+ *  skeleton-to-content lifecycle ever visually occurred for this cycle, so
+ *  neither `requestHandoff()` nor `onMetrics` may fire. Before this fix,
+ *  both ran unconditionally — a real, pre-existing gap (present since
+ *  Phase 2/5, on both native and web) of the exact shape this project's own
+ *  REQ-OBS-BUDGET-1 amendment warns about, just as a wrongly-firing call
+ *  instead of a never-invoked formatter. `shouldRunHandoffCycle`
+ *  (`core/refresh-gate.ts`) is the single, Vitest-tested source of truth
+ *  both platforms now defer to. */
 function useHandoffAndMetrics(
   isLoading: boolean,
   controller: HandoffController,
+  skeletonSuppressed: boolean,
   metricsInput: {
     readonly snapshot: ShapeSnapshot | null;
     readonly cacheHit: boolean;
@@ -307,11 +317,16 @@ function useHandoffAndMetrics(
   },
   onMetrics: OnMetrics | undefined,
 ): void {
+  const runCycle = shouldRunHandoffCycle(skeletonSuppressed);
+
   useEffect(() => {
+    if (!runCycle) {
+      return;
+    }
     if (!isLoading) {
       controller.requestHandoff();
     }
-  }, [isLoading, controller]);
+  }, [runCycle, isLoading, controller]);
 
   const latestRef = useRef(metricsInput);
   latestRef.current = metricsInput;
@@ -319,6 +334,9 @@ function useHandoffAndMetrics(
   onMetricsRef.current = onMetrics;
 
   useEffect(() => {
+    if (!runCycle) {
+      return;
+    }
     let cancelled = false;
     controller.settled.then((reason) => {
       const latest = latestRef.current;
@@ -367,7 +385,7 @@ function useHandoffAndMetrics(
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [controller]);
+  }, [controller, runCycle]);
 }
 
 export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
@@ -466,6 +484,7 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   useHandoffAndMetrics(
     props.isLoading,
     controller,
+    skeletonSuppressed,
     {
       snapshot,
       cacheHit,

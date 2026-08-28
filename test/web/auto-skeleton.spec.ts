@@ -115,23 +115,49 @@ test.describe('AutoSkeleton — REQ-A11Y-1/2', () => {
 });
 
 test.describe('AutoSkeleton — REQ-PTR-1 pull-to-refresh', () => {
-  test('default: refreshing over existing content shows no skeleton', async ({ page, mountReady }) => {
+  // Task 6.5 (tasks.md Phase 6) gap closure: this test previously only
+  // asserted `overlayCount === 0` — it never wired `onMetrics` at all, so it
+  // could not have caught the real pre-existing bug `useHandoffAndMetrics`
+  // shipped with (both platforms unconditionally fired `onMetrics` once
+  // `controller.settled` resolved, with no check for the suppressed-cycle
+  // case). A NON-call assertion is only meaningful if the callback was
+  // genuinely wired and the surrounding path genuinely exercised (waiting
+  // past the full handoff fade, exactly like the REQ-NAV-1 test below) —
+  // otherwise "never called" is true for the trivial reason that nothing
+  // was listening.
+  test('default: refreshing WARM-CACHE content shows no skeleton, and onMetrics does not fire again', async ({
+    page,
+    mountReady,
+  }) => {
+    // The bug (and the fix) only bite when the composite cache key is
+    // ALREADY warm (REQ-NAV-1 intersecting REQ-PTR-1): a cold, never-
+    // measured key produces `snapshot === null` throughout, and the OLD web
+    // code's separate `!latest.snapshot` guard incidentally swallowed
+    // `onMetrics` for that reason alone — a false-negative-proof test. This
+    // test deliberately warms the cache with a REAL cold traversal first
+    // (mirroring how an already-visited screen behaves), THEN triggers the
+    // suppressed refresh cycle, so `snapshot` is genuinely non-null and the
+    // fix under test is what actually prevents the call.
     await mountReady();
     await page.evaluate(() => {
       const { React, createRoot, AutoSkeleton, SkeletonProvider, MemoryShapeStore } = window.AutoskeletonComponent;
       const store = new MemoryShapeStore();
+      const metrics: unknown[] = [];
+      (window as unknown as { __metrics: unknown[] }).__metrics = metrics;
       (window as unknown as { __root: unknown; __els: unknown }).__root = createRoot(
         document.getElementById('root')!,
       );
       (window as unknown as { __els: unknown }).__els = { React, AutoSkeleton, SkeletonProvider, store };
       const { __root, __els } = window as unknown as { __root: any; __els: any };
+      // Cycle 1: a genuine cold load — warms the cache with a real
+      // traversal, exactly like a first visit to this screen.
       __root.render(
         __els.React.createElement(
           __els.SkeletonProvider,
           { store: __els.store },
           __els.React.createElement(
             __els.AutoSkeleton,
-            { isLoading: false, skeletonKey: 'ptr-screen' },
+            { isLoading: true, skeletonKey: 'ptr-screen', onMetrics: (m: unknown) => metrics.push(m) },
             __els.React.createElement('p', { id: 'real-content' }, 'Existing content'),
           ),
         ),
@@ -139,15 +165,41 @@ test.describe('AutoSkeleton — REQ-PTR-1 pull-to-refresh', () => {
     });
     await settle(page);
 
+    // End cycle 1 (content resolves) so the handoff settles and the cache
+    // key is confirmed warm before the refresh cycle begins.
     await page.evaluate(() => {
-      const { __root, __els } = window as unknown as { __root: any; __els: any };
+      const { __root, __els, __metrics } = window as unknown as { __root: any; __els: any; __metrics: unknown[] };
       __root.render(
         __els.React.createElement(
           __els.SkeletonProvider,
           { store: __els.store },
           __els.React.createElement(
             __els.AutoSkeleton,
-            { isLoading: true, skeletonKey: 'ptr-screen' },
+            { isLoading: false, skeletonKey: 'ptr-screen', onMetrics: (m: unknown) => __metrics.push(m) },
+            __els.React.createElement('p', { id: 'real-content' }, 'Existing content'),
+          ),
+        ),
+      );
+    });
+    await page.waitForTimeout(300);
+    const metricsAfterColdLoad = await page.evaluate(
+      () => (window as unknown as { __metrics: unknown[] }).__metrics,
+    );
+    expect(metricsAfterColdLoad).toHaveLength(1);
+
+    // Cycle 2: pull-to-refresh over the now-warm cache key — REQ-PTR-1's
+    // actual scenario. `cacheHit` is true and `snapshot` is genuinely
+    // non-null this time, so the fix (not an incidental null-snapshot
+    // guard) is what must prevent a second `onMetrics` call.
+    await page.evaluate(() => {
+      const { __root, __els, __metrics } = window as unknown as { __root: any; __els: any; __metrics: unknown[] };
+      __root.render(
+        __els.React.createElement(
+          __els.SkeletonProvider,
+          { store: __els.store },
+          __els.React.createElement(
+            __els.AutoSkeleton,
+            { isLoading: true, skeletonKey: 'ptr-screen', onMetrics: (m: unknown) => __metrics.push(m) },
             __els.React.createElement('p', { id: 'real-content' }, 'Existing content'),
           ),
         ),
@@ -157,9 +209,42 @@ test.describe('AutoSkeleton — REQ-PTR-1 pull-to-refresh', () => {
 
     const overlayCount = await page.locator('.askl-overlay').count();
     expect(overlayCount).toBe(0);
+
+    // Complete cycle 2 (isLoading -> false again, mirroring the refresh
+    // resolving) — this is the exact moment the bug fired: `requestHandoff`
+    // only ever runs reactively on `!isLoading`, so `controller.settled`
+    // never resolves (and `onMetrics` never has a chance to fire, buggy or
+    // not) until this transition happens. Skipping this step would make the
+    // non-call assertion below pass trivially for the wrong reason, exactly
+    // the "test would pass because nothing is wired at all" trap this task
+    // was explicitly warned about.
+    await page.evaluate(() => {
+      const { __root, __els, __metrics } = window as unknown as { __root: any; __els: any; __metrics: unknown[] };
+      __root.render(
+        __els.React.createElement(
+          __els.SkeletonProvider,
+          { store: __els.store },
+          __els.React.createElement(
+            __els.AutoSkeleton,
+            { isLoading: false, skeletonKey: 'ptr-screen', onMetrics: (m: unknown) => __metrics.push(m) },
+            __els.React.createElement('p', { id: 'real-content' }, 'Existing content'),
+          ),
+        ),
+      );
+    });
+
+    // Wait past the full handoff fade (default 120ms) plus slack — the same
+    // window the REQ-NAV-1 test below waits before reading `__metrics` for
+    // its POSITIVE assertion. A non-call assertion taken any earlier would
+    // be meaningless (the callback might simply not have had time yet).
+    await page.waitForTimeout(300);
+    const metricsAfterSuppressedCycle = await page.evaluate(
+      () => (window as unknown as { __metrics: unknown[] }).__metrics,
+    );
+    expect(metricsAfterSuppressedCycle).toHaveLength(1);
   });
 
-  test('opt-out (skeletonOnRefresh): refreshing over existing content shows the skeleton', async ({
+  test('opt-out (skeletonOnRefresh): refreshing over existing content shows the skeleton, and onMetrics fires once', async ({
     page,
     mountReady,
   }) => {
@@ -167,6 +252,8 @@ test.describe('AutoSkeleton — REQ-PTR-1 pull-to-refresh', () => {
     await page.evaluate(() => {
       const { React, createRoot, AutoSkeleton, SkeletonProvider, MemoryShapeStore } = window.AutoskeletonComponent;
       const store = new MemoryShapeStore();
+      const metrics: unknown[] = [];
+      (window as unknown as { __metrics: unknown[] }).__metrics = metrics;
       const root = createRoot(document.getElementById('root')!);
       (window as unknown as { __root: unknown; __els: unknown }).__root = root;
       (window as unknown as { __els: unknown }).__els = { React, AutoSkeleton, SkeletonProvider, store };
@@ -176,7 +263,7 @@ test.describe('AutoSkeleton — REQ-PTR-1 pull-to-refresh', () => {
           { store },
           React.createElement(
             AutoSkeleton,
-            { isLoading: false, skeletonKey: 'ptr-optout-screen' },
+            { isLoading: false, skeletonKey: 'ptr-optout-screen', onMetrics: (m: unknown) => metrics.push(m) },
             React.createElement('p', {}, 'Existing content'),
           ),
         ),
@@ -185,14 +272,19 @@ test.describe('AutoSkeleton — REQ-PTR-1 pull-to-refresh', () => {
     await settle(page);
 
     await page.evaluate(() => {
-      const { __root, __els } = window as unknown as { __root: any; __els: any };
+      const { __root, __els, __metrics } = window as unknown as { __root: any; __els: any; __metrics: unknown[] };
       __root.render(
         __els.React.createElement(
           __els.SkeletonProvider,
           { store: __els.store },
           __els.React.createElement(
             __els.AutoSkeleton,
-            { isLoading: true, skeletonKey: 'ptr-optout-screen', skeletonOnRefresh: true },
+            {
+              isLoading: true,
+              skeletonKey: 'ptr-optout-screen',
+              skeletonOnRefresh: true,
+              onMetrics: (m: unknown) => __metrics.push(m),
+            },
             __els.React.createElement('p', {}, 'Existing content'),
           ),
         ),
@@ -202,6 +294,34 @@ test.describe('AutoSkeleton — REQ-PTR-1 pull-to-refresh', () => {
 
     const overlayCount = await page.locator('.askl-overlay').count();
     expect(overlayCount).toBe(1);
+
+    // End the opted-in cycle (isLoading -> false) so the handoff settles and
+    // onMetrics gets a chance to fire — proving the fix is scoped to the
+    // SUPPRESSED case only, never to a genuinely-shown skeleton cycle.
+    await page.evaluate(() => {
+      const { __root, __els, __metrics } = window as unknown as { __root: any; __els: any; __metrics: unknown[] };
+      __root.render(
+        __els.React.createElement(
+          __els.SkeletonProvider,
+          { store: __els.store },
+          __els.React.createElement(
+            __els.AutoSkeleton,
+            {
+              isLoading: false,
+              skeletonKey: 'ptr-optout-screen',
+              skeletonOnRefresh: true,
+              onMetrics: (m: unknown) => __metrics.push(m),
+            },
+            __els.React.createElement('p', {}, 'Existing content'),
+          ),
+        ),
+      );
+    });
+    await page.waitForTimeout(300);
+    const metricsAfterOptOutCycle = await page.evaluate(
+      () => (window as unknown as { __metrics: unknown[] }).__metrics,
+    );
+    expect(metricsAfterOptOutCycle).toHaveLength(1);
   });
 });
 

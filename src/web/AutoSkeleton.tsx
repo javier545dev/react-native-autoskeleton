@@ -35,6 +35,7 @@ import {
   emitBudgetWarnings,
   emitRadiusFallbackWarning,
 } from '../core/metrics';
+import { shouldRunHandoffCycle } from '../core/refresh-gate';
 import { MemoryShapeStore } from '../core/snapshot';
 import type { AnimationKind, OnMetrics, ShapeSnapshot } from '../core/types';
 import { WIRE_HEADER_SLOTS, WIRE_STRIDE } from '../core/types';
@@ -332,9 +333,19 @@ function useSkeletonDelayGate(delayMs: number, cycleId: number): boolean {
  *  with an external, imperative state machine reacting to a value this
  *  component does not own the transition of (the parent's data resolving) —
  *  the skill's Rule 4 case, isolated in its own hook. */
+/** Task 6.5 fix (REQ-PTR-1 observability, tasks.md Phase 6): when
+ *  `skeletonSuppressed` is true (the default stale-while-revalidate PTR
+ *  path), no skeleton-to-content lifecycle ever visually occurred for this
+ *  cycle, so neither `requestHandoff()` nor `onMetrics` may fire. Prior to
+ *  this fix both ran unconditionally — mirrors the identical bug found and
+ *  fixed in `native/AutoSkeleton.tsx`'s own `useHandoffAndMetrics`; see that
+ *  file's doc comment for the full account. `shouldRunHandoffCycle`
+ *  (`core/refresh-gate.ts`) is the single, Vitest-tested source of truth
+ *  both platforms defer to. */
 function useHandoffAndMetrics(
   isLoading: boolean,
   controller: HandoffController,
+  skeletonSuppressed: boolean,
   metricsInput: {
     readonly snapshot: ShapeSnapshot | null;
     readonly cacheHit: boolean;
@@ -345,11 +356,16 @@ function useHandoffAndMetrics(
   },
   onMetrics: OnMetrics | undefined,
 ): void {
+  const runCycle = shouldRunHandoffCycle(skeletonSuppressed);
+
   useEffect(() => {
+    if (!runCycle) {
+      return;
+    }
     if (!isLoading) {
       controller.requestHandoff();
     }
-  }, [isLoading, controller]);
+  }, [runCycle, isLoading, controller]);
 
   // The `settled` subscription itself must attach exactly ONCE per
   // controller (deps=[controller]) so `onMetrics` fires exactly once
@@ -366,6 +382,9 @@ function useHandoffAndMetrics(
   onMetricsRef.current = onMetrics;
 
   useEffect(() => {
+    if (!runCycle) {
+      return;
+    }
     let cancelled = false;
     controller.settled.then((reason) => {
       const latest = latestRef.current;
@@ -397,7 +416,7 @@ function useHandoffAndMetrics(
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [controller]);
+  }, [controller, runCycle]);
 }
 
 export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
@@ -521,6 +540,7 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   useHandoffAndMetrics(
     props.isLoading,
     controller,
+    skeletonSuppressed,
     {
       snapshot,
       cacheHit,
