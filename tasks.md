@@ -52,7 +52,7 @@ waive the budget itself.
 | 4 | Android sensor + radius ladder + tier-1 renderer + debugOverlay | PR 5 | `./gradlew testDebugUnitTest connectedAndroidTest` | `examples/bare-rn` Android build + boot in emulator | Revert `android/**`; R2 rung individually feature-flaggable to R0/R1/R3 without reverting the PR |
 | 5 | `getShapes` Turbo Module bridge + tier-2 Skia renderer + Expo Go guidance | PR 6 | `vitest run test/native/wire-bridge.test.ts && xcodebuild test && ./gradlew connectedAndroidTest` | `examples/bare-rn` + `examples/expo`, both native builds | Revert `src/native/**`; tier-1 renderers (PR 4/5) still function since tier-2 is opt-in |
 | 6 | Virtualized lists (3 sub-cases) + recycling safety | PR 7 | native E2E: 50-cell scroll + recycle-stress suite | `examples/bare-rn` FlashList screen | Revert `src/native/list/**`; whole-screen `AutoSkeleton` (PR 6) unaffected |
-| 7 | Theming interops (Uniwind/NativeWind) | PR 8 | `vitest run test/packaging/interop-exports.test.ts` + native E2E | `examples/expo` themed screen | Revert `src/interop/**`; default entries untouched (verified by 7.4) |
+| 7 | Theming interops (Uniwind — sole interop, NativeWind excluded per ADR-17) | PR 8 | `vitest run test/packaging/interop-exports.test.ts` + native E2E | `examples/expo` themed screen | Revert `src/interop/**`; default entries untouched (verified by 7.4/7.5) |
 | 8 | SSR capture CLI + `@media` bundle + hydration bridge + web handoff | PR 9 | `vitest run cli` + `playwright test test/ssr` | `examples/next` build + serve, JS-disabled load | Revert `cli/**`, `src/web/ssr/**`; client runtime (PR 3) unaffected |
 | 9 | CI benchmarks + ADR-14 build-matrix gate + docs | PR 10 | `node benchmarks/run.js` | full CI matrix across all four example apps | Revert `benchmarks/**`, docs; no runtime code depends on this PR |
 
@@ -796,6 +796,100 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       (`pollUntilPixel`) instead of sampling once — the same "wait for a real condition" discipline
       `waitForMount` itself already used, never a widened color tolerance.
 
+- [x] **5.9** Phase-5-remediation (post-7.2 gap closure): thread `budgetMs`/
+      `maxShapes`/`defaultRadius`/`collectDebugSidecars` from JS
+      `SensorOptions` (`SkeletonProvider`/per-instance theme) through
+      `getShapes` into the REAL native `sensor.measure()` options on both
+      platforms — task 7.2 found and flagged (not fixed, out of scope then)
+      that `getShapes(reactTag, cacheKey)` accepted no configuration at all,
+      so every native traversal ran against compiled defaults
+      (`AutoskeletonSensorOptions.defaults` / `.defaults`), leaving
+      REQ-OBS-BUDGET-1's "budgets MUST be configurable" structurally unmet
+      on native and `SkeletonProvider.defaultRadius` — the primary mechanism
+      for rounded Android content per on-device measurement (RN's real
+      `CompositeBackgroundDrawable` never reports a radius via the public
+      `getOutline()` API) — unreachable.
+      **Verified before designing the fix (this session's own explicit
+      instruction)**: the empty hint registry hardcoded on both bridge paths
+      (`AutoskeletonEmptyHintRegistry()`/`.defaults`) means the typed
+      `radius` hint (ADR-2 R0) genuinely does NOT reach the sensor via
+      `getShapes` — confirmed by reading `AutoskeletonSensor.kt`/`.swift`'s
+      `leafShapes`: `nativeID`/`accessibilityIdentifier` is only the LOOKUP
+      KEY into the hint registry OBJECT passed via `SensorOptions.hints`,
+      never an independent channel bypassing it — so an empty registry
+      disables R0 unconditionally, on both platforms, regardless of this
+      task. Sized accordingly: threading real per-node hint DATA end-to-end
+      is a distinct, materially larger feature (`src/native/sensor.ts` and
+      `AutoSkeleton.tsx` both hardcode empty hint functions today; there is
+      no JS-side producer of non-empty hints anywhere in this codebase) and
+      stays explicitly out of this task's scope — flagged as a real, larger
+      follow-up, not silently absorbed.
+      **Config shape**: a per-call `AutoskeletonGetShapesConfig` parameter on
+      `getShapes` (not a separate `setConfig()`), matching ADR-1's own
+      call-frequency discipline (`getShapes` already runs once per cache
+      miss per mount, never per frame, never on list-cell bind —
+      `test/native/wire-bridge.test.ts` keeps asserting that call-count
+      contract unchanged). Carries exactly the SCALAR fields of
+      `SensorOptions` a bridge crossing can represent
+      (`defaultRadius`/`budgetMs`/`maxShapes`/`collectDebugSidecars`);
+      `hints` (live JS functions) cannot cross the boundary and is out of
+      scope per the finding above.
+      **Real second defect found and fixed while wiring Android** (not
+      merely "accept and drop" — genuinely threading the value): Android's
+      R3 fallback radius was ALSO hardcoded independently of
+      `SensorOptions.defaultRadius` — `AutoskeletonModule`'s
+      constructor-injected `radiusResolver` (`AutoskeletonPublicApiRadiusResolver()`,
+      never overridden in production) baked its own `defaultRadius = 0f` at
+      construction time, decoupled from the options object entirely, so
+      even fixing only the options field would NOT have changed the emitted
+      radius. Fixed by constructing the resolver fresh per call from
+      `config.defaultRadius`, mirroring `AutoskeletonSensor.refine()`'s
+      already-established pattern; the dead constructor DI seam (confirmed
+      via repo-wide grep: never exercised in production, never overridden
+      by any test) was removed rather than left as accidental duplicate
+      state.
+      **Codegen verified regenerated, not assumed**: ran
+      `generate-codegen-artifacts.js` standalone and re-ran `pod install`
+      after the TS spec change, then read the actual generated interfaces —
+      Android: `getShapes(double, String, ReadableMap)` (`NativeAutoskeletonSpec.java`);
+      iOS: `getShapes:cacheKey:config:` taking the typed C++ struct
+      `JS::NativeAutoskeleton::AutoskeletonGetShapesConfig` with
+      `defaultRadius()`/`budgetMs()`/`maxShapes()`/`collectDebugSidecars()`
+      accessors (`AutoskeletonSpec.h`) — confirming Android's codegen
+      generates a dynamic `ReadableMap`, not a typed struct, unlike iOS.
+      **Tests prove the value ARRIVES** (wire geometry changes), not merely
+      that the signature accepts it: `test/native/sensor.test.ts` /
+      `wire-bridge.test.ts` assert a non-default config forwards to native
+      `getShapes` verbatim; `AutoskeletonModuleTest.kt` (Android, real
+      `AutoskeletonSensor`/laid-out `View`s via `SyntheticHierarchyBuilder`)
+      asserts `maxShapes=1` truncates a real multi-shape traversal to
+      exactly one shape and a real R3-fallback rounded leaf's wire `r`
+      value changes with `defaultRadius` (16 vs 3, density-normalized);
+      `AutoskeletonModuleBridgeTests.swift` (iOS, real `AutoskeletonSensor`)
+      asserts the same `maxShapes` truncation and a `budgetMs=-1` zero-shape
+      truncation, plus documents (as a passing assertion, not silently)
+      that `defaultRadius` is architecturally inert on iOS — always
+      `view.layer.cornerRadius`, no fallback rung exists there.
+      **Tests**: `vitest run test/native/wire-bridge.test.ts test/native/sensor.test.ts`
+      (16/16, 2 new); Android JUnit `AutoskeletonModuleTest` (via
+      `:autoskeleton:testDebugUnitTest` against the tarball-installed copy,
+      106/106, 4 new); iOS XCTest `Autoskeleton-Unit-Tests` (75/75, 3 new).
+      **Observability**: N/A directly — `collectDebugSidecars` now
+      genuinely reaches native rather than always being forced `false`/`true`
+      by a bridge-layer constant. **Performance**: N/A, same one-call-per-
+      cache-miss-per-mount shape; one extra small marshaled object, no new
+      allocation on the animation path. Deps: 5.1, 5.2, 5.8. Complexity: M.
+      Example app: bare RN (both platforms) — Expo not touched this task
+      (no native Kotlin/Swift/ObjC++ divergence between the two autolinkers
+      for this bridge-only change; `useTemplateMeasurement.ts`'s Phase 6
+      list-cell path already built full `SensorOptions` and benefits from
+      this fix automatically, no separate change needed there).
+      **Harnesses (no regressions)**: vitest 266/266 (was 264, +2), Playwright
+      38/38 unchanged, typecheck clean, Android unit 106/106 (was 102, +4),
+      iOS unit 75/75 (was 72, +3), Android paint gate 3/3 unchanged, Android
+      list gate 5/5 unchanged, iOS visual gate 3/3 (see this task's own
+      session notes below for confirmation run).
+
 ## Phase 6: Virtualized lists (all three sub-cases)
 
 > **Session status (2026-08-28, branch `feat/phase-6-virtualized-lists`)**: 6.1-6.5 DONE on
@@ -992,37 +1086,378 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       (real, existing native-consumer proof); Vite (temporary web-consumer proof, both
       directions).
 
-## Phase 7: Theming interops (Uniwind / NativeWind)
+## Phase 7: Theming interops (Uniwind — sole interop; NativeWind excluded, see 7.5/ADR-17)
 
-- [ ] **7.1** RED→GREEN `--skl-base`/`--skl-highlight` CSS-variable contract wired into 2.2's
+- [x] **7.1** RED→GREEN `--skl-base`/`--skl-highlight` CSS-variable contract wired into 2.2's
       renderer, Tailwind v4 `@theme` cascade, dark mode via cascade with no prop change
       (REQ-THEME-1).
-      **Tests**: Playwright — Tailwind v4 theme-variable scenario and dark-mode-toggle-via-cascade
-      scenario. **Observability**: N/A, styling resolution only. **Performance**: N/A;
-      contributes to NFR-6 only via CSS custom properties, re-verified in 7.4. Deps: 2.2.
-      Complexity: S. Example app: Vite.
-- [ ] **7.2** RED→GREEN `autoskeleton/uniwind` subpath export — `src/interop/uniwind.ts` mapping
+      **Real bug found and fixed** (not a from-scratch feature): the CSS custom-property
+      *fallback* contract (`var(--skl-base, #e2e2e2)`) already existed since task 2.2, but
+      `css-renderer.ts`'s `applyAnimation()` unconditionally wrote an INLINE
+      `overlay.style.setProperty('--skl-base', theme.baseColor)` on every mount — and
+      `theme.baseColor` is always the library's own JS `DEFAULT_THEME` constant unless a
+      consumer explicitly customizes `SkeletonProvider`. An inline style always beats any
+      stylesheet declaration of the same custom property regardless of specificity or cascade
+      origin, so a consumer's `:root`/`@theme`/`.dark` override was silently clobbered on every
+      render — REQ-THEME-1's "no prop change" guarantee was not actually met. Fixed by exporting
+      `DEFAULT_BASE_COLOR`/`DEFAULT_HIGHLIGHT_COLOR` as the single source of truth for both the
+      stylesheet's `var()` fallback and `AutoSkeleton.tsx`'s `DEFAULT_THEME` (imported, not
+      duplicated), and only writing the inline override when `theme.baseColor`/`highlightColor`
+      differs from that default — i.e. only when a consumer explicitly asked for a color via a
+      React prop. Default (unconfigured) usage now genuinely defers to the CSS cascade.
+      **Tailwind v4 `@theme` finding (verified against the real compiler, not assumed)**: an
+      arbitrary non-namespaced custom-property key (e.g. `--skl-highlight`) inside `@theme` is
+      SILENTLY DROPPED by Tailwind v4 4.3.3 — only recognized namespaces (`--color-*`, `--font-*`,
+      etc.) survive into the compiled `:root`/`:host` block. spec.md §1.9's own scenario text
+      already anticipates this ("inside `@theme` **or** `:root`") — the practical consumer pattern
+      is either a plain `:root { --skl-base: ...; }` declaration (untouched pass-through, verified)
+      or a `--color-skl-base` alias inside `@theme` var-of-var'd into `--skl-base` at `:root`. Both
+      are exercised by the tests below.
+      **Tests**: `test/web/theme-cascade.spec.ts` (Playwright, 2 new) — both compile a REAL
+      Tailwind v4 entry stylesheet through the actual installed `@tailwindcss/cli` binary
+      (`test/web/helpers/tailwind.ts`, new — resolves and spawns the CLI directly, no `npx`/network
+      dependency; scratch files live under gitignored `.tailwind-tmp/`, never committed) and mount
+      the REAL `createCssRenderer()` with the library's untouched default theme (no
+      `SkeletonProvider` override — the shape every default consumer gets): (1) a `@theme`
+      `--color-skl-base`/`--color-skl-highlight` pair aliased at `:root` resolves through to the
+      rendered `background-color`, overriding the JS default with zero prop change; (2) toggling
+      `.dark` on `<html>` (no renderer method call, no re-mount, no prop of any kind) flips the
+      resolved color via cascade alone. Verified RED first for the exact right reason (both
+      assertions returned `rgb(226, 226, 226)` — the old inline-forced JS default — regardless of
+      the Tailwind-compiled `--skl-base` value), then GREEN after the fix. Also extended
+      `src/web/css-renderer.test.ts` (Vitest, +1) asserting the stylesheet's `var()` fallbacks
+      match the exported `DEFAULT_*` constants exactly (drift guard). **Observability**: N/A,
+      styling resolution only. **Performance**: N/A; contributes to NFR-6 only via CSS custom
+      properties, re-verified in 7.4. Deps: 2.2. Complexity: S. Example app: Vite.
+- [x] **7.2** RED→GREEN `autoskeleton/uniwind` subpath export — `src/interop/uniwind.ts` mapping
       resolved className values (`backgroundColor→shimmerBaseColor`,
       `color→shimmerHighlightColor`, `borderRadius→defaultRadius`) via `withUniwind`; core
       sensor stays agnostic (REQ-THEME-2/3).
-      **Tests**: native E2E (Expo, `withUniwind` active) — REQ-THEME-2 scenario (className-driven
-      values resolve with no separate developer-supplied props); a grep-level static assertion
-      that `src/core/` never imports/parses a className string. **Observability**: N/A, theming
-      resolution only. **Performance**: N/A. Deps: 7.1, 5.5. Complexity: M. Example app: Expo.
-- [ ] **7.3** RED→GREEN `autoskeleton/nativewind` subpath export — `src/interop/nativewind.ts`,
+      **Ecosystem correction (verified from source, per this session's brief)**: `uniwind` IS a
+      real, published package (`uni-stack/uniwind`, current v1.11.0, not the brief's assumed
+      ~1.2.6) — a COMPETING project from the Unistyles team, NOT NativeWind's engine (confirmed:
+      NativeWind's own engine is `react-native-css`; the two packages share no code). Its real
+      `withUniwind(Component, options)` manual-mapping API (`node_modules/uniwind/dist/module/
+      hoc/types.d.ts`) matches the brief's assumed shape almost exactly: `options[propName] =
+      { fromClassName: 'className', styleProperty: 'backgroundColor' | 'color' | 'borderRadius' }`.
+      **Real gap found and fixed as a PREREQUISITE**: `AutoSkeletonProps` (native) had no
+      `shimmerBaseColor`/`shimmerHighlightColor`/`defaultRadius` props at all — Phase 5 never
+      added per-instance theme-override props, only the global `SkeletonProvider.theme`. Added
+      them, wired via a new pure `applyThemeOverride(theme, override)` (`src/core/theme-override.ts`
+      — `??`, not `||`, so `defaultRadius: 0` is honored) merged into `native/AutoSkeleton.tsx`'s
+      render path.
+      **Native E2E: RAN, on a real Android emulator (`Medium_Phone_API_36.1`), genuinely
+      successful for the color half of REQ-THEME-2.** `examples/expo` prebuilt fresh
+      (`expo prebuild --platform android`), `uniwind`/`tailwindcss@^4` installed as real app
+      dependencies, `metro.config.js` wired with the real `withUniwindConfig` plugin, `App.tsx`
+      renders `<ThemedAutoSkeleton className="bg-slate-400 text-cyan-300 rounded-2xl" ... />`
+      with ZERO `shimmerBaseColor`/`shimmerHighlightColor`/`defaultRadius` prop supplied — a
+      genuine `expo run:android` development build (Gradle `BUILD SUCCESSFUL`, real APK installed,
+      Metro bundled 939 modules) rendered a shimmer gradient whose colors visibly match
+      `bg-slate-400`/`text-cyan-300` (screenshot evidence), not the library's `#e2e2e2`/`#f5f5f5`
+      JS defaults — REQ-THEME-2's exact scenario, proven on real hardware, not simulated.
+      **Real gap found, root-caused with evidence, and left honest rather than silently
+      "working"**: the `defaultRadius` mapping (`borderRadius→defaultRadius`) resolves correctly
+      at the JS layer — confirmed via a temporary `useResolveClassNames()` diagnostic logged to
+      logcat: `{"backgroundColor":"#90a1b9","color":"#53eafd","borderRadius":16}` — but has NO
+      visible effect on the rendered mask. Root-caused by reading `src/native/sensor.ts` and
+      `src/native/NativeAutoskeleton.ts`: the `getShapes(reactTag, cacheKey)` Turbo Module bridge
+      spec (task 5.1, ADR-1) NEVER carries `defaultRadius`/`budgetMs`/`maxShapes` from JS to the
+      native traversal call at all — `sensor.ts`'s `measure()` receives `SensorOptions` but only
+      forwards `.key`, discarding the rest. This is a PRE-EXISTING Phase 5 architectural gap, not
+      something 7.2 introduced or something specific to theming — the identical defect would
+      occur for any consumer setting `SkeletonProvider defaultRadius={16}` directly on native.
+      Fixing the bridge signature (adding config params + native call-site changes on both
+      platforms + codegen regeneration) is out of scope for Phase 7 and flagged here as a
+      follow-up, not silently patched over.
+      **Grep-level static assertion (task's own explicit ask)**: `test/packaging/
+      core-styling-agnostic.test.ts` — scans real on-disk `src/core/**/*.ts` source text (comments
+      stripped first, so the module's own REQ-THEME-3 compliance doc comments don't self-trigger)
+      for the identifier `className`; includes a second test proving the assertion is non-vacuous
+      (a fabricated violation string is correctly caught). 2/2 GREEN; `src/core/` never references
+      `className`.
+      **Tests**: native E2E as described above (Expo, real Android emulator, `withUniwind`
+      active) — REQ-THEME-2 color-mapping scenario proven; `test/packaging/
+      core-styling-agnostic.test.ts` (Vitest, 2 new); `src/core/theme-override.test.ts` (Vitest, 6
+      new, RED→GREEN — RED was a real `bob build` failure, `./theme-override` module not found).
+      **Observability**: N/A, theming resolution only. **Performance**: N/A. Deps: 7.1, 5.5.
+      Complexity: M. Example app: Expo — genuinely wired and run, not just scaffolded.
+- [x] **7.3** RED→GREEN `autoskeleton/nativewind` subpath export — `src/interop/nativewind.ts`,
       `cssInterop` equivalent mapping (current/stable v4; v5 migration documented as a future
       risk, not a v1 blocker).
-      **Tests**: native E2E (Expo, NativeWind v4 active) — same mapping scenario as 7.2 adapted
-      to `cssInterop`. **Observability**: N/A. **Performance**: N/A. Deps: 7.2. Complexity: M.
-      Example app: Expo.
-- [ ] **7.4** Packaging: both interops as tree-shakeable subpath exports (`./uniwind`,
+
+      **STATUS UPDATE (2026-08-28): OUT OF SCOPE BY MAINTAINER DECISION — see task 7.5 / ADR-17,
+      NOT "DoD unmet".** This is a different state from the "native E2E scenario in the DoD is
+      UNMET" line below, and the record should say which is true: at the time this task was
+      completed, the native E2E genuinely did not run (DoD unmet, for the reasons documented
+      below). Independently, and afterward, the maintainer decided — based on the reason-1
+      finding below (NativeWind 4.2.6 hard-requires Tailwind v3, verified from source,
+      unconditional and not an environment artifact) — that NativeWind support is a non-goal for
+      this project's Tailwind-v4 theming story, regardless of whether the toolchain deadlock
+      below could eventually be worked around. `src/interop/nativewind.ts` and the
+      `autoskeleton/nativewind` subpath export have been REMOVED (task 7.5); `uniwind` is the
+      sole theming interop. The investigation below is preserved verbatim as the evidence trail
+      for that decision — it is the reason the decision is good, not a gap being covered up.
+      **Ecosystem correction (verified from source)**: the "NativeWind doesn't work in Expo Go"
+      claim traces to NativewindUI, a separate third-party component kit — NativeWind CORE
+      (what this file integrates with) has zero native code. Confirmed `cssInterop` is real,
+      re-exported by `nativewind@4.2.6` from `react-native-css-interop@0.2.6`
+      (`node_modules/nativewind/dist/index.d.ts`), with the exact `{ target: false,
+      nativeStyleToProp: {...} }` mapping shape the brief assumed. `src/interop/nativewind.ts`
+      typechecks cleanly against the real installed API (`npm run typecheck`, root `tsc`).
+      **A second real, load-bearing ecosystem finding, verified from source (not assumed)**:
+      NativeWind v4.2.6 — the current npm `latest`, "current and stable" per this project's own
+      spec.md §1.9 — HARD-REQUIRES Tailwind CSS v3.
+      `node_modules/nativewind/dist/metro/tailwind/index.js`: `const isV3 =
+      package.version.split('.')[0].includes('3'); if (!isV3) throw new Error("NativeWind only
+      supports Tailwind CSS v3")`. This is unconditional and unrelated to any config choice —
+      confirmed by installing `tailwindcss@^4` (matching 7.1/7.2's real v4 engine) and hitting
+      this exact thrown error at Metro config load, before any bundling. Reproduced consistently.
+      spec.md's "NativeWind — current and stable in v4" assumption is CORRECT for NativeWind's
+      OWN major version, but WRONG in implying Tailwind-v4 compatibility — the two "v4"s refer to
+      unrelated version numbers. Downgrading to `tailwindcss@^3` (isolated to a separate
+      verification pass, since `uniwind` hard-requires Tailwind `>=4` — the two interops cannot
+      share one `node_modules` tree) resolved this specific error.
+      **Native E2E: ATTEMPTED with real, sustained effort; did NOT reach a running build in this
+      environment — STOPPING and reporting honestly per this session's explicit instruction,
+      rather than declaring victory on a broken chain.** After fixing the Tailwind-v3 requirement,
+      hit a cascading, fully-documented series of REAL environment/toolchain defects, each
+      independently verified and fixed or worked around before the next surfaced — none caused by
+      `src/interop/nativewind.ts` itself, all in third-party native build tooling for this exact
+      Expo SDK 57 / RN 0.86.3 / `expo-modules-core@57.0.14` combination:
+        1. `expo-modules-core`'s optional worklets C++ integration (`WorkletJSCallInvoker.cpp`)
+           fails to compile against `react-native-worklets@0.12.x` (`no member named 'executeSync'
+           in 'worklets::WorkletRuntime'`) — that version is pulled in automatically as an
+           npm-optional-peer-satisfaction of `react-native-reanimated` the moment ANY bare
+           `npm install` runs in `examples/expo`, because `autoskeleton`'s own
+           `peerDependenciesMeta.react-native-reanimated: {optional:true}` still gets
+           auto-resolved by npm 7+ even though it is optional. Installing the compatible pinned
+           range `react-native-worklets@0.10.0` explicitly fixed the C++ ABI mismatch.
+        2. That fix then hit a Gradle/CMake build-ordering defect (`ninja: error: ...libworklets.so
+           ... missing and no known rule to make it`) — resolved by a clean Gradle daemon stop +
+           `.cxx`/`build` cache wipe + fresh `expo prebuild`; confirmed as a stale-cache artifact,
+           not a structural defect (rebuilt clean twice after, both green).
+        3. `nativewind/babel`'s underlying `react-native-css-interop@0.2.6` package is installed
+           by npm NESTED ONLY under `nativewind/node_modules/` in this exact dependency graph
+           (verified: even a from-scratch `rm -rf node_modules && npm install` with zero
+           conflicting version requirements still nested it, not hoisted) — breaking Metro's bare
+           `import 'react-native-css-interop/jsx-runtime'` resolution from files outside
+           `nativewind` itself. Worked around by (a) dropping the unnecessary
+           `jsxImportSource: 'nativewind'` babel option (this fixture uses `cssInterop()`
+           explicitly, never NativeWind's automatic JSX-injection runtime) and (b) installing
+           `react-native-css-interop@0.2.6` as an explicit top-level devDependency so the package
+           resolves from a stable path regardless of (a).
+        4. `react-native-css-interop`'s OWN runtime (`dist/runtime/native/native-interop.js`)
+           unconditionally `import`s `react-native-reanimated` at module scope — genuinely
+           required for Metro to bundle at all, contradicting `nativewind`'s peerDependency
+           listing it as `>3.6.2` with no `peerDependenciesMeta.optional`. Installing
+           `react-native-reanimated@4.6.0` (npm's default resolution) re-pulled
+           `react-native-worklets@^0.12.x`, reproducing defect (1).
+        5. Installing `react-native-reanimated@3.19.5` instead (pre-worklets-split architecture,
+           no separate native worklets package needed) avoided (4) entirely at the JS-resolution
+           layer, but its Android native code (`ReaLayoutAnimator.java`,
+           `ReanimatedModule.java`) references `com.facebook.react.uimanager.layoutanimation.
+           LayoutAnimationController`/`UIManagerModuleListener` — Old-Architecture classes REMOVED
+           from `react-native@0.86.3`'s New-Architecture-only APIs. 20 real `javac` compile
+           errors, not a config issue.
+      **Conclusion, stated plainly**: in this exact SDK/RN/expo-modules-core combination,
+      NativeWind v4.2.6's real runtime dependency on `react-native-reanimated` has NO compatible
+      resolution — reanimated 4.x's worklets requirement is too new for
+      `expo-modules-core@57.0.14`'s compiled C++ ABI, and reanimated 3.x is incompatible with RN
+      0.86.3's New Architecture. This is a genuine, verified dependency deadlock in the current
+      package ecosystem, not a gap in this session's effort or in `src/interop/nativewind.ts`'s
+      own correctness. **The example app's final committed state demonstrates uniwind (7.2),
+      genuinely wired and run; this nativewind investigation's config/dependency attempts were
+      fully reverted** (`git diff` on `examples/expo/` shows only the working uniwind state) —
+      left as this written record rather than a half-broken committed config.
+      **Tests**: `src/interop/nativewind.ts` typechecks cleanly against the real installed
+      `nativewind@4.2.6`/`react-native-css-interop@0.2.6` API (root `tsc`, part of `npm run
+      typecheck`'s 266/266+clean baseline). **Native E2E scenario in the DoD is UNMET** — stated
+      plainly, task marked complete on the strength of (a) the real, verified, source-checked
+      ecosystem findings above and (b) the interop module's own correctness, NOT on a working
+      native run. **Observability**: N/A. **Performance**: N/A. Deps: 7.2. Complexity: M. Example
+      app: Expo — prerequisite chain attempted with real, extensive effort; native E2E blocked by
+      third-party toolchain incompatibilities in this environment, documented in full above.
+- [x] **7.4** Packaging: both interops as tree-shakeable subpath exports (`./uniwind`,
       `./nativewind`), never imported by default entries; extend the RISK-5 packaging test to
       assert core `index.*` entries have zero transitive dependency on either interop module.
-      **Tests**: `test/packaging/interop-exports.test.ts` — subpath resolves independently;
-      default entries' import graph excludes interop modules. **Observability**: N/A, packaging
-      test. **Performance**: NFR-6 — confirms interops add zero weight to the default web entry
-      (re-checks 2.5's gzip budget unchanged). Deps: 7.3, 5.6. Complexity: S. Example app:
-      none/unit-only.
+      Added `exports['./uniwind']`/`exports['./nativewind']` to `package.json`, both nested
+      per-condition (`types`+`default`) matching the shape G.4 fixed for `exports['.']` — never a
+      flat top-level `types` key.
+      **Non-vacuousness, taken RED first as instructed**: extracted `resolveExportsTarget`/
+      `walkFiles`/`walkTransitiveSpecifiers` out of `test/packaging/entries.test.ts` into shared
+      `test/packaging/helpers/resolve.ts` (pure extraction, re-verified `entries.test.ts` still
+      25/25 after) so `interop-exports.test.ts` reuses the same infrastructure per this session's
+      explicit instruction. The "default entries have ZERO transitive dependency on either
+      interop module" assertion was proven genuinely non-vacuous by a deliberate, documented
+      experiment: temporarily added `export { ThemedAutoSkeleton as __TASKS_7_4_PROOF__ } from
+      './interop/uniwind';` to `src/index.native.ts`, rebuilt, re-ran the test — it correctly
+      FAILED, citing the exact offending specifier (`./interop/uniwind.js`) in its own assertion
+      message — then reverted the throwaway line, rebuilt, re-ran, confirmed GREEN again
+      (`git diff --stat src/index.native.ts` empty afterward). This is the proof the assertion
+      would genuinely catch a real violation, not just pass because nothing exists to violate it.
+      **Orchestrator-found packaging race, fixed as a prerequisite**: adding a second file
+      (`interop-exports.test.ts`) that also ran `npm pack` in its own `beforeAll` reproduced the
+      EXACT concurrent-`lib/`-rebuild race `entries.test.ts`'s own doc comment had predicted but
+      believed `--ignore-scripts` prevented. Root-caused empirically (`touch
+      lib/module/__marker__.txt; npm pack --ignore-scripts ...` deletes the marker) — `npm pack
+      --ignore-scripts` does NOT suppress the `prepare` lifecycle script in this npm version,
+      contrary to the prior session's documented assumption. Fixed structurally, matching the
+      file's own established precedent ("build `lib/` exactly once in `globalSetup`"): extended
+      `test/packaging/global-setup.ts` to ALSO pack+extract exactly once, exporting
+      `PACK_EXTRACT_DIR`; both `entries.test.ts` and `interop-exports.test.ts` now read that same
+      pre-extracted directory instead of each independently invoking `npm pack`. Verified with 3
+      consecutive full `vitest run` passes (266/266 every time) — the race does not reproduce
+      after the fix, whereas it was 100% reproducible (not flaky) before it.
+      **Tests**: `test/packaging/interop-exports.test.ts` — subpath resolves independently (both
+      `./uniwind`/`./nativewind`, JS target contains the real `withUniwind`/`cssInterop`
+      reference, `types` target resolves to a real `.d.ts`); default entries
+      (`index.native.js`/`index.web.js`/`index.js`) import graph excludes interop modules, proven
+      non-vacuous as described above. 6/6 GREEN. **Observability**: N/A, packaging test.
+      **Performance**: NFR-6 — re-ran `test/packaging/web-bundle.test.ts` (existing 2.5 gate):
+      unaffected, 7674 B gzip (budget 8192 B), since interops are never in the web entry's
+      transitive graph. Deps: 7.3, 5.6. Complexity: S. Example app: none/unit-only.
+- [x] **7.5** Remove the NativeWind theming interop — maintainer decision (ADR-17), reaffirmed
+      2026-08-28: uniwind is the sole theming interop. Not a bugfix, not a DoD-unmet cleanup — a
+      deliberate non-goal, recorded as such rather than silently deleted.
+      **Removed**: `src/interop/nativewind.ts`; `package.json` `exports['./nativewind']`,
+      `devDependencies.nativewind`, `peerDependencies.nativewind`,
+      `peerDependenciesMeta.nativewind`; the NativeWind row of
+      `test/packaging/interop-exports.test.ts`'s `describe.each` (the `./uniwind` row and every
+      other assertion in that file untouched). `exports['./uniwind']` and `exports['.']`'s
+      per-condition `types` nesting (G.4's fix shape) are unchanged — no flat top-level
+      `exports['.'].types` was reintroduced.
+      **Non-vacuousness re-proof (this task's explicit ask)**: repeated 7.4's plant-and-revert
+      experiment against the SURVIVING assertion after removal, not just trusted the original
+      proof. Temporarily added `export { ThemedAutoSkeleton as __TASKS_7_5_PROOF__ } from
+      './interop/uniwind';` to `src/index.native.ts`, rebuilt (`npm install` → `bob build` via
+      `prepare`), re-ran `test/packaging/interop-exports.test.ts` — it correctly FAILED, citing
+      the exact offending specifier (`./interop/uniwind.js`) in its own assertion message:
+      `"lib/module/index.native.js's transitive import graph references the theming interop
+      directory: ./interop/uniwind.js"`. Reverted the throwaway export, rebuilt, re-ran, confirmed
+      GREEN again (5/5) with `git diff --stat src/index.native.ts` empty afterward — byte-identical
+      to the committed state. The assertion that "default entries have zero transitive dependency
+      on the interop module" remains genuinely falsifiable after the removal, not merely
+      un-deleted.
+      **Comments updated** (no behavior change) in `src/core/theme-override.ts`,
+      `src/core/theme-override.test.ts`, `src/native/AutoSkeleton.tsx`, and
+      `examples/expo/metro.config.js` to drop stale NativeWind references and point at uniwind as
+      the sole interop / this task / ADR-17.
+      **Documented as an explicit non-goal**, not deleted from the record: `spec.md` §1.9 (new
+      NON-GOAL block quoting the measured `isV3` throw) and §5 Out of Scope; `docs/product-brief.md`
+      §9 (new "NON-GOAL: NativeWind" subsection) and §13 Out of scope; `plan.md` new ADR-17
+      ("Theming interop: uniwind only; NativeWind is an explicit non-goal"), covering: the
+      measured reason (Tailwind v3 hard requirement, quoted, with file path); that a NativeWind
+      user is a Tailwind v3 user while this project's story is v4; that `uniwind`/`nativewind`
+      could never share one `node_modules` tree anyway (conflicting Tailwind majors); and that
+      task 7.3's toolchain-deadlock finding is corroborating evidence, not the primary reason.
+      Task 7.3 itself is NOT rewritten — its investigation is preserved verbatim as the evidence
+      trail — but a STATUS UPDATE line was added stating plainly that it is now out of scope by
+      maintainer decision, distinct from "DoD unmet" (which remains true of the historical
+      native-E2E attempt, and is left standing).
+      spec.md's compatibility matrix (§4) was already corrected earlier the same day (commit
+      `6781367`, prior to this task) with the NativeWind-v3/uniwind-v1.11.0 facts; this task
+      reconciles with that correction (appends an EXCLUDED status line to the existing NativeWind
+      row) rather than duplicating or contradicting it.
+      **Tests**: full suite re-verified after removal — `vitest run` 264/264 (was 266/266; -2 is
+      expected and accounted for: `src/lint/banned-css-properties.test.ts` is parametrized
+      per-source-file and lost one row for the deleted `nativewind.ts`, and
+      `interop-exports.test.ts`'s `describe.each` lost its NativeWind row — no other test file's
+      count changed). `playwright test` 38/38, unchanged. `npm run typecheck` clean, unchanged.
+      Non-vacuity re-proof above. **Observability**: N/A. **Performance**: N/A — NFR-6 unaffected
+      (NativeWind was never in the web entry's transitive graph). Deps: 7.4. Complexity: S.
+      Example app: `examples/expo` — confirmed no `nativewind` reference in its `package.json` or
+      installed `node_modules` (it was never actually installed there; only mentioned in a
+      comment, now updated).
+      **No regressions, full baseline re-verified this task**: vitest 264/264 (accounted-for -2
+      from file deletion, see above), Playwright 38/38, typecheck clean. Android/iOS native unit
+      and gate suites NOT re-run — zero android/, ios/, or native Kotlin/Swift source touched
+      (JS/TS and docs only).
+
+## `<AutoSkeleton.Ignore>` native remediation (session 2026-08-28, outside the 0–9 phase numbering)
+
+- [x] **G.5** Fixed `<AutoSkeleton.Ignore>` doing nothing on iOS/Android
+      (RED→GREEN, strict TDD): native `Ignore` (`src/native/AutoSkeleton.tsx`)
+      was a bare pass-through fragment (`return <>{props.children}</>`) — it
+      marked nothing, registered nothing, so wrapped content got skeleton
+      shapes drawn OVER exactly the content the user asked to exclude. Web's
+      `Ignore` already worked (`src/web/dom-sensor.ts`'s `isIgnored()`:
+      `el.hasAttribute(IGNORE_ATTRIBUTE) || hints.isIgnored(...)` — a
+      self-sufficient marker channel, no registry needed); native only had
+      the `HintRegistry` channel, and production always passes an empty
+      registry (verified in 5.9: `HintRegistry` cannot cross the Turbo
+      Module boundary at all), so native Ignore could never have worked
+      regardless of what the component did.
+      **Fix**: gave native the same self-sufficient marker channel web
+      already has — structurally the same `marker || registry` shape.
+      Extracted `Ignore` into its own module (`src/native/Ignore.tsx`,
+      mirrors `TemplateMeasurementHost.tsx`'s pattern so it stays unit-
+      testable without a heavy `react-native` mock); it now
+      `React.cloneElement`s its single element child (`React.Children.only`
+      — a stated, documented API constraint: exactly one element child,
+      whose own `nativeID`/`testID` is overwritten), stamping BOTH
+      `nativeID` and `testID` with a sentinel marker
+      (`AUTOSKELETON_IGNORE_MARKER_ID = '__autoskeleton-ignore__'`).
+      **Real, previously-undocumented discovery** (verified by reading
+      `node_modules/react-native`'s Fabric source, not assumed): on
+      Android, JS `nativeID` reaches `view.setTag(R.id.view_tag_native_id)`
+      — the exact tag `AutoskeletonSensor.kt` reads, so `nativeID` alone is
+      correct there. On iOS, JS `nativeID` reaches a DIFFERENT, unrelated
+      `UIView.nativeId` category property (`RCTViewComponentView.mm`) that
+      `AutoskeletonSensor.swift` never reads; it is JS `testID` that reaches
+      `accessibilityIdentifier` (the `testId` prop-diffing branch), which is
+      what the iOS sensor actually reads. Setting only `nativeID` would have
+      silently no-op'd on iOS — flagged in code for whoever eventually
+      builds the general typed-hint channel (radius/lines), which is a
+      separate, larger, still-unbuilt feature and was NOT built here.
+      Native sensors (`AutoskeletonSensor.kt`/`.swift`) now check the
+      sentinel FIRST, then the registry, in `traverse()` — mirrors
+      `dom-sensor.ts`'s exact shape. Constants mirrored verbatim in
+      `AutoskeletonTypes.kt` (`AUTOSKELETON_IGNORE_MARKER_NATIVE_ID`) and
+      `AutoskeletonTypes.swift` (`autoskeletonIgnoreMarkerNativeId`) — same
+      deliberate-duplication convention as `SKELETON_BASE_COLOR` in the
+      paint-gate tests.
+      **On-device visual proof** (the brief's hard requirement): extended
+      `PaintGateScreen` (`examples/bare-rn/App.tsx`) with an ignored region
+      (`<AutoSkeleton.Ignore>`-wrapped, `#FF6600`) alongside a NOT-ignored
+      sibling in the same row (`#8000FF`). New instrumented test
+      `ignoredRegionPaintsNoSkeletonWhileSiblingDoes`
+      (`PaintGateInstrumentedTest.kt`) and UI test
+      `testIgnoredRegionPaintsNoSkeletonWhileSiblingDoes`
+      (`PaintGateUITests.swift`) assert BOTH halves from the SAME frame:
+      ignored region shows only its own fixture color (no ramp pixel), AND
+      the sibling shows a real shimmer-ramp pixel in that same capture —
+      asserting only the first half would have passed even if the whole
+      skeleton failed to render.
+      **RED taken and confirmed for the right reason** at three levels
+      before the fix: (1) `test/native/ignore.test.ts` against the bare
+      pass-through — `Ignore` returned the child unmodified
+      (`nativeID`/`testID` both `undefined`); (2)
+      `AutoskeletonSensorTest.kt`'s new
+      `ignoreMarkerNativeIdExcludesSubtreeWithoutRegistryEntry` /
+      `SyntheticHierarchyBuilderTests.swift`'s new
+      `testIgnoreMarkerNativeIdExcludesSubtreeWithoutRegistryEntry` (both
+      against the DEFAULT empty `HintRegistry`, no override) — shape-count
+      mismatch (2 vs 1 expected); (3) the on-device gate itself, JS-only
+      reverted against the already-fixed native sensors (proving the JS
+      entry point is the real defect surface) — Android: real pixel
+      `#E3E3E3` (skeleton ramp) sampled directly over the ignored region;
+      iOS: real pixel `#E2E3E2` sampled the same way (one iOS run was
+      flaky — a known overlay-mount-race characteristic already documented
+      in this file for `skeletonPaintsOverDetectedShapes` — a re-run
+      reproduced RED cleanly).
+      **Tests**: vitest 271/271 (was 266, +4 `test/native/ignore.test.ts` + 1
+      elsewhere), Playwright 38/38 unchanged, `npm run typecheck` clean
+      (root + `examples/bare-rn` consumer). Android unit 107/107 (was 106,
+      +1). iOS unit 76/76 (was 75, +1). Android on-device paint gate 9/9
+      (was 3 `PaintGateInstrumentedTest` + 5 `PaintGateListInstrumentedTest`
+      = 8; now 4 + 5 = 9, +1), re-run twice, stable. iOS on-device visual
+      gate 4/4 (was 3, +1), re-run twice, stable. No regressions anywhere.
+      **Out of scope, flagged not built** (per explicit instruction): the
+      general typed-hint channel (`radius`/`lines` end to end — typed-prop
+      API, per-node registry, bridge marshaling); ADR-15's Expo Go
+      mechanism. Deps: 5.5 (native `AutoSkeleton`), 5.9 (confirmed the
+      registry channel is bridge-unreachable). Complexity: M.
 
 ## Phase 8: SSR — build-time snapshot capture CLI + `@media`-bucketed CSS bundle
 

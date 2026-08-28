@@ -54,6 +54,12 @@ final class PaintGateUITests: XCTestCase {
     private static let contentImageColor: RGB = (0x00, 0x00, 0xFF)
     private static let contentCardColor: RGB = (0x00, 0xA6, 0x51)
 
+    // `<AutoSkeleton.Ignore>` bug-fix gate: `ignored` sits INSIDE
+    // `<AutoSkeleton.Ignore>`, `ignoredSibling` is its NOT-ignored sibling in
+    // the same frame.
+    private static let contentIgnoredColor: RGB = (0xFF, 0x66, 0x00)
+    private static let contentIgnoredSiblingColor: RGB = (0x80, 0x00, 0xFF)
+
     // Per-channel slack for Simulator screenshot compositor/scaling noise —
     // identical value and identical rationale to the Android gate's
     // `COLOR_TOLERANCE`.
@@ -90,6 +96,8 @@ final class PaintGateUITests: XCTestCase {
     private static let labelToggle = "paint-gate-toggle"
     private static let labelImage = "paint-gate-image"
     private static let labelCard = "paint-gate-rounded-card"
+    private static let labelIgnoredContent = "paint-gate-ignored-content"
+    private static let labelIgnoredSibling = "paint-gate-ignored-sibling"
 
     typealias RGB = (r: Int, g: Int, b: Int)
 
@@ -261,6 +269,62 @@ final class PaintGateUITests: XCTestCase {
             "Expected the real content (\(hex(Self.contentImageColor)) image placeholder) to be " +
                 "hidden while isLoading=true, but it was directly visible at \(hex(pixel)) — no " +
                 "skeleton is covering it."
+        )
+    }
+
+    /// `<AutoSkeleton.Ignore>` bug-fix gate (this session's brief): with
+    /// `isLoading` true, the region wrapped in `<AutoSkeleton.Ignore>` must
+    /// show NO skeleton pixels (only its own fixture color), while its
+    /// NOT-ignored sibling in the exact same frame DOES show real skeleton
+    /// pixels. Both halves matter — asserting only the ignored half would
+    /// pass even if the whole skeleton failed to render at all.
+    func testIgnoredRegionPaintsNoSkeletonWhileSiblingDoes() {
+        waitForMount()
+        let ignoredFrame = element(Self.labelIgnoredContent).frame
+        let siblingFrame = element(Self.labelIgnoredSibling).frame
+
+        // The sibling settling into the shimmer ramp is the real "the overlay
+        // has mounted" signal (mirrors `testSkeletonPaintsOverDetectedShapes`'
+        // own `pollUntilPixel` race-avoidance) — sampling both regions from
+        // the SAME poll-settled screenshot keeps the two assertions in one
+        // real frame.
+        guard let siblingPixel = pollUntilPixel(frame: siblingFrame, satisfying: { pixel in
+            self.colorInRamp(pixel, from: Self.skeletonBaseColor, to: Self.skeletonHighlightColor)
+        }) else {
+            XCTFail("FIXTURE FAILURE: could not sample a pixel from the screenshot at \(siblingFrame)")
+            return
+        }
+        let image = screenshotImage()
+        guard let ignoredPixel = centerPixelColor(image, frame: ignoredFrame) else {
+            XCTFail("FIXTURE FAILURE: could not sample the ignored-region pixel at \(ignoredFrame)")
+            return
+        }
+
+        XCTAssertTrue(
+            colorsClose(ignoredPixel, Self.contentIgnoredColor),
+            "Expected the <AutoSkeleton.Ignore>-wrapped region to show its own fixture " +
+                "color (\(hex(Self.contentIgnoredColor))) while isLoading=true (no skeleton " +
+                "should ever be painted over ignored content), but the pixel was " +
+                "\(hex(ignoredPixel))."
+        )
+        XCTAssertFalse(
+            colorInRamp(ignoredPixel, from: Self.skeletonBaseColor, to: Self.skeletonHighlightColor),
+            "Expected NO skeleton ramp pixel over the <AutoSkeleton.Ignore>-wrapped region " +
+                "while isLoading=true, but the pixel at (\(ignoredFrame.midX), " +
+                "\(ignoredFrame.midY)) was \(hex(ignoredPixel)) — inside the shimmer ramp."
+        )
+        XCTAssertTrue(
+            colorInRamp(siblingPixel, from: Self.skeletonBaseColor, to: Self.skeletonHighlightColor),
+            "Expected the NOT-ignored sibling region to show a real skeleton pixel within " +
+                "the shimmer ramp (\(hex(Self.skeletonBaseColor))..\(hex(Self.skeletonHighlightColor))) " +
+                "in the SAME frame the ignored region was sampled from — proving the skeleton " +
+                "itself painted at all, not just that the ignored region happened to show " +
+                "nothing — but the pixel was \(hex(siblingPixel))."
+        )
+        XCTAssertFalse(
+            colorsClose(siblingPixel, Self.contentIgnoredSiblingColor),
+            "The NOT-ignored sibling's own fixture color (\(hex(Self.contentIgnoredSiblingColor))) " +
+                "should be hidden by the skeleton while isLoading=true, but it was directly visible."
         )
     }
 

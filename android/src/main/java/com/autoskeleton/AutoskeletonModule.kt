@@ -4,11 +4,41 @@ import android.view.View
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReadableArray
+import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.UiThreadUtil
 import com.facebook.react.bridge.WritableArray
 import com.facebook.react.uimanager.UIManagerHelper
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+
+/** Plain-Kotlin mirror of `AutoskeletonGetShapesConfig`
+ *  (`src/native/NativeAutoskeleton.ts`) — the codegen'd param arrives as a
+ *  `ReadableMap` (verified against the ACTUAL generated
+ *  `NativeAutoskeletonSpec.java`: `getShapes(double, String, ReadableMap)`,
+ *  not a typed struct — Android's TurboModule codegen does not generate
+ *  typed structs for object params the way iOS's ObjC++ codegen does).
+ *  Decoded into this plain data class immediately so `computeWireArray`
+ *  stays JVM-only and directly unit-testable, matching this file's own
+ *  established convention (`DoubleArray` over `WritableArray` for the same
+ *  reason). */
+internal data class AutoskeletonGetShapesConfig(
+  val defaultRadius: Float,
+  val budgetMs: Double,
+  val maxShapes: Int,
+  val collectDebugSidecars: Boolean,
+)
+
+/** All four fields are non-optional on the TS side (`sensor.ts` always
+ *  builds a complete object from the caller's real `SensorOptions`), so a
+ *  direct read is correct — a missing/mistyped key is a genuine contract
+ *  violation, not a value this function should silently paper over. */
+internal fun ReadableMap.toGetShapesConfig(): AutoskeletonGetShapesConfig =
+  AutoskeletonGetShapesConfig(
+    defaultRadius = getDouble("defaultRadius").toFloat(),
+    budgetMs = getDouble("budgetMs"),
+    maxShapes = getDouble("maxShapes").toInt(),
+    collectDebugSidecars = getBoolean("collectDebugSidecars"),
+  )
 
 /** Package-visible seam (same DI pattern as `AutoskeletonTracing`/
  *  `AutoskeletonWarningEmitter`): resolves a `View` by React tag, or `null`
@@ -89,10 +119,38 @@ object AutoskeletonSystemUiThreadDispatcher : AutoskeletonUiThreadDispatcher {
 // ADR-9: the native shape cache is written HERE (native writes data only
 // for a traversal JS requested — this call IS that request) and evicted
 // only via `evictShapes`, which JS calls from `store.invalidate()`.
+//
+// Phase-5-remediation (post-7.2 gap closure): `getShapes` used to hardcode
+// `AutoskeletonSensorOptions.defaults` (`budgetMs`/`maxShapes`/
+// `defaultRadius` all compiled constants) regardless of what a consumer
+// configured via `SkeletonProvider`/per-instance props — REQ-OBS-BUDGET-1's
+// "budgets MUST be configurable" was structurally unmet on this path, and
+// `SkeletonProvider.defaultRadius` (verified the PRIMARY mechanism for
+// rounded Android content — RN's real `CompositeBackgroundDrawable` never
+// reports a radius via the public `getOutline()` API, so R1 never resolves
+// a rounded view and every one falls to R3) never reached native either.
+// `config` (`AutoskeletonGetShapesConfig`, decoded from the codegen'd
+// `ReadableMap` above) now threads all four scalars into the REAL
+// `AutoskeletonSensorOptions` used by this call — verified end-to-end by
+// `AutoskeletonModuleTest`'s new config-threading cases, which assert the
+// resulting WIRE geometry actually changes (`maxShapes` truncates the
+// shape count; `defaultRadius` changes the emitted `r` for an
+// R3-fallback shape), not merely that `computeWireArray`'s signature
+// accepts the parameter.
+//
+// The former constructor-injected `radiusResolver` DI seam is removed:
+// grepping this repo confirmed it was NEVER exercised in production
+// (`AutoskeletonPackage.kt` always calls `AutoskeletonModule(reactContext)`)
+// and never overridden by any test either, so it was dead complexity that
+// additionally kept the R3 fallback radius permanently pinned to a
+// compile-time `0f` regardless of `AutoskeletonSensorOptions.defaultRadius`
+// — the exact disconnect this task closes. `refine()`'s already-established
+// pattern (`AutoskeletonSensor.kt`: `AutoskeletonPublicApiRadiusResolver(options.defaultRadius)`)
+// is now mirrored here instead: the resolver is constructed FRESH per call
+// from the real per-call `config.defaultRadius`.
 class AutoskeletonModule(
   reactContext: ReactApplicationContext,
   private val sensor: AutoskeletonSensor = AutoskeletonSensor(),
-  private val radiusResolver: AutoskeletonRadiusResolver = AutoskeletonPublicApiRadiusResolver(),
   private val viewResolver: AutoskeletonViewResolver = AutoskeletonSystemViewResolver(reactContext),
   private val shapeCache: AutoskeletonNativeShapeCache = AutoskeletonNativeShapeCache,
   private val uiThreadDispatcher: AutoskeletonUiThreadDispatcher = AutoskeletonSystemUiThreadDispatcher,
@@ -117,7 +175,7 @@ class AutoskeletonModule(
    *  `AutoskeletonModuleTest`, which never dispatches), and bounds the
    *  wait so a stuck UI thread degrades to `null` instead of hanging the
    *  JS thread forever. */
-  internal fun computeWireArray(reactTag: Double, cacheKey: String): DoubleArray? =
+  internal fun computeWireArray(reactTag: Double, cacheKey: String, config: AutoskeletonGetShapesConfig): DoubleArray? =
     uiThreadDispatcher.runAndWait(UI_THREAD_DISPATCH_TIMEOUT_MS) {
       val view = viewResolver.resolve(reactTag.toInt()) ?: return@runAndWait null
       val density = view.resources?.displayMetrics?.density?.takeIf { it > 0f } ?: 1f
@@ -126,8 +184,11 @@ class AutoskeletonModule(
         view,
         AutoskeletonSensorOptions.defaults.copy(
           hints = AutoskeletonEmptyHintRegistry(),
-          radiusResolver = radiusResolver,
-          collectDebugSidecars = false,
+          radiusResolver = AutoskeletonPublicApiRadiusResolver(defaultRadius = config.defaultRadius),
+          budgetMs = config.budgetMs,
+          maxShapes = config.maxShapes,
+          defaultRadius = config.defaultRadius,
+          collectDebugSidecars = config.collectDebugSidecars,
         ),
       ) ?: return@runAndWait null
 
@@ -136,9 +197,9 @@ class AutoskeletonModule(
       wire
     }
 
-  override fun getShapes(reactTag: Double, cacheKey: String): WritableArray {
+  override fun getShapes(reactTag: Double, cacheKey: String, config: ReadableMap): WritableArray {
     val result = Arguments.createArray()
-    val wire = computeWireArray(reactTag, cacheKey) ?: return result
+    val wire = computeWireArray(reactTag, cacheKey, config.toGetShapesConfig()) ?: return result
     for (value in wire) {
       result.pushDouble(value)
     }

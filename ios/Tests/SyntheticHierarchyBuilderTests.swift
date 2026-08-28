@@ -82,6 +82,18 @@ final class SyntheticHierarchyBuilderTests: XCTestCase {
         try assertShapes(shapes, matchExpected: "ignore-subtree")
     }
 
+    /// `<AutoSkeleton.Ignore>` bug fix (`src/native/Ignore.tsx`): the sentinel
+    /// `accessibilityIdentifier` marker excludes the subtree DIRECTLY, with
+    /// the DEFAULT `AutoskeletonEmptyHintRegistry` (no registry entry
+    /// configured at all) — proving the marker channel is self-sufficient,
+    /// exactly mirroring `testIgnoreSubtreeExcludesEntireSubtree` above but
+    /// without any `AutoskeletonHintRegistry` override. Same expected output
+    /// as `ignore-subtree`: only `visible-text` remains.
+    func testIgnoreMarkerNativeIdExcludesSubtreeWithoutRegistryEntry() throws {
+        let shapes = try measure(fixtureNamed: "ignore-marker-subtree")
+        try assertShapes(shapes, matchExpected: "ignore-subtree")
+    }
+
     // MARK: - Collapsed text synthesis (reuses AutoskeletonLines.swift, a port of lines.ts)
 
     func testCollapsedTextSynthesizesDefaultLineCount() throws {

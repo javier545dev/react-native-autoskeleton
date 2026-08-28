@@ -797,7 +797,9 @@ rounded" and refuse to say by how much.
 
 | Rung | Mechanism | API surface | `RadiusSource` |
 |---|---|---|---|
-| **R0** | Explicit typed `radius` hint prop, carried to native on the `nativeID` channel | Fully public, authoritative | `hint` |
+| **R0** | Explicit typed `radius` hint prop, carried to native on the `nativeID` channel **on Android** and the `testID` channel **on iOS** — see the note below; they are NOT the same prop | Fully public, authoritative | `hint` |
+
+> **VERIFIED 2026-08-28 — the two platforms do NOT share one prop.** JS `nativeID` reaches Android's lookup tag (`view.setTag(R.id.view_tag_native_id)`) correctly, but on iOS it reaches an unrelated `.nativeId` property the sensor never reads. It is **`testID`** that reaches iOS's `accessibilityIdentifier`, which is what the iOS sensor actually reads. `<AutoSkeleton.Ignore>` therefore stamps BOTH props. Anyone building the typed-hint channel (R0 `radius`, `lines`) will hit this same asymmetry — setting only `nativeID` silently no-ops on iOS.
 | **R1** | `drawable.getOutline(outline)` on a **copy**; if `outline.getRadius() >= 0`, use it | Public `Drawable`/`Outline` API. Resolves the *square* case and the non-RN-drawable case definitively, and distinguishes "verified square" from "rounded, unknown" | `outline` |
 | **R2** | **Raster corner probe** (see below), run in `Sensor.refine()` off the interaction frame | 100 % public API — `Drawable.getConstantState().newDrawable().mutate()`, `setBounds`, `draw(Canvas)` over a library-owned `Bitmap` | `raster-probe` |
 | **R3** | `SkeletonProvider.defaultRadius`, with `r = -1` recorded in the wire and `radius-unavailable` raised | Public | `default` |
@@ -987,6 +989,50 @@ component-agnostic positioning that makes the sensor work at all.
 **Consequences.** A consumer who wires nothing still gets a correct, flash-free result via the timeout
 path — at the cost of up to `handoffTimeoutMs` of extra skeleton. `handoffReason: 'timeout'` in telemetry
 is the signal that a consumer should wire `onSuccessorPainted`.
+
+### ADR-17 — Theming interop: `uniwind` only; NativeWind is an explicit non-goal
+
+**Context.** brief §9/§13, spec.md §1.9/§4/§5. Two candidate theming interops were evaluated:
+`uniwind` (`withUniwind` manual-mapping API) and NativeWind (`cssInterop`). Both target
+className-driven props onto the native `<AutoSkeleton>`'s `shimmerBaseColor`/
+`shimmerHighlightColor`/`defaultRadius` (REQ-THEME-2).
+
+**Decision.** Ship `autoskeleton/uniwind` as the sole theming interop. NativeWind is explicitly
+excluded — a documented non-goal, not an oversight or a deferred task.
+
+**Rationale, measured, not assumed.**
+1. **NativeWind 4.2.6 hard-requires Tailwind CSS v3.** Verified independently from the published
+   tarball: `dist/metro/tailwind/index.js` and `src/metro/tailwind/index.ts` each throw
+   `"NativeWind only supports Tailwind CSS v3"`, gated on an `isV3` check, at two call sites.
+   Reproduced by installing `tailwindcss@^4` and hitting this exact error at Metro config load,
+   before any bundling — unconditional, not a configuration mistake.
+2. **This project's entire theming story is Tailwind v4** — `@theme`, CSS custom properties,
+   cascade-driven dark mode (REQ-THEME-1). A NativeWind consumer is, by construction, a
+   Tailwind v3 consumer. NativeWind and this project's theming architecture are incompatible at
+   the root, not merely at the margins.
+3. **`uniwind` v1.11.0 pairs with Tailwind v4** and its `withUniwind` API is confirmed working:
+   task 7.2 achieved genuine native E2E on a real Android emulator, with screenshot evidence that
+   the rendered shimmer gradient matched `bg-slate-400`/`text-cyan-300` rather than the library's
+   JS defaults.
+4. **`uniwind` and `nativewind` cannot share one `node_modules` tree** — they require conflicting
+   Tailwind CSS majors (v4 and v3 respectively). The two interops were therefore never
+   simultaneously viable in one consuming app, independent of this decision; a consumer who
+   installed both would get a broken build, not a warning.
+5. Task 7.3's native E2E attempt (before this decision) was additionally blocked by a genuine
+   dependency deadlock in the Expo SDK 57 / RN 0.86.3 / `expo-modules-core@57.0.14` stack: no
+   `react-native-reanimated` major satisfies both `react-native-css-interop`'s undocumented
+   reanimated runtime dependency and `expo-modules-core`'s compiled native ABI. This toolchain
+   deadlock is corroborating evidence, not the primary reason — reason 1 alone is sufficient and
+   would hold even in an environment where the deadlock did not exist.
+
+**Consequences.**
+- `src/interop/nativewind.ts` and the `autoskeleton/nativewind` subpath export are removed
+  (tasks.md 7.5). `src/interop/uniwind.ts` and `autoskeleton/uniwind` are unaffected.
+- "Why don't you support NativeWind?" has a documented, evidence-backed answer rather than being
+  discovered as an unexplained gap — see brief §9 NON-GOAL, spec.md §1.9 NON-GOAL / §5 Out of
+  Scope, and tasks.md 7.5.
+- If a future NativeWind major drops the Tailwind v3 requirement, this ADR should be revisited —
+  the exclusion is a measured-fact decision, not a permanent ideological one.
 
 ### ADR-4 through ADR-13 (short form)
 

@@ -69,7 +69,19 @@ export function createNativeSensor(options: CreateNativeSensorOptions): Sensor<N
       if (!nativeModule) {
         return null;
       }
-      const fetched = fetchShapesOnce(nativeModule, target.reactTag, sensorOptions.key, options.tracing);
+      // Phase-5-remediation (post-7.2 gap closure): forward the caller's
+      // REAL SensorOptions scalars — not compiled defaults — across the
+      // bridge. This is the fix for the pre-existing gap where
+      // `SkeletonProvider.defaultRadius`/`budgetMs`/`maxShapes` were
+      // silently dropped here and every native traversal ran against
+      // `AutoskeletonSensorOptions.defaults`/`.defaults` instead.
+      const config = {
+        defaultRadius: sensorOptions.defaultRadius,
+        budgetMs: sensorOptions.budgetMs,
+        maxShapes: sensorOptions.maxShapes,
+        collectDebugSidecars: sensorOptions.collectDebugSidecars,
+      };
+      const fetched = fetchShapesOnce(nativeModule, target.reactTag, sensorOptions.key, config, options.tracing);
       if (!fetched) {
         return null;
       }

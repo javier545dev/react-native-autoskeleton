@@ -20,17 +20,35 @@ function wireArrayFor(shapes: readonly (readonly [number, number, number, number
   return out;
 }
 
+const CONFIG = {
+  defaultRadius: 4,
+  budgetMs: 2,
+  maxShapes: 60,
+  collectDebugSidecars: false,
+};
+
 describe('fetchShapesOnce (task 5.1 bridge)', () => {
   it('calls the native getShapes method exactly once per invocation', () => {
     const getShapes = vi.fn().mockReturnValue(wireArrayFor([[0, 0, 100, 20, 4]]));
-    fetchShapesOnce({ getShapes }, 42, 'v1|key|-|375|1|ltr|ios' as never);
+    fetchShapesOnce({ getShapes }, 42, 'v1|key|-|375|1|ltr|ios' as never, CONFIG);
     expect(getShapes).toHaveBeenCalledTimes(1);
-    expect(getShapes).toHaveBeenCalledWith(42, 'v1|key|-|375|1|ltr|ios');
+    expect(getShapes).toHaveBeenCalledWith(42, 'v1|key|-|375|1|ltr|ios', CONFIG);
+  });
+
+  // Phase-5-remediation (post-7.2 gap closure): proves `config` reaches the
+  // native call VERBATIM — not merely that the signature accepts it. A
+  // non-default value in every field, so a regression that silently
+  // substitutes a compiled default cannot pass by accident.
+  it('forwards the config object to native getShapes unchanged', () => {
+    const getShapes = vi.fn().mockReturnValue(wireArrayFor([[0, 0, 1, 1, 0]]));
+    const nonDefaultConfig = { defaultRadius: 16, budgetMs: 4, maxShapes: 1, collectDebugSidecars: true };
+    fetchShapesOnce({ getShapes }, 7, 'k' as never, nonDefaultConfig);
+    expect(getShapes).toHaveBeenCalledWith(7, 'k', nonDefaultConfig);
   });
 
   it('converts the boxed Array<number> into a Float32Array decodable by wire.ts', () => {
     const getShapes = vi.fn().mockReturnValue(wireArrayFor([[1, 2, 3, 4, 5]]));
-    const result = fetchShapesOnce({ getShapes }, 1, 'k' as never);
+    const result = fetchShapesOnce({ getShapes }, 1, 'k' as never, CONFIG);
     expect(result).not.toBeNull();
     expect(result!.data).toBeInstanceOf(Float32Array);
     expect(result!.data.byteOffset).toBe(0);
@@ -40,7 +58,7 @@ describe('fetchShapesOnce (task 5.1 bridge)', () => {
 
   it('returns null when native reports an empty array (target not laid out yet)', () => {
     const getShapes = vi.fn().mockReturnValue([]);
-    expect(fetchShapesOnce({ getShapes }, 1, 'k' as never)).toBeNull();
+    expect(fetchShapesOnce({ getShapes }, 1, 'k' as never, CONFIG)).toBeNull();
   });
 
   it('never calls getShapes more than once for N=60 shapes, N=0 shapes, or repeated mounts of the SAME cache key within one call site', () => {
@@ -53,11 +71,11 @@ describe('fetchShapesOnce (task 5.1 bridge)', () => {
     // proves the primitive itself adds no hidden repetition.
     const manyShapes = Array.from({ length: 60 }, (_, i) => [i, i, 10, 10, 2] as const);
     const getShapes = vi.fn().mockReturnValue(wireArrayFor(manyShapes));
-    fetchShapesOnce({ getShapes }, 1, 'k' as never);
+    fetchShapesOnce({ getShapes }, 1, 'k' as never, CONFIG);
     expect(getShapes).toHaveBeenCalledTimes(1);
 
     const getShapesEmpty = vi.fn().mockReturnValue(wireArrayFor([]));
-    fetchShapesOnce({ getShapes: getShapesEmpty }, 1, 'k' as never);
+    fetchShapesOnce({ getShapes: getShapesEmpty }, 1, 'k' as never, CONFIG);
     expect(getShapesEmpty).toHaveBeenCalledTimes(1);
   });
 
@@ -65,7 +83,7 @@ describe('fetchShapesOnce (task 5.1 bridge)', () => {
     const begin = vi.fn().mockReturnValue('token');
     const end = vi.fn();
     const getShapes = vi.fn().mockReturnValue(wireArrayFor([[0, 0, 1, 1, 0]]));
-    fetchShapesOnce({ getShapes }, 1, 'k' as never, { begin, end });
+    fetchShapesOnce({ getShapes }, 1, 'k' as never, CONFIG, { begin, end });
     expect(begin).toHaveBeenCalledWith(JSI_SERIALIZATION_TRACE_SECTION);
     expect(end).toHaveBeenCalledWith(JSI_SERIALIZATION_TRACE_SECTION, 'token');
   });

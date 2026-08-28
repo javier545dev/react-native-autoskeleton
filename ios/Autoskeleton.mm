@@ -59,10 +59,24 @@
     return self;
 }
 
-- (NSArray<NSNumber *> *)getShapes:(double)reactTag cacheKey:(NSString *)cacheKey {
+// Phase-5-remediation (post-7.2 gap closure): `config` is the codegen'd
+// `JS::NativeAutoskeleton::AutoskeletonGetShapesConfig` C++ struct (verified
+// against the actual generated `AutoskeletonSpec.h` — a typed struct with
+// `defaultRadius()`/`budgetMs()`/`maxShapes()`/`collectDebugSidecars()`
+// accessors backed by an underlying `NSDictionary`, NOT a `ReadableMap`-
+// style dynamic map the way Android's codegen generates it). Only visible
+// here, in Objective-C++ — decoded into four primitive scalars and handed
+// to the Swift bridge, which has no C++ interop configured in this pod.
+- (NSArray<NSNumber *> *)getShapes:(double)reactTag
+                          cacheKey:(NSString *)cacheKey
+                            config:(JS::NativeAutoskeleton::AutoskeletonGetShapesConfig &)config {
     __weak Autoskeleton *weakSelf = self;
     return [self->_bridge getShapesWithReactTag:@(reactTag)
                                         cacheKey:cacheKey
+                                   defaultRadius:config.defaultRadius()
+                                        budgetMs:config.budgetMs()
+                                       maxShapes:config.maxShapes()
+                            collectDebugSidecars:config.collectDebugSidecars()
                                      resolveView:^UIView * _Nullable(NSNumber * _Nonnull tag) {
         Autoskeleton *strongSelf = weakSelf;
         return [strongSelf.viewRegistry_DEPRECATED viewForReactTag:tag];
