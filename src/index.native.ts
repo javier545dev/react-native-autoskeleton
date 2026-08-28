@@ -24,6 +24,13 @@ export { SkeletonCell } from './native/list/SkeletonCell';
 export type { SkeletonCellProps } from './native/list/SkeletonCell';
 export { useSkeletonCell } from './native/list/useSkeletonCell';
 export type { UseSkeletonCellOptions, UseSkeletonCellResult } from './native/list/useSkeletonCell';
+/** RISK-3/ADR-13 dev-only observability seam: counts template measurements
+ *  that actually executed (never a bind-time count). Exposed for the
+ *  on-device paint-gate harness (`examples/bare-rn`) to prove the
+ *  zero-traversal-on-bind/zero-traversal-under-recycling assertions against
+ *  the REAL running app, not a formatter in isolation. Not a stable public
+ *  API for production consumers. */
+export { templateTraversalCounter } from './native/list/listRuntime';
 export type {
   AnimationKind,
   DegradationFlag,
