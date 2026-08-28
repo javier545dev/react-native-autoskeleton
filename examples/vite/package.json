@@ -11,9 +11,9 @@
     "boot-smoke": "vite build --logLevel warn && echo 'vite: production build succeeds with autoskeleton in the dependency tree'"
   },
   "dependencies": {
+    "autoskeleton": "file:../../.tarball/autoskeleton-0.1.0.tgz",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8",
-    "autoskeleton": "file:../../.tarball/autoskeleton-0.1.0.tgz"
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",

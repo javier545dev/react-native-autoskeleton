@@ -6,10 +6,18 @@
   "types": "./lib/typescript/module/src/index.d.ts",
   "exports": {
     ".": {
-      "types": "./lib/typescript/module/src/index.d.ts",
-      "react-native": "./lib/module/index.native.js",
-      "browser": "./lib/module/index.web.js",
-      "default": "./lib/module/index.js"
+      "react-native": {
+        "types": "./lib/typescript/module/src/index.native.d.ts",
+        "default": "./lib/module/index.native.js"
+      },
+      "browser": {
+        "types": "./lib/typescript/module/src/index.web.d.ts",
+        "default": "./lib/module/index.web.js"
+      },
+      "default": {
+        "types": "./lib/typescript/module/src/index.d.ts",
+        "default": "./lib/module/index.js"
+      }
     },
     "./package.json": "./package.json"
   },

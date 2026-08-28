@@ -931,6 +931,66 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       against a warm cache, the exact condition that was previously buggy. **Performance**: N/A,
       behavioral gate. Deps: 5.5. Complexity: S. Example app: Vite (web, real bugfix + real
       test); bare RN (native fix applied, not independently E2E-proven this session).
+- [x] **G.4** RED→GREEN fix the `package.json#exports['.'].types` packaging gap this session's
+      Phase 6 closure noted as open (a single flat `types` field made Phase 6's entire public API
+      — `SkeletonList`/`SkeletonCell`/`SkeletonListFooter`/`useSkeletonCell` — invisible to
+      TypeScript for a real react-native consumer; Metro resolved the module correctly, but `tsc`
+      always resolved to the bare web-reexporting `index.d.ts` regardless of which platform
+      condition was active). **Root cause, verified against `react-native-builder-bob`'s own
+      source** (`node_modules/react-native-builder-bob/lib/src/targets/typescript.js:236-269`):
+      the flat `types` key was listed FIRST in `exports['.']`'s JSON object, and Node/TypeScript's
+      exports resolution takes the FIRST own key that is `"default"` or an active condition — so
+      `types` always won before `react-native`/`browser` were ever checked. The previous session's
+      abandoned attempt was reported as "bob's validator rejects a non-string
+      `exports['.'].types`"; that read was about the wrong shape (a single key whose VALUE became
+      an object) — bob's validator only inspects `exports['.'].types` when that exact top-level
+      key is truthy (`typescript.js:244`), so REMOVING it and nesting a `types` sub-condition
+      inside each of `react-native`/`browser`/`default` instead makes the guard a no-op; confirmed
+      by running `bob build` (`npm run prepare`), which completed with zero errors and the
+      pre-existing unrelated `[module]` warning unchanged (reproduced byte-identical before/after
+      via `git stash`). **Fix**: `exports['.']` now nests `{ types, default }` under each of
+      `react-native`/`browser`/`default`, pointing at `lib/typescript/module/src/index.native.d.ts`
+      / `index.web.d.ts` / `index.d.ts` respectively (all three already emitted by the existing
+      `tsc` multi-entry build — no build config changes needed). **Consumer configuration,
+      documented in the new root `README.md`**: `moduleResolution: bundler|node16|nodenext` is
+      required for TypeScript to honor `exports` at all; a React Native consumer needs
+      `customConditions: ["react-native"]`, which `@react-native/typescript-config` (the config
+      every RN app already extends) ships by default — verified `examples/bare-rn/tsconfig.json`
+      needed zero changes. A Jest consumer needs `testEnvironmentOptions.customExportConditions:
+      ['react-native']` (Jest ignores `exports` conditions entirely, independent of
+      `moduleResolution` — this repo's `examples/bare-rn/jest.config.js` already had this from an
+      earlier session; the README now states it explicitly). **Tests**: extended the RISK-5
+      packaging detector (`test/packaging/entries.test.ts`) with a permanent guard —
+      `resolveExportsTarget()`, a minimal simulation of Node's exports-resolution algorithm,
+      proves `[react-native, types]` resolves to a declaration file containing `SkeletonList`,
+      `[browser, types]` and bare `[types]` resolve to declaration files that do NOT, and the two
+      are genuinely different files; also asserts `exports['.']` no longer sets a top-level
+      `types` key. Verified RED first against the pre-fix `package.json` (3 of 25 assertions
+      failed for the exact right reason — the native-condition resolution landed on
+      `export * from './index.web.js'`, containing no `SkeletonList`), then GREEN after the fix
+      (25/25). **Real-consumer proof** (not package.json inspection): repacked the tarball and
+      reinstalled it into `examples/bare-rn` and `examples/vite` with an explicit `file:`
+      specifier (the tarball trap — a bare `npm install` does not refresh a `file:` dependency
+      once `package-lock.json` pins the old integrity hash). `examples/bare-rn`: real `tsc
+      --noEmit` against the existing `App.tsx` (which already imports `SkeletonList`,
+      `SkeletonCell`, `SkeletonListFooter`) exits 0 clean; a deliberate typo sanity check
+      (`SkeletonList` → `SkeletonListDoesNotExist`) confirmed `tsc` genuinely inspects that import
+      (`TS2305: has no exported member`) before being reverted. `examples/vite`: a temporary
+      scratch fixture proved both directions — `AutoSkeleton`/`AutoSkeletonProps`/
+      `SkeletonProvider` typecheck cleanly (exit 0), and a second temporary import of
+      `SkeletonList` fails with the same `TS2305` error, then both scratch changes were removed
+      (git-clean diff for `examples/vite`, only `package.json`/`package-lock.json` reinstall
+      churn remains tracked). **No regressions**: vitest 247/247 (was 241/241 — +6 new packaging
+      assertions), typecheck clean, Playwright 36/36, `examples/vite` `boot-smoke` (real
+      production `vite build`) green, `examples/bare-rn` `boot-smoke` (RN CLI autolinking
+      discovery) green. `examples/bare-rn`'s Jest suite fails on an unrelated pre-existing gap
+      (`@shopify/flash-list`'s own ESM output is not in Jest's `transformIgnorePatterns`) —
+      reproduced byte-identical against the pre-fix `package.json` via `git stash`, confirmed NOT
+      a regression from this task, left untouched as out of scope. Android/iOS unit and gate
+      suites not re-run this session (zero native source touched by this fix — package.json,
+      README.md, and a test file only). Deps: 6.1-6.5. Complexity: S. Example app: bare RN
+      (real, existing native-consumer proof); Vite (temporary web-consumer proof, both
+      directions).
 
 ## Phase 7: Theming interops (Uniwind / NativeWind)
 

@@ -28,6 +28,38 @@ const packageJson = JSON.parse(
   peerDependencies?: Record<string, string>;
 };
 
+/**
+ * G.4 gap closure (tasks.md) — a minimal simulation of Node's
+ * PACKAGE_IMPORTS_EXPORTS_RESOLVE algorithm (which TypeScript's
+ * exports-aware resolution mirrors), restricted to what this package's
+ * `exports['.']` shape actually needs: nested condition objects with a
+ * `types` sub-condition, and a `default` fallback at every level.
+ *
+ * Node/TypeScript check an object's OWN keys in the order they appear in the
+ * JSON, and take the FIRST key that is either `"default"` or an active
+ * condition — this is exactly why the pre-fix flat `exports['.'].types`
+ * field broke platform-specific types: `"types"` was listed before
+ * `"react-native"`/`"browser"`, so it matched and won regardless of which
+ * platform condition was active.
+ *
+ * This is a structural simulation for a fast, deterministic unit test. The
+ * real consumer proof (actually running `tsc` against the packed tarball
+ * from `examples/bare-rn` and `examples/vite`) is documented in the apply
+ * report and the repository README, not reproduced here.
+ */
+function resolveExportsTarget(target: unknown, activeConditions: string[]): string | null {
+  if (typeof target === 'string') return target;
+  if (target && typeof target === 'object') {
+    for (const [key, value] of Object.entries(target as Record<string, unknown>)) {
+      if (key === 'default' || activeConditions.includes(key)) {
+        const resolved = resolveExportsTarget(value, activeConditions);
+        if (resolved !== null) return resolved;
+      }
+    }
+  }
+  return null;
+}
+
 let extractDir: string;
 let packageDir: string;
 
@@ -106,16 +138,20 @@ describe('RISK-5 packaging detector (entries.test.ts) — RED until 5.6', () => 
   });
 
   describe('exports conditions (ADR-3) resolve to an existing file', () => {
-    const conditions = packageJson.exports['.'] as Record<string, string>;
+    // `exports['.']` conditions are nested objects (G.4 gap closure: each
+    // carries its own `types` sub-condition alongside `default`, the JS
+    // runtime target) — resolve the JS-runtime target the same way Node's
+    // module resolver does, not with a flat string lookup.
+    const conditions = packageJson.exports['.'];
 
     it.each(['react-native', 'browser', 'default'] as const)(
       "exports['.'].%s points at a file that exists in the tarball",
       (condition) => {
-        const target = conditions[condition];
+        const target = resolveExportsTarget(conditions, [condition]);
         expect(
           target,
           `package.json exports['.'] is missing the "${condition}" condition`
-        ).toBeDefined();
+        ).not.toBeNull();
         const resolved = tarballPath(target!.replace(/^\.\//, ''));
         expect(
           existsSync(resolved),
@@ -124,6 +160,64 @@ describe('RISK-5 packaging detector (entries.test.ts) — RED until 5.6', () => 
       }
     );
   });
+
+  describe(
+    "exports['.'] conditions carry per-platform TypeScript declarations " +
+      '(G.4 gap closure: Phase 6 native-only API was invisible to TypeScript)',
+    () => {
+      const conditions = packageJson.exports['.'];
+
+      it('exports[\'.\'] does not set a single top-level "types" field (react-native-builder-bob\'s typescript-target validator only inspects it when truthy — see typescript.js:244)', () => {
+        expect(Object.prototype.hasOwnProperty.call(conditions as object, 'types')).toBe(false);
+      });
+
+      it('resolving [react-native, types] reaches a declaration file that actually declares SkeletonList', () => {
+        const resolved = resolveExportsTarget(conditions, ['react-native', 'types']);
+        expect(resolved, 'no exports[\'.\'] entry matched conditions [react-native, types]').not.toBeNull();
+        const abs = tarballPath(resolved!.replace(/^\.\//, ''));
+        expect(existsSync(abs), `${resolved} does not exist in the packed tarball`).toBe(true);
+        expect(
+          readFileSync(abs, 'utf8'),
+          `${resolved} does not declare SkeletonList — the native-only Phase 6 API is invisible to a react-native TypeScript consumer`
+        ).toContain('SkeletonList');
+      });
+
+      it('resolving [browser, types] reaches a declaration file that does NOT declare SkeletonList (native-only API must stay invisible on web)', () => {
+        const resolved = resolveExportsTarget(conditions, ['browser', 'types']);
+        expect(resolved).not.toBeNull();
+        const abs = tarballPath(resolved!.replace(/^\.\//, ''));
+        expect(existsSync(abs)).toBe(true);
+        expect(readFileSync(abs, 'utf8')).not.toContain('SkeletonList');
+      });
+
+      it('resolving [types] with no platform condition active (bundler/Node default — vite/next without customConditions) also does not declare SkeletonList', () => {
+        const resolved = resolveExportsTarget(conditions, ['types']);
+        expect(resolved).not.toBeNull();
+        const abs = tarballPath(resolved!.replace(/^\.\//, ''));
+        expect(existsSync(abs)).toBe(true);
+        expect(readFileSync(abs, 'utf8')).not.toContain('SkeletonList');
+      });
+
+      it('react-native and browser resolve to genuinely different declaration files', () => {
+        const native = resolveExportsTarget(conditions, ['react-native', 'types']);
+        const web = resolveExportsTarget(conditions, ['browser', 'types']);
+        expect(native).not.toBeNull();
+        expect(web).not.toBeNull();
+        expect(native).not.toEqual(web);
+      });
+
+      it('JS runtime resolution is unaffected by nesting types under each condition: react-native/browser/default still resolve to existing JS files', () => {
+        for (const condition of ['react-native', 'browser', 'default'] as const) {
+          const resolved = resolveExportsTarget(conditions, [condition]);
+          expect(resolved, `no JS resolution for condition "${condition}"`).not.toBeNull();
+          expect(
+            existsSync(tarballPath(resolved!.replace(/^\.\//, ''))),
+            `${resolved} (condition "${condition}") does not exist in the packed tarball`
+          ).toBe(true);
+        }
+      });
+    }
+  );
 
   describe('Metro resolution simulation for platform:"web" (brief §2)', () => {
     /**
