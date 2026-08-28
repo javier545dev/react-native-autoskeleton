@@ -39,13 +39,19 @@ import { shouldRunHandoffCycle } from '../core/refresh-gate';
 import { MemoryShapeStore } from '../core/snapshot';
 import type { AnimationKind, OnMetrics, ShapeSnapshot } from '../core/types';
 import { WIRE_HEADER_SLOTS, WIRE_STRIDE } from '../core/types';
-import { createCssRenderer, createShimmerClock } from './css-renderer';
+import { createCssRenderer, createShimmerClock, DEFAULT_BASE_COLOR, DEFAULT_HIGHLIGHT_COLOR } from './css-renderer';
 import { createDomSensor, createEmptyHintRegistry, IGNORE_ATTRIBUTE } from './dom-sensor';
 import { DebugOverlay } from './DebugOverlay';
 
+// tasks.md 7.1 / REQ-THEME-1: these MUST be the exact same values
+// `css-renderer.ts`'s stylesheet uses as its `var(--skl-base, DEFAULT)`
+// fallback — imported, not duplicated, so the renderer's "is this theme
+// still the untouched default?" check (which decides whether to defer to
+// the CSS cascade) can never silently drift from what a consumer actually
+// gets when they never customize `SkeletonProvider`.
 const DEFAULT_THEME: SkeletonTheme = {
-  baseColor: '#e2e2e2',
-  highlightColor: '#f5f5f5',
+  baseColor: DEFAULT_BASE_COLOR,
+  highlightColor: DEFAULT_HIGHLIGHT_COLOR,
   defaultRadius: 4,
   speedMs: 1400,
 };

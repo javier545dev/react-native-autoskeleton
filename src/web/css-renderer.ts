@@ -23,6 +23,18 @@ import { decodeWire } from '../core/wire';
 const STYLE_ELEMENT_ID = 'autoskeleton-css-renderer-styles';
 const DEFAULT_PERIOD_MS = 1400;
 
+/** tasks.md 7.1 / spec REQ-THEME-1: the single source of truth for the
+ *  library's built-in shimmer colors, shared between the injected
+ *  stylesheet's `var(--skl-base, DEFAULT)` fallback below AND
+ *  `applyAnimation()`'s "was this explicitly overridden?" check. A consumer
+ *  who never customizes `SkeletonProvider`'s `theme` gets exactly these two
+ *  values back from `AutoSkeleton.tsx`'s own `DEFAULT_THEME` (which imports
+ *  them from here rather than duplicating the literals) — which is what lets
+ *  `applyAnimation()` tell "default, defer to CSS cascade" apart from "the
+ *  consumer explicitly asked for this color via a React prop". */
+export const DEFAULT_BASE_COLOR = '#e2e2e2';
+export const DEFAULT_HIGHLIGHT_COLOR = '#f5f5f5';
+
 /** The stylesheet text is a pure function of nothing (no per-instance
  *  variance is baked in — speed/geometry travel via CSS custom properties and
  *  inline styles instead), which makes it trivially Vitest-testable without a
@@ -32,10 +44,10 @@ const DEFAULT_PERIOD_MS = 1400;
  *  stylesheet growth ADR-7's "one CSS overlay" decision exists to avoid. */
 export function buildShimmerStylesheet(): string {
   return [
-    '.askl-overlay{position:absolute;inset:0;overflow:hidden;pointer-events:none;',
-    'background-color:var(--skl-base, #e2e2e2);}',
+    `.askl-overlay{position:absolute;inset:0;overflow:hidden;pointer-events:none;`,
+    `background-color:var(--skl-base, ${DEFAULT_BASE_COLOR});}`,
     '.askl-shimmer-layer{position:absolute;top:0;bottom:0;left:-50%;width:200%;',
-    'background-image:linear-gradient(90deg, transparent 0%, var(--skl-highlight, #f5f5f5) 50%, transparent 100%);',
+    `background-image:linear-gradient(90deg, transparent 0%, var(--skl-highlight, ${DEFAULT_HIGHLIGHT_COLOR}) 50%, transparent 100%);`,
     'will-change:transform;}',
     '.askl-anim-shimmer .askl-shimmer-layer{animation-name:askl-shimmer;',
     'animation-timing-function:linear;animation-iteration-count:infinite;',
@@ -155,8 +167,29 @@ function applyAnimation(overlay: HTMLDivElement, shimmerLayer: HTMLDivElement, p
   overlay.style.setProperty('--askl-speed', `${props.clock.periodMs}ms`);
   const delayMs = props.clock.phaseOffsetMs(Date.now());
   shimmerLayer.style.animationDelay = `${-delayMs}ms`;
-  overlay.style.setProperty('--skl-base', props.theme.baseColor);
-  overlay.style.setProperty('--skl-highlight', props.theme.highlightColor);
+
+  // REQ-THEME-1 / tasks.md 7.1: an inline style on this element beats ANY
+  // stylesheet declaration of the same custom property, no matter how it
+  // cascaded in (`:root`, a Tailwind v4 `@theme`, a `.dark` class override,
+  // etc.) — so the ONLY correct thing to do when the theme is still the
+  // library's own default is to leave `--skl-base`/`--skl-highlight` alone
+  // and let the stylesheet's `var(--skl-base, DEFAULT_BASE_COLOR)` fallback
+  // (and the page's own cascade above it) resolve the color. An inline
+  // override is written ONLY when the consumer explicitly customized the
+  // theme via `SkeletonProvider`/a prop — a deliberate, different mechanism
+  // this does not take away. `removeProperty` un-does a previous explicit
+  // override on `update()`/`setAnimation()` calls if the theme reference
+  // later reverts to the default object.
+  if (props.theme.baseColor === DEFAULT_BASE_COLOR) {
+    overlay.style.removeProperty('--skl-base');
+  } else {
+    overlay.style.setProperty('--skl-base', props.theme.baseColor);
+  }
+  if (props.theme.highlightColor === DEFAULT_HIGHLIGHT_COLOR) {
+    overlay.style.removeProperty('--skl-highlight');
+  } else {
+    overlay.style.setProperty('--skl-highlight', props.theme.highlightColor);
+  }
 }
 
 /** Creates the web `Renderer<HTMLElement>` (plan.md §3.5, ADR-7). No

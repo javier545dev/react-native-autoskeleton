@@ -994,13 +994,47 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
 
 ## Phase 7: Theming interops (Uniwind / NativeWind)
 
-- [ ] **7.1** RED→GREEN `--skl-base`/`--skl-highlight` CSS-variable contract wired into 2.2's
+- [x] **7.1** RED→GREEN `--skl-base`/`--skl-highlight` CSS-variable contract wired into 2.2's
       renderer, Tailwind v4 `@theme` cascade, dark mode via cascade with no prop change
       (REQ-THEME-1).
-      **Tests**: Playwright — Tailwind v4 theme-variable scenario and dark-mode-toggle-via-cascade
-      scenario. **Observability**: N/A, styling resolution only. **Performance**: N/A;
-      contributes to NFR-6 only via CSS custom properties, re-verified in 7.4. Deps: 2.2.
-      Complexity: S. Example app: Vite.
+      **Real bug found and fixed** (not a from-scratch feature): the CSS custom-property
+      *fallback* contract (`var(--skl-base, #e2e2e2)`) already existed since task 2.2, but
+      `css-renderer.ts`'s `applyAnimation()` unconditionally wrote an INLINE
+      `overlay.style.setProperty('--skl-base', theme.baseColor)` on every mount — and
+      `theme.baseColor` is always the library's own JS `DEFAULT_THEME` constant unless a
+      consumer explicitly customizes `SkeletonProvider`. An inline style always beats any
+      stylesheet declaration of the same custom property regardless of specificity or cascade
+      origin, so a consumer's `:root`/`@theme`/`.dark` override was silently clobbered on every
+      render — REQ-THEME-1's "no prop change" guarantee was not actually met. Fixed by exporting
+      `DEFAULT_BASE_COLOR`/`DEFAULT_HIGHLIGHT_COLOR` as the single source of truth for both the
+      stylesheet's `var()` fallback and `AutoSkeleton.tsx`'s `DEFAULT_THEME` (imported, not
+      duplicated), and only writing the inline override when `theme.baseColor`/`highlightColor`
+      differs from that default — i.e. only when a consumer explicitly asked for a color via a
+      React prop. Default (unconfigured) usage now genuinely defers to the CSS cascade.
+      **Tailwind v4 `@theme` finding (verified against the real compiler, not assumed)**: an
+      arbitrary non-namespaced custom-property key (e.g. `--skl-highlight`) inside `@theme` is
+      SILENTLY DROPPED by Tailwind v4 4.3.3 — only recognized namespaces (`--color-*`, `--font-*`,
+      etc.) survive into the compiled `:root`/`:host` block. spec.md §1.9's own scenario text
+      already anticipates this ("inside `@theme` **or** `:root`") — the practical consumer pattern
+      is either a plain `:root { --skl-base: ...; }` declaration (untouched pass-through, verified)
+      or a `--color-skl-base` alias inside `@theme` var-of-var'd into `--skl-base` at `:root`. Both
+      are exercised by the tests below.
+      **Tests**: `test/web/theme-cascade.spec.ts` (Playwright, 2 new) — both compile a REAL
+      Tailwind v4 entry stylesheet through the actual installed `@tailwindcss/cli` binary
+      (`test/web/helpers/tailwind.ts`, new — resolves and spawns the CLI directly, no `npx`/network
+      dependency; scratch files live under gitignored `.tailwind-tmp/`, never committed) and mount
+      the REAL `createCssRenderer()` with the library's untouched default theme (no
+      `SkeletonProvider` override — the shape every default consumer gets): (1) a `@theme`
+      `--color-skl-base`/`--color-skl-highlight` pair aliased at `:root` resolves through to the
+      rendered `background-color`, overriding the JS default with zero prop change; (2) toggling
+      `.dark` on `<html>` (no renderer method call, no re-mount, no prop of any kind) flips the
+      resolved color via cascade alone. Verified RED first for the exact right reason (both
+      assertions returned `rgb(226, 226, 226)` — the old inline-forced JS default — regardless of
+      the Tailwind-compiled `--skl-base` value), then GREEN after the fix. Also extended
+      `src/web/css-renderer.test.ts` (Vitest, +1) asserting the stylesheet's `var()` fallbacks
+      match the exported `DEFAULT_*` constants exactly (drift guard). **Observability**: N/A,
+      styling resolution only. **Performance**: N/A; contributes to NFR-6 only via CSS custom
+      properties, re-verified in 7.4. Deps: 2.2. Complexity: S. Example app: Vite.
 - [ ] **7.2** RED→GREEN `autoskeleton/uniwind` subpath export — `src/interop/uniwind.ts` mapping
       resolved className values (`backgroundColor→shimmerBaseColor`,
       `color→shimmerHighlightColor`, `borderRadius→defaultRadius`) via `withUniwind`; core

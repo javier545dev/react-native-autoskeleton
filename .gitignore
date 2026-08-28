@@ -7,6 +7,9 @@ npm-debug.log
 yarn-debug.log
 yarn-error.log
 
+# test/web/helpers/tailwind.ts scratch compile output (never committed)
+.tailwind-tmp/
+
 # Xcode
 build/
 *.pbxuser

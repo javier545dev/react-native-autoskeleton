@@ -8,13 +8,18 @@
 // test/web/css-renderer.spec.ts (Playwright), never here (plan.md §7.3).
 
 import { describe, expect, it } from 'vitest';
-import { buildShimmerStylesheet, createShimmerClock } from './css-renderer';
+import { buildShimmerStylesheet, createShimmerClock, DEFAULT_BASE_COLOR, DEFAULT_HIGHLIGHT_COLOR } from './css-renderer';
 
 describe('buildShimmerStylesheet (ADR-6/ADR-7)', () => {
   const css = buildShimmerStylesheet();
 
   it('never contains background-position (ADR-6 CSS-output half)', () => {
     expect(css.toLowerCase()).not.toContain('background-position');
+  });
+
+  it('tasks.md 7.1 / REQ-THEME-1: the var() fallbacks match the exported DEFAULT_* constants exactly — a single source of truth AutoSkeleton.tsx also imports, so the "was this theme explicitly customized?" check in applyAnimation() can never silently drift from what the stylesheet itself falls back to', () => {
+    expect(css).toContain(`var(--skl-base, ${DEFAULT_BASE_COLOR})`);
+    expect(css).toContain(`var(--skl-highlight, ${DEFAULT_HIGHLIGHT_COLOR})`);
   });
 
   it('only animates transform (shimmer) and opacity (pulse)', () => {
