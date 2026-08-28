@@ -81,6 +81,18 @@ class PaintGateListInstrumentedTest {
         // dedicated heap-dump/LeakCanary-class tool this project does not
         // have wired up. Documented as a real measurement with a stated
         // limitation, not a proxy dressed up as authoritative.
+        //
+        // Task 9.3 (tasks.md Phase 9): this constant is now MIRRORED (not
+        // imported — Kotlin cannot read a TS-land JSON at compile time, and
+        // this file lives in the EXAMPLE app, not the published library, so
+        // it has no build-time path to `benchmarks/` at all) by
+        // `benchmarks/budgets.json`'s `nativeHeapGrowthBytesRecycleStress`
+        // (12582912 bytes = 12 MiB — same value, hand-kept in sync). That
+        // JSON value's OWN correctness is asserted by
+        // `benchmarks/lib/budgets.test.ts`; nothing currently cross-checks
+        // the two files against each other automatically — if you change
+        // one, change both, or the CI-promoted budget silently diverges
+        // from the library test that originated it.
         private const val MAX_NATIVE_HEAP_GROWTH_BYTES = 12L * 1024 * 1024
     }
 
