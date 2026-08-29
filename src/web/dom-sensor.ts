@@ -313,6 +313,27 @@ function pushShape(
 
 function leafShape(el: Element, ctx: TraversalContext, source: ShapeSource, styleIn?: CSSStyleDeclaration): boolean {
   const style = styleIn ?? getComputedStyle(el);
+  // A fully transparent leaf paints nothing, so covering it with an opaque
+  // skeleton block draws a shape where the user sees empty space. Found
+  // empirically against react-native-web (tasks.md G.17): every RNW `<Image>`
+  // renders a `background-image` div AND a full-size `opacity: 0` `<img>`
+  // kept only so the browser's image context menu works, so an image used to
+  // produce TWO exactly-coincident shapes — invisible in a screenshot,
+  // but double the shape count against `maxShapes`, double the traversal
+  // work, and double the clip-path payload on an image-heavy screen.
+  //
+  // Deliberately checked HERE and not at the top of `traverse()`: every
+  // caller of this function has already paid for `getComputedStyle`, so this
+  // rule is free, whereas hoisting it would force a `getComputedStyle` on
+  // every text leaf and every recursing container in the tree — a real NFR-3
+  // traversal-budget regression to catch a rarer case. Consequences,
+  // recorded rather than hidden: an `opacity: 0` TEXT leaf is still shaped,
+  // and an `opacity: 0` CONTAINER still has its descendants shaped.
+  // `getComputedStyle` normalizes the property to a bare number string, so
+  // `'0'` is the whole domain of "invisible" here.
+  if (style.opacity === '0') {
+    return false;
+  }
   const frame = frameOf(el.getBoundingClientRect(), ctx.rootRect);
   const hintRadius = hintRadiusAttr(el);
   const r = hintRadius ?? parseRadius(style);
