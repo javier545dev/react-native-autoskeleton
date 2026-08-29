@@ -9,11 +9,14 @@
 // host component (task 3.2/4.4, wired through
 // `AutoskeletonOverlayNativeComponent.ts`) instead of a CSS overlay.
 //
-// Tier selection (task 5.4/ADR-5): tier-2 (Skia+Reanimated) is used ONLY
-// when BOTH optional peers are present at a compatible version
-// (`tier2PeersAvailable()`); otherwise tier-1 (the always-available native
-// draw pass) renders, and `onMetrics.renderer` reports which one actually
-// ran (RISK-8's detection signal).
+// Tier selection (task 5.4/ADR-5): tier-2 (Skia+Reanimated) draws ONLY when
+// the consumer explicitly opted in by passing `<SkeletonProvider overlay>` an
+// overlay built with `createSkiaOverlay` from the `autoskeleton/skia` subpath;
+// otherwise tier-1 (the always-available native draw pass) renders.
+// `onMetrics.renderer` reports which one actually ran (RISK-8's detection
+// signal) — see the comment at the `rendererKind` assignment below for why
+// this is no longer a runtime peer probe, and for what the probe actually did
+// on a real device.
 //
 // `delay` (this session's brief: "the delay prop is a lie in the public
 // API"): the skeleton overlay is withheld until `delay` ms have elapsed
@@ -34,8 +37,10 @@
 import type { ComponentRef, ReactNode } from 'react';
 import {
   createContext,
+  createElement,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -61,12 +66,13 @@ import { createHintRegistry, snapshotHintEntries } from '../core/hint-registry';
 import { resolveSharedShimmerPeriodMs } from '../core/shimmer-period';
 import { applyThemeOverride } from '../core/theme-override';
 import type { AnimationKind, OnMetrics, RendererKind, ShapeSnapshot } from '../core/types';
+import { decodeWire } from '../core/wire';
 import { Hint } from './Hint';
 import { Ignore } from './Ignore';
 import { nativeSensor } from './nativeSensorInstance';
 import { resolveAutoskeletonOverlayNativeComponent } from './renderer/AutoskeletonOverlayHostComponent';
 import type { NativeSensorTarget } from './sensor';
-import { tier2PeersAvailable } from './tier2/peerAvailability';
+import type { SkeletonOverlayComponent } from './overlayContract';
 import {
   AutoskeletonNativeModuleUnavailableError,
   logNativeModuleUnavailableOnce,
@@ -98,6 +104,13 @@ export interface SkeletonContextValue {
   readonly maxShapes: number;
   readonly handoffTimeoutMs: number;
   readonly handoffFadeMs: number;
+  /** ADR-5 tier-2 opt-in. `undefined` — the default — means the always-
+   *  available tier-1 native overlay draws, with no optional peer anywhere in
+   *  this module's graph. A consumer opts in by building one with
+   *  `createSkiaOverlay` from the `autoskeleton/skia` subpath and passing it
+   *  here; see `src/index.skia.ts` for why the peers are injected rather than
+   *  detected. */
+  readonly overlay?: SkeletonOverlayComponent;
 }
 
 /** Module-level default store, mirroring `web/AutoSkeleton.tsx`'s rationale
@@ -105,6 +118,10 @@ export interface SkeletonContextValue {
  *  REQ-NAV-1's hot path work without requiring every consumer to wire a
  *  `SkeletonProvider`. */
 const defaultStore = new MemoryShapeStore();
+
+/** Stable empty array so tier-1 (which never decodes shapes here) does not
+ *  churn `useMemo`'s identity on every snapshot change. */
+const EMPTY_SHAPES: readonly import('../core/types').ShapeInfo[] = [];
 const defaultContextValue: SkeletonContextValue = {
   store: defaultStore,
   theme: DEFAULT_THEME,
@@ -123,6 +140,8 @@ export interface SkeletonProviderProps {
   readonly maxShapes?: number;
   readonly handoffTimeoutMs?: number;
   readonly handoffFadeMs?: number;
+  /** ADR-5 tier-2 opt-in; see `SkeletonContextValue.overlay`. */
+  readonly overlay?: SkeletonOverlayComponent;
   readonly children?: ReactNode;
 }
 
@@ -134,6 +153,7 @@ export function SkeletonProvider(props: SkeletonProviderProps): React.JSX.Elemen
     maxShapes: props.maxShapes ?? defaultContextValue.maxShapes,
     handoffTimeoutMs: props.handoffTimeoutMs ?? defaultContextValue.handoffTimeoutMs,
     handoffFadeMs: props.handoffFadeMs ?? defaultContextValue.handoffFadeMs,
+    overlay: props.overlay,
   };
   return <SkeletonContext.Provider value={value}>{props.children}</SkeletonContext.Provider>;
 }
@@ -511,7 +531,26 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
     },
   );
 
-  const rendererKind: RendererKind = tier2PeersAvailable() ? 'skia' : 'native';
+  // ADR-5/RISK-8 tier selection. This used to be `tier2PeersAvailable()`, a
+  // runtime probe. It is now purely "did the consumer opt in", for two
+  // independent reasons, both established on a real device this session:
+  //
+  //  1. The probe could never return true. It resolved both peers through a
+  //     `require()` with a VARIABLE specifier, which Metro rewrites into an
+  //     unconditional `throw new Error('Dynamic require … not supported by
+  //     Metro')`; the probe's own `try/catch` turned that into "peer absent".
+  //     Verified with both peers genuinely installed, pods built and linked:
+  //     `onMetrics.renderer` reported `native`.
+  //  2. Even if it had worked, it selected the tier without asking. Reanimated
+  //     is a hard requirement of React Navigation, so "the peers are installed"
+  //     says nothing about whether the consumer wants a Skia skeleton.
+  //
+  // `renderer` in `onMetrics` therefore now reports the tier that ACTUALLY
+  // drew, which is what RISK-8 uses it for. Before this change it reported
+  // whatever the probe said while tier-1 drew regardless, because
+  // `SkiaShimmerOverlay` had no call site anywhere in the library.
+  const overlayRenderer = ctx.overlay;
+  const rendererKind: RendererKind = overlayRenderer ? 'skia' : 'native';
 
   useHandoffAndMetrics(
     props.isLoading,
@@ -554,7 +593,20 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   //    BEFORE any snapshot exists and therefore before any overlay is mounted.
   //    Hiding content that is still plainly visible on screen is the same class
   //    of bug in the other direction.
-  const overlayVisible = showSkeleton && snapshot !== null && OverlayComponent !== null;
+  //
+  // Tier-2 (`overlayRenderer`) needs no native host component: it draws with
+  // Skia into its own canvas. Tier-1 still requires `OverlayComponent`, so the
+  // two arms of this predicate differ only in what "there is something that
+  // can draw" means for the selected tier.
+  const overlayVisible = showSkeleton && snapshot !== null && (overlayRenderer !== undefined || OverlayComponent !== null);
+
+  // Decoded once per snapshot, only for tier-2. Tier-1 never needs it: the
+  // native view reads geometry straight out of the native shape cache by
+  // `cacheKey` (ADR-9), so decoding here for tier-1 would be pure waste.
+  const overlayShapes = useMemo(
+    () => (overlayRenderer !== undefined && snapshot !== null ? decodeWire(snapshot.data).shapes : EMPTY_SHAPES),
+    [overlayRenderer, snapshot],
+  );
 
   // ADR-16 reveal-before-hide: children are ALWAYS mounted underneath the
   // still-painted overlay.
@@ -601,7 +653,27 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
         style={styles.wrapper}
       >
         {props.children}
-        {overlayVisible && (
+        {overlayVisible && overlayRenderer !== undefined && snapshot !== null && (
+          <View
+            accessible={false}
+            importantForAccessibility="no-hide-descendants"
+            pointerEvents="none"
+            style={StyleSheet.absoluteFill}
+          >
+            {createElement(overlayRenderer, {
+              shapes: overlayShapes,
+              baseColor: theme.baseColor,
+              highlightColor: theme.highlightColor,
+              // ADR-8: the shared clock has ONE period, arbitrated in JS
+              // upstream of every renderer — identical call to tier-1's below.
+              speedMs: resolveSharedShimmerPeriodMs(theme.speedMs),
+              width: snapshot.frameWidth,
+              height: snapshot.frameHeight,
+              reducedMotion,
+            })}
+          </View>
+        )}
+        {overlayVisible && overlayRenderer === undefined && OverlayComponent !== null && (
           <OverlayComponent
             cacheKey={cacheKey}
             baseColor={theme.baseColor}

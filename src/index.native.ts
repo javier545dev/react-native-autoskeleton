@@ -3,14 +3,23 @@
 // ADR-3: the mandatory, explicit native entry. Metro's `preferNativePlatform`
 // (unconditionally true) makes `.native.js` win over bare `.js` on iOS and
 // Android; this file, and never the web entry, is what those platforms
-// resolve to. Task 5.5's `native/AutoSkeleton.tsx` is the public component;
-// task 5.4's tier-2 Skia overlay is exported from its own subpath so it is
-// never pulled into a consumer's bundle unless explicitly imported (opt-in,
-// ADR-5) — see `SkiaRenderer.tsx`'s header for why neither optional peer is
-// ever statically imported by this file's own transitive graph either.
+// resolve to. Task 5.5's `native/AutoSkeleton.tsx` is the public component.
+//
+// Task 5.4's tier-2 Skia overlay is exported from the `autoskeleton/skia`
+// subpath (`src/index.skia.ts`, wired into `package.json#exports` as
+// `"./skia"`), so it is never pulled into a consumer's bundle unless they
+// explicitly import it (opt-in, ADR-5). Until 2026-08-29 this comment claimed
+// that subpath existed while `package.json#exports` had no entry for it, and
+// nothing in the library ever rendered the overlay — see `SkiaRenderer.tsx`'s
+// header. Neither optional peer is named anywhere in THIS file's transitive
+// graph, which is what keeps the default tier dependency-free.
 
 export { AutoSkeleton, SkeletonProvider } from './native/AutoSkeleton';
 export type { AutoSkeletonProps, SkeletonProviderProps } from './native/AutoSkeleton';
+/** ADR-5 tier-2 opt-in contract. The TYPES live here so a consumer can name
+ *  them without importing `autoskeleton/skia`; the implementation, and the
+ *  optional peers it needs, live only in that subpath. */
+export type { SkeletonOverlayComponent, SkeletonOverlayProps } from './native/overlayContract';
 export {
   AutoskeletonNativeModuleUnavailableError,
   AUTOSKELETON_NATIVE_MODULE_UNAVAILABLE_DOCS_URL,
