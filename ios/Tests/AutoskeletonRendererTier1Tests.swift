@@ -162,6 +162,83 @@ final class AutoskeletonRendererTier1Tests: XCTestCase {
         XCTAssertTrue(path.contains(CGPoint(x: 40, y: 15)))
     }
 
+    // MARK: - the gradient tracks a REAL surface resize (Android's sibling defect)
+
+    // Adversarial-review defect (2026-08-29), found by grepping the CLASS of
+    // Android's never-rebuilt `LinearGradient` rather than its instance.
+    // `mount` sets `gradientLayer.frame = surface.bounds` exactly once and
+    // NOTHING ever resyncs it: `update(shapes:)` touches only the mask path,
+    // and the sweep's `fromValue`/`toValue` (`-width ... +width`) are captured
+    // from `gradientLayer.bounds.width` at the instant the animation is added.
+    // A resized surface therefore keeps a band sized for the mount-time width
+    // forever, sweeping the wrong span over a correctly-updated mask.
+    //
+    // Reachable on exactly the same path as Android's: `mountOrUpdate` is
+    // called from the layout-metrics site, but the composite cache key embeds
+    // `bucketWidth(windowWidth)`, so a resize inside a stable window keeps the
+    // key and takes the in-place `existingHandle.update(shapes:)` branch.
+    func testUpdateResyncsTheGradientToAResizedSurface() {
+        let renderer = AutoskeletonRendererTier1()
+        let surface = makeSurface() // 300 x 200
+        let clock = AutoskeletonShimmerClock(ticking: AutoskeletonNoOpTicking())
+
+        let handle = renderer.mount(
+            on: surface,
+            shapes: [AutoskeletonShapeInfo(x: 0, y: 0, w: 50, h: 20, r: 0, source: .text, radiusSource: .measured)],
+            theme: makeTheme(),
+            clock: clock,
+            reducedMotion: false
+        )
+        let gradientLayer = try! XCTUnwrap(surface.layer.sublayers?.first as? CAGradientLayer)
+        XCTAssertEqual(gradientLayer.bounds.width, 300)
+        let before = try! XCTUnwrap(
+            gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey) as? CABasicAnimation
+        )
+        XCTAssertEqual(before.toValue as? CGFloat, 300)
+
+        surface.frame = CGRect(x: 0, y: 0, width: 600, height: 200)
+        handle.update(shapes: [AutoskeletonShapeInfo(x: 0, y: 0, w: 80, h: 30, r: 4, source: .text, radiusSource: .measured)])
+
+        XCTAssertEqual(gradientLayer.bounds.width, 600, "the gradient must cover the resized surface, not the mount-time one")
+        let after = try! XCTUnwrap(
+            gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey) as? CABasicAnimation
+        )
+        XCTAssertEqual(after.fromValue as? CGFloat, -600, "the sweep must span the NEW width")
+        XCTAssertEqual(after.toValue as? CGFloat, 600, "the sweep must span the NEW width")
+    }
+
+    func testAHeightOnlyResizeDoesNotRestartTheShimmer() {
+        // The bound on the fix, mirroring Android's `aHeightOnlyResizeDoesNot
+        // RebuildTheShader`: the sweep is a function of WIDTH alone, so a list
+        // growing vertically must resize the layer without restarting the
+        // animation. Verified non-vacuous by planting a resync that re-applies
+        // on any bounds change.
+        let renderer = AutoskeletonRendererTier1()
+        let surface = makeSurface()
+        let clock = AutoskeletonShimmerClock(ticking: AutoskeletonNoOpTicking())
+
+        let handle = renderer.mount(
+            on: surface,
+            shapes: [AutoskeletonShapeInfo(x: 0, y: 0, w: 50, h: 20, r: 0, source: .text, radiusSource: .measured)],
+            theme: makeTheme(),
+            clock: clock,
+            reducedMotion: false
+        )
+        let gradientLayer = try! XCTUnwrap(surface.layer.sublayers?.first as? CAGradientLayer)
+        let beginTimeBefore = try! XCTUnwrap(
+            gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey)
+        ).beginTime
+
+        surface.frame = CGRect(x: 0, y: 0, width: 300, height: 900)
+        handle.update(shapes: [AutoskeletonShapeInfo(x: 0, y: 0, w: 50, h: 20, r: 0, source: .text, radiusSource: .measured)])
+
+        XCTAssertEqual(gradientLayer.bounds.height, 900, "the layer must still track the new height")
+        let beginTimeAfter = try! XCTUnwrap(
+            gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey)
+        ).beginTime
+        XCTAssertEqual(beginTimeBefore, beginTimeAfter, "a height-only resize must not restart the shimmer phase")
+    }
+
     // MARK: - REQ-A11Y-3: reduced motion degrades to pulse, not a transform sweep
 
     func testReducedMotionAppliesPulseNotShimmer() {

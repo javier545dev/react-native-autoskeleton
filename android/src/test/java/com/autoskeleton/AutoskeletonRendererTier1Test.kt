@@ -6,6 +6,7 @@ import android.view.View
 import android.widget.FrameLayout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -115,6 +116,103 @@ class AutoskeletonRendererTier1Test {
         handle.update(listOf(AutoskeletonShapeInfo(1f, 1f, 5f, 5f, 0f, AutoskeletonShapeSource.TEXT, AutoskeletonRadiusSource.MEASURED)))
 
         assertEquals(startedAt, clock.startedAt, 0.0) // phase origin never resets on a geometry update
+        assertEquals(1, overlay.shaderInstanceCount)
+    }
+
+    // MARK: - the shader is rebuilt on a REAL geometry change, never per frame
+
+    // Adversarial-review defect (2026-08-29). `ensureShader()` short-circuited
+    // on `shader != null`, so the ONE thing that calls it on a size change —
+    // `onSizeChanged` — could never do anything. NFR-5 says "zero PER-FRAME
+    // allocations"; that was implemented as NEVER, which is a different and
+    // wrong invariant: the `LinearGradient`'s stop geometry is a pure function
+    // of `width` (`-width .. +width`), so a view that resizes keeps a gradient
+    // built for the OLD geometry and the shimmer band covers the wrong span
+    // for the rest of its life. The correct middle is a geometry KEY: rebuild
+    // when the width actually changed, never on a frame.
+    //
+    // Reachable without rotation: a collapsing header, a split view, a
+    // keyboard, any container resize. `AutoskeletonOverlayView` calls
+    // `mountOrUpdate()` from `onSizeChanged`, but the composite cache key
+    // embeds `bucketWidth(windowWidth)`, so a resize inside a stable window
+    // never changes the key and takes the in-place `update(shapes)` path,
+    // which by contract does not touch the shader.
+    @Test
+    fun shaderIsRebuiltWhenTheOverlayWidthActuallyChanges() {
+        val surface = mountedSurface()
+        val scheduler = AutoskeletonRecordingFrameScheduler()
+        val clock = AutoskeletonShimmerClock()
+        val renderer = AutoskeletonRendererTier1()
+        renderer.mount(surface, emptyList(), theme(), clock, reducedMotion = false, scheduler = scheduler)
+        val overlay = surface.getChildAt(0) as AutoskeletonShimmerOverlayView
+        overlay.draw(android.graphics.Canvas())
+
+        val shaderAt200 = overlay.currentShader
+        assertTrue(shaderAt200 != null)
+        assertEquals(1, overlay.shaderInstanceCount)
+
+        overlay.layout(0, 0, 400, 200) // a real resize -> onSizeChanged
+        overlay.draw(android.graphics.Canvas())
+
+        assertNotSame(
+            "a gradient built for a 200px-wide view is wrong geometry for a 400px-wide one",
+            shaderAt200,
+            overlay.currentShader,
+        )
+        assertEquals(2, overlay.shaderInstanceCount)
+    }
+
+    @Test
+    fun theRebuiltShaderStillAllocatesNothingPerFrame() {
+        val surface = mountedSurface()
+        val scheduler = AutoskeletonRecordingFrameScheduler()
+        val clock = AutoskeletonShimmerClock()
+        val renderer = AutoskeletonRendererTier1()
+        val handle = renderer.mount(surface, emptyList(), theme(), clock, reducedMotion = false, scheduler = scheduler)
+        val overlay = surface.getChildAt(0) as AutoskeletonShimmerOverlayView
+        overlay.draw(android.graphics.Canvas())
+        overlay.layout(0, 0, 400, 200)
+        overlay.draw(android.graphics.Canvas())
+        assertEquals(2, overlay.shaderInstanceCount)
+
+        // NFR-5 proper: 120 further frames plus 120 geometry updates at an
+        // UNCHANGED width must allocate exactly zero new gradients. This is
+        // the invariant the broken `shader != null` short-circuit was
+        // protecting, and it must survive the fix.
+        val shaderAt400 = overlay.currentShader
+        repeat(120) {
+            handle.update(
+                listOf(
+                    AutoskeletonShapeInfo(0f, 0f, 10f, 10f, 0f, AutoskeletonShapeSource.TEXT, AutoskeletonRadiusSource.MEASURED),
+                ),
+            )
+            overlay.draw(android.graphics.Canvas())
+        }
+        assertSame(shaderAt400, overlay.currentShader)
+        assertEquals(2, overlay.shaderInstanceCount)
+    }
+
+    @Test
+    fun aHeightOnlyResizeDoesNotRebuildTheShader() {
+        // Constrains the fix from over-rebuilding: the gradient is a function
+        // of `width` alone, so keying it on the full size would allocate on
+        // every vertical growth (a list adding rows) for no visual difference.
+        // This one passes both before and after the fix by construction —
+        // it is a bound on the fix, not a RED case — and was verified to FAIL
+        // under a plant that keys the shader on `width to height`.
+        val surface = mountedSurface()
+        val scheduler = AutoskeletonRecordingFrameScheduler()
+        val clock = AutoskeletonShimmerClock()
+        val renderer = AutoskeletonRendererTier1()
+        renderer.mount(surface, emptyList(), theme(), clock, reducedMotion = false, scheduler = scheduler)
+        val overlay = surface.getChildAt(0) as AutoskeletonShimmerOverlayView
+        overlay.draw(android.graphics.Canvas())
+        val shaderBefore = overlay.currentShader
+
+        overlay.layout(0, 0, 200, 900)
+        overlay.draw(android.graphics.Canvas())
+
+        assertSame(shaderBefore, overlay.currentShader)
         assertEquals(1, overlay.shaderInstanceCount)
     }
 

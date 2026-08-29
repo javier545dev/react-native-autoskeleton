@@ -113,3 +113,49 @@ describe('keyMatches', () => {
     expect(keyMatches(key, (parts) => parts.platform === 'android')).toBe(false);
   });
 });
+
+// Adversarial-review defect (2026-08-29). The mechanism named in the report
+// ("a separator that can appear inside a component") is NOT what is wrong
+// here: the separator is '|', and BOTH user-supplied segments already escape
+// it (proven above). '-' is a SENTINEL, not a separator — and it is a value a
+// caller can legitimately pass as `itemType`, so `composeCacheKey` is not
+// injective and `parseCacheKey` is not its inverse.
+//
+// The class is "a sentinel drawn from the same alphabet as the payload it
+// guards". The fix closes it at the alphabet level rather than special-casing
+// the one known input: `escapeSegment`'s output alphabet is provably unable
+// to contain '%2D' (its only '%' outputs are the two-char-suffixed '%25' and
+// '%7C'), so an escaped itemType can never impersonate the sentinel.
+describe('composeCacheKey — the empty-itemType sentinel is not a legal payload value', () => {
+  const baseParts: CacheKeyParts = {
+    skeletonKey: 'profile',
+    itemType: undefined,
+    viewportWidth: 390,
+    fontScale: 1,
+    direction: 'ltr',
+    platform: 'ios',
+  };
+
+  it('round-trips an itemType that is literally the sentinel character', () => {
+    const parts: CacheKeyParts = { ...baseParts, itemType: '-' };
+    expect(parseCacheKey(composeCacheKey(parts))).toEqual(parts);
+  });
+
+  it('never composes the same key for itemType "-" and no itemType at all', () => {
+    expect(composeCacheKey({ ...baseParts, itemType: '-' })).not.toBe(
+      composeCacheKey({ ...baseParts, itemType: undefined }),
+    );
+  });
+
+  it('keeps the round-trip injective across every adversarial itemType, including escapes of the sentinel', () => {
+    // Closes the CLASS: any input that could impersonate the sentinel after
+    // escaping, plus the escape of that escape.
+    for (const itemType of ['-', '%2D', '%252D', '%25', '%7C', '|', '%', '-|-', 'a-b']) {
+      const parts: CacheKeyParts = { ...baseParts, itemType };
+      const key = composeCacheKey(parts);
+      expect(key.split('|')).toHaveLength(7);
+      expect(parseCacheKey(key)).toEqual(parts);
+      expect(key).not.toBe(composeCacheKey({ ...baseParts, itemType: undefined }));
+    }
+  });
+});

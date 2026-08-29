@@ -15,9 +15,9 @@ import kotlin.math.min
 // Task 4.4 (tasks.md Phase 4) / plan.md §3.5, §7.2c, brief §4 "Renderers > Default":
 // the Android tier-1 (zero-dependency) `Renderer` implementation. A SINGLE draw
 // pass: a `Path` union of every shape's rounded rect, `canvas.clipPath`, and one
-// rect painted with a `LinearGradient` shader created ONCE at mount and translated
-// per frame via `Matrix.setTranslate` + `Shader.setLocalMatrix` — rebuilding the
-// shader per frame is forbidden (NFR-5). Invalidation is `postInvalidateOnAnimation`
+// rect painted with a `LinearGradient` shader created once PER OVERLAY WIDTH and
+// translated per frame via `Matrix.setTranslate` + `Shader.setLocalMatrix` —
+// rebuilding the shader per frame is forbidden (NFR-5). Invalidation is `postInvalidateOnAnimation`
 // driven by `Choreographer` (via the injectable `AutoskeletonFrameScheduler` seam),
 // which is a purely native Android mechanism with zero JS involvement — this is
 // what makes NFR-2 (shimmer survives a blocked JS thread) true by construction on
@@ -32,7 +32,9 @@ data class AutoskeletonSkeletonTheme(
 
 interface AutoskeletonRendererHandle {
     /** Geometry-only update. MUST NOT restart the shimmer phase and MUST NOT
-     *  rebuild the shader — only the mask path is recomputed. */
+     *  rebuild the shader — only the mask path is recomputed. (A shader
+     *  rebuild is driven exclusively by an actual OVERLAY width change, via
+     *  `onSizeChanged`; a shape update never changes the overlay's size.) */
     fun update(shapes: List<AutoskeletonShapeInfo>)
     fun setReducedMotion(reducedMotion: Boolean)
     fun destroy()
@@ -63,7 +65,7 @@ class AutoskeletonRendererTier1(
         // `addView` alone does not guarantee a measure/layout pass runs before the
         // next frame (that depends on the host window's own layout cycle, which may
         // not have happened yet) — size the overlay to the surface immediately so
-        // `ensureShader()` can construct its ONE `LinearGradient` right away rather
+        // `ensureShader()` can construct its first `LinearGradient` right away rather
         // than silently waiting for a layout pass that might be delayed.
         val widthSpec = View.MeasureSpec.makeMeasureSpec(surface.width, View.MeasureSpec.EXACTLY)
         val heightSpec = View.MeasureSpec.makeMeasureSpec(surface.height, View.MeasureSpec.EXACTLY)
@@ -120,10 +122,16 @@ class AutoskeletonShimmerOverlayView internal constructor(
     private var reducedMotion = false
 
     /** Test/telemetry seam (NFR-5's direct proof): incremented only when a NEW
-     *  `LinearGradient` is constructed — must stay `1` for the view's whole
-     *  lifetime once sized. */
+     *  `LinearGradient` is constructed — must stay constant across any number
+     *  of frames and geometry updates, and may only move when the overlay's
+     *  own WIDTH changes. */
     var shaderInstanceCount = 0
         private set
+
+    /** The `width` the current `shader` was built for. The gradient's stops
+     *  span `-width .. +width`, so this is the shader's complete geometry key
+     *  — `0` means "no shader yet", which `width > 0` already excludes. */
+    private var shaderWidth = 0
 
     /** Test seam: the current shader instance, or `null` before the view has ever
      *  been sized/drawn. */
@@ -172,10 +180,23 @@ class AutoskeletonShimmerOverlayView internal constructor(
         ensureShader()
     }
 
-    /** Constructs the `LinearGradient` exactly ONCE (NFR-5) — a no-op on every
-     *  subsequent call once `shader` is non-null. */
+    /** Constructs the `LinearGradient` once per distinct overlay WIDTH — a
+     *  no-op on every call whose geometry the current shader already matches,
+     *  which is every call from `onDraw` (NFR-5: zero per-frame allocations).
+     *
+     *  Adversarial-review defect (2026-08-29): this used to short-circuit on
+     *  `shader != null` alone, so `onSizeChanged` — the only caller that can
+     *  ever observe a geometry change — could never rebuild anything. NFR-5
+     *  says do not rebuild PER FRAME; that had been implemented as NEVER, a
+     *  strictly different invariant. The gradient's stops are a pure function
+     *  of `width` (`-width .. +width`), so a resized view kept a band built
+     *  for the old span for the rest of its life. `shaderWidth` is the
+     *  geometry key that separates the two: a frame never changes it, a real
+     *  resize does. HEIGHT deliberately does not participate — it appears
+     *  nowhere in the gradient — so a list growing vertically still allocates
+     *  nothing. */
     private fun ensureShader() {
-        if (shader != null || width <= 0 || height <= 0) {
+        if (width <= 0 || height <= 0 || (shader != null && shaderWidth == width)) {
             return
         }
         val gradient = LinearGradient(
@@ -189,6 +210,7 @@ class AutoskeletonShimmerOverlayView internal constructor(
         )
         shader = gradient
         paint.shader = gradient
+        shaderWidth = width
         shaderInstanceCount += 1
     }
 

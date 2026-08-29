@@ -10,6 +10,7 @@
 // logic the wrapper defers to.
 
 import { describe, expect, it } from 'vitest';
+import { composeCacheKey, type ShapeCacheKey } from './cache-key';
 import {
   createTemplateRegistry,
   createTraversalCounter,
@@ -19,39 +20,136 @@ import {
   MAX_MEASUREMENT_ATTEMPTS,
 } from './list';
 
+// The registry is keyed by the COMPOSITE CACHE KEY (adversarial-review
+// defect, 2026-08-29 — see `TemplateRegistry`'s doc comment). These helpers
+// build REAL keys through `composeCacheKey` rather than casting a bare
+// itemType string, so the tests exercise the same values production does.
+function keyFor(itemType: string, viewportWidth = 390): ShapeCacheKey {
+  return composeCacheKey({
+    skeletonKey: itemType,
+    itemType,
+    viewportWidth,
+    fontScale: 1,
+    direction: 'ltr',
+    platform: 'ios',
+  });
+}
+
+const FEED = keyFor('feedCard');
+const PROMO = keyFor('promoCard');
+
 describe('createTemplateRegistry', () => {
   it('starts every itemType idle', () => {
     const registry = createTemplateRegistry();
-    expect(registry.stateFor('feedCard')).toBe('idle');
+    expect(registry.stateFor(FEED)).toBe('idle');
   });
 
   it('tracks scheduled and measured transitions per itemType independently', () => {
     const registry = createTemplateRegistry();
-    registry.markScheduled('feedCard');
-    expect(registry.stateFor('feedCard')).toBe('scheduled');
-    expect(registry.stateFor('promoCard')).toBe('idle');
+    registry.markScheduled(FEED);
+    expect(registry.stateFor(FEED)).toBe('scheduled');
+    expect(registry.stateFor(PROMO)).toBe('idle');
 
-    registry.markMeasured('feedCard');
-    expect(registry.stateFor('feedCard')).toBe('measured');
-    expect(registry.stateFor('promoCard')).toBe('idle');
+    registry.markMeasured(FEED);
+    expect(registry.stateFor(FEED)).toBe('measured');
+    expect(registry.stateFor(PROMO)).toBe('idle');
   });
 
   it('reset(itemType) reverts a single itemType back to idle', () => {
     const registry = createTemplateRegistry();
-    registry.markScheduled('feedCard');
-    registry.markScheduled('promoCard');
-    registry.reset('feedCard');
-    expect(registry.stateFor('feedCard')).toBe('idle');
-    expect(registry.stateFor('promoCard')).toBe('scheduled');
+    registry.markScheduled(FEED);
+    registry.markScheduled(PROMO);
+    registry.reset(FEED);
+    expect(registry.stateFor(FEED)).toBe('idle');
+    expect(registry.stateFor(PROMO)).toBe('scheduled');
   });
 
   it('reset() with no argument clears every itemType', () => {
     const registry = createTemplateRegistry();
-    registry.markScheduled('feedCard');
-    registry.markScheduled('promoCard');
+    registry.markScheduled(FEED);
+    registry.markScheduled(PROMO);
     registry.reset();
-    expect(registry.stateFor('feedCard')).toBe('idle');
-    expect(registry.stateFor('promoCard')).toBe('idle');
+    expect(registry.stateFor(FEED)).toBe('idle');
+    expect(registry.stateFor(PROMO)).toBe('idle');
+  });
+});
+
+// Adversarial-review defect (2026-08-29, useTemplateMeasurement.ts): the
+// registry was keyed by `itemType` while the store it guards is keyed by the
+// full composite key, so ONE `'measured'` mark suppressed measurement for
+// every other cache key sharing that itemType — permanently, for the app
+// session. This pins the CONTRACT (a registry entry belongs to one composite
+// key) so a future "optimisation" that narrows the key back to an itemType
+// goes red here as well as at `tsc`.
+describe('TemplateRegistry — an entry belongs to ONE composite cache key, not to an itemType', () => {
+  it('does not let a measured key suppress a sibling key with the same itemType', () => {
+    // Two lists on one screen, same cell kind, different `skeletonKey` — the
+    // exact shape `useSkeletonCell({ itemType, skeletonKey })` allows.
+    const feedList = composeCacheKey({
+      skeletonKey: 'feed',
+      itemType: 'card',
+      viewportWidth: 390,
+      fontScale: 1,
+      direction: 'ltr',
+      platform: 'ios',
+    });
+    const searchList = composeCacheKey({
+      skeletonKey: 'search',
+      itemType: 'card',
+      viewportWidth: 390,
+      fontScale: 1,
+      direction: 'ltr',
+      platform: 'ios',
+    });
+    expect(feedList).not.toBe(searchList);
+
+    const registry = createTemplateRegistry();
+    registry.markScheduled(feedList);
+    registry.markMeasured(feedList);
+
+    expect(registry.stateFor(searchList)).toBe('idle');
+    // 'idle' + a cache MISS is the only combination that ever schedules.
+    expect(decideCellBind(false, registry.stateFor(searchList), registry.attemptsFor(searchList))).toEqual({
+      shouldScheduleTemplateMeasurement: true,
+    });
+  });
+
+  it('re-measures the same itemType after a cache-key dimension changes (rotation, font scale, RTL)', () => {
+    // The commonest instance by far: one list, one itemType, a rotation that
+    // crosses a `bucketWidth`. Under the old itemType keying the new width
+    // was a cache MISS whose measurement the stale 'measured' mark blocked,
+    // pinning the list to `FallbackSkeletonBlock` for good.
+    const registry = createTemplateRegistry();
+    const portrait = keyFor('feedCard', 390);
+    const landscape = keyFor('feedCard', 768);
+    expect(portrait).not.toBe(landscape);
+
+    registry.markScheduled(portrait);
+    registry.markMeasured(portrait);
+
+    expect(registry.stateFor(landscape)).toBe('idle');
+    expect(decideCellBind(false, registry.stateFor(landscape), registry.attemptsFor(landscape))).toEqual({
+      shouldScheduleTemplateMeasurement: true,
+    });
+    // ...and the portrait key is still done, so rotating back allocates nothing.
+    expect(decideCellBind(false, registry.stateFor(portrait), registry.attemptsFor(portrait))).toEqual({
+      shouldScheduleTemplateMeasurement: false,
+    });
+  });
+
+  it('still collapses N concurrent sibling binds of ONE list to a single claim (RISK-3 preserved)', () => {
+    // The guarantee the itemType keying was there to provide. Siblings of one
+    // list share one composite key, so it survives the re-keying untouched.
+    const registry = createTemplateRegistry();
+    const key = keyFor('feedCard');
+    let claims = 0;
+    for (let cell = 0; cell < 20; cell++) {
+      if (decideCellBind(false, registry.stateFor(key), registry.attemptsFor(key)).shouldScheduleTemplateMeasurement) {
+        claims += 1;
+        registry.markScheduled(key);
+      }
+    }
+    expect(claims).toBe(1);
   });
 });
 
@@ -68,14 +166,14 @@ describe('createTemplateRegistry', () => {
 describe('TemplateRegistry.releaseClaim — cancelled/recycled measurement releases its claim (adversarial-review defect)', () => {
   it('reverts a scheduled itemType back to idle so another cell can retry', () => {
     const registry = createTemplateRegistry();
-    registry.markScheduled('feedCard');
-    registry.releaseClaim('feedCard');
-    expect(registry.stateFor('feedCard')).toBe('idle');
+    registry.markScheduled(FEED);
+    registry.releaseClaim(FEED);
+    expect(registry.stateFor(FEED)).toBe('idle');
   });
 
   it('THE direct proof: a cancelled claim unblocks decideCellBind for the very next bind', () => {
     const registry = createTemplateRegistry();
-    const itemType = 'feedCard';
+    const itemType = keyFor('feedCard');
     // Cell A claims the itemType synchronously during render (mirrors the
     // hook's own render-body `registry.markScheduled(itemType)`).
     registry.markScheduled(itemType);
@@ -91,16 +189,16 @@ describe('TemplateRegistry.releaseClaim — cancelled/recycled measurement relea
 
   it('is a no-op for an itemType that already resolved to measured — never un-measures a real success', () => {
     const registry = createTemplateRegistry();
-    registry.markScheduled('feedCard');
-    registry.markMeasured('feedCard');
-    registry.releaseClaim('feedCard');
-    expect(registry.stateFor('feedCard')).toBe('measured');
+    registry.markScheduled(FEED);
+    registry.markMeasured(FEED);
+    registry.releaseClaim(FEED);
+    expect(registry.stateFor(FEED)).toBe('measured');
   });
 
   it('is a no-op for an itemType still idle', () => {
     const registry = createTemplateRegistry();
-    registry.releaseClaim('feedCard');
-    expect(registry.stateFor('feedCard')).toBe('idle');
+    registry.releaseClaim(FEED);
+    expect(registry.stateFor(FEED)).toBe('idle');
   });
 });
 
@@ -112,31 +210,31 @@ describe('TemplateRegistry.releaseClaim — cancelled/recycled measurement relea
 describe("TemplateRegistry.markFailed — 'gave up' is distinct from 'measured' (adversarial-review defect)", () => {
   it('does NOT masquerade as measured', () => {
     const registry = createTemplateRegistry();
-    registry.markScheduled('feedCard');
-    registry.markFailed('feedCard');
-    expect(registry.stateFor('feedCard')).toBe('failed');
-    expect(registry.stateFor('feedCard')).not.toBe('measured');
+    registry.markScheduled(FEED);
+    registry.markFailed(FEED);
+    expect(registry.stateFor(FEED)).toBe('failed');
+    expect(registry.stateFor(FEED)).not.toBe('measured');
   });
 
   it('tracks a per-itemType attempt count, independent of other itemTypes', () => {
     const registry = createTemplateRegistry();
-    registry.markScheduled('feedCard');
-    registry.markFailed('feedCard');
-    expect(registry.attemptsFor('feedCard')).toBe(1);
-    expect(registry.attemptsFor('promoCard')).toBe(0);
+    registry.markScheduled(FEED);
+    registry.markFailed(FEED);
+    expect(registry.attemptsFor(FEED)).toBe(1);
+    expect(registry.attemptsFor(PROMO)).toBe(0);
   });
 
   it('decideCellBind allows a bounded retry from a failed state', () => {
     const registry = createTemplateRegistry();
-    registry.markScheduled('feedCard');
-    registry.markFailed('feedCard');
-    const decision = decideCellBind(false, registry.stateFor('feedCard'), registry.attemptsFor('feedCard'));
+    registry.markScheduled(FEED);
+    registry.markFailed(FEED);
+    const decision = decideCellBind(false, registry.stateFor(FEED), registry.attemptsFor(FEED));
     expect(decision.shouldScheduleTemplateMeasurement).toBe(true);
   });
 
   it('stops retrying once MAX_MEASUREMENT_ATTEMPTS is reached — an observable ceiling, never a silent infinite retry loop', () => {
     const registry = createTemplateRegistry();
-    const itemType = 'feedCard';
+    const itemType = keyFor('feedCard');
     for (let i = 0; i < MAX_MEASUREMENT_ATTEMPTS; i++) {
       registry.markScheduled(itemType);
       registry.markFailed(itemType);
@@ -148,9 +246,9 @@ describe("TemplateRegistry.markFailed — 'gave up' is distinct from 'measured' 
 
   it('a cache hit never schedules a retry, even from a failed state under budget', () => {
     const registry = createTemplateRegistry();
-    registry.markScheduled('feedCard');
-    registry.markFailed('feedCard');
-    const decision = decideCellBind(true, registry.stateFor('feedCard'), registry.attemptsFor('feedCard'));
+    registry.markScheduled(FEED);
+    registry.markFailed(FEED);
+    const decision = decideCellBind(true, registry.stateFor(FEED), registry.attemptsFor(FEED));
     expect(decision.shouldScheduleTemplateMeasurement).toBe(false);
   });
 });
@@ -170,7 +268,7 @@ describe('decideCellBind — REQ-LIST-CELL-1 / ADR-13 zero-traversal-on-bind', (
 
   it('THE direct proof: simulating N rebinds of an unseen itemType schedules a template measurement exactly once', () => {
     const registry = createTemplateRegistry();
-    const itemType = 'promoCard';
+    const itemType = keyFor('promoCard');
     let scheduleCount = 0;
 
     for (let i = 0; i < 50; i++) {
@@ -187,7 +285,7 @@ describe('decideCellBind — REQ-LIST-CELL-1 / ADR-13 zero-traversal-on-bind', (
 
   it('THE direct proof: once cached, N rebinds never schedule and never traverse', () => {
     const registry = createTemplateRegistry();
-    const itemType = 'feedCard';
+    const itemType = keyFor('feedCard');
     registry.markScheduled(itemType);
     registry.markMeasured(itemType);
     let scheduleCount = 0;

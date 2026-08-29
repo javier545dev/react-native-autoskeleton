@@ -108,8 +108,27 @@ export function createHandoffController(
   /** Begins the cross-fade for a known outcome. Cancels a still-pending wait
    *  timeout (the successor-painted-before-timeout case); a no-op when there
    *  was none (the immediate no-successor case, or the timeout callback
-   *  itself, which is already past firing). */
+   *  itself, which is already past firing).
+   *
+   *  Adversarial-review defect (2026-08-29): idempotent for the WHOLE cycle.
+   *  `notifyPainted()`'s own `phase !== 'placeholder'` guard cannot close
+   *  this window, because `phase` stays `'placeholder'` for the full
+   *  `handoffFadeMs` cross-fade — so a fade already begun for one reason
+   *  could be re-begun for another (timeout fires, THEN the successor
+   *  paints; or `expectsSuccessor: false` fades immediately and a paint
+   *  signal lands mid-fade). The live `handoffReason` getter then reported a
+   *  different outcome than `settled` resolved with, because `settleResolve`
+   *  captures its own `reason` argument while the getter reads the last
+   *  write — and a second, orphaned fade timer rewrote `handoffMs` and
+   *  re-notified every subscriber after teardown. `web/AutoSkeleton.tsx`'s
+   *  `usePaintDetectionHeuristic` guarded exactly ONE sub-case of this at
+   *  its own call site; this is the same fix at the source, covering every
+   *  caller on every platform. `handoffReason` is the cycle's commit point:
+   *  once set, the outcome is decided. */
   function beginFade(reason: HandoffReason): void {
+    if (handoffReason !== undefined) {
+      return;
+    }
     handoffReason = reason;
     if (waitTimeoutHandle !== undefined) {
       clearTimeout(waitTimeoutHandle);

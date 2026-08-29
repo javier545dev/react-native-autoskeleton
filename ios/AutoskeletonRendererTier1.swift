@@ -20,7 +20,10 @@ struct AutoskeletonSkeletonTheme {
 
 protocol AutoskeletonRendererHandle: AnyObject {
     /// Geometry-only update. MUST NOT restart the shimmer phase and MUST NOT
-    /// allocate per frame — only the mask path is recomputed and reassigned.
+    /// allocate per frame — only the mask path is recomputed and reassigned,
+    /// plus a resync of the gradient layer to the surface's CURRENT bounds
+    /// (see `Handle.syncGradientGeometry`), which is a no-op at an unchanged
+    /// size and never restarts the phase for a height-only change.
     func update(shapes: [AutoskeletonShapeInfo])
     func setReducedMotion(_ reducedMotion: Bool)
     func destroy()
@@ -100,6 +103,9 @@ final class AutoskeletonRendererTier1 {
         private let gradientLayer: CAGradientLayer
         private let theme: AutoskeletonSkeletonTheme
         private let clock: AutoskeletonShimmerClock
+        /// The motion mode currently applied, so a geometry resync can
+        /// re-derive the width-dependent sweep without asking the caller.
+        private var reducedMotion = false
 
         init(surface: UIView, maskLayer: CAShapeLayer, gradientLayer: CAGradientLayer, theme: AutoskeletonSkeletonTheme, clock: AutoskeletonShimmerClock) {
             self.surface = surface
@@ -110,13 +116,46 @@ final class AutoskeletonRendererTier1 {
         }
 
         func update(shapes: [AutoskeletonShapeInfo]) {
+            syncGradientGeometry()
             // Geometry only — reassigning `path` does NOT touch the running
             // shimmer animation (a separate animation on `gradientLayer`, not on
             // `maskLayer`), so the phase never restarts on a data update.
             maskLayer.path = AutoskeletonRendererTier1.unionPath(for: shapes)
         }
 
+        /// Adversarial-review defect (2026-08-29), the iOS sibling of Android's
+        /// never-rebuilt `LinearGradient` — found by grepping the CLASS, not the
+        /// instance. `mount` set `gradientLayer.frame = surface.bounds` exactly
+        /// once and nothing ever resynced it: a raw sublayer has no
+        /// autoresizing, `update(shapes:)` touched only the mask path, and the
+        /// sweep's `-width ... +width` span was captured from
+        /// `gradientLayer.bounds.width` when the animation was added. A resized
+        /// surface therefore swept a mount-time-sized band over a
+        /// correctly-updated mask for the rest of its life.
+        ///
+        /// Reachable on the same path as Android's: `AutoskeletonOverlayViewHost
+        /// .mountOrUpdate` runs from the layout-metrics site, but the composite
+        /// cache key embeds `bucketWidth(windowWidth)`, so a resize inside a
+        /// stable window keeps the key and takes the in-place update branch.
+        ///
+        /// The animation is re-applied ONLY when the WIDTH actually changed —
+        /// the sole dimension the sweep depends on — so a list growing
+        /// vertically resizes the layer and allocates nothing else, mirroring
+        /// Android's `shaderWidth` geometry key. Re-applying is phase-preserving
+        /// by construction: `applyShimmer`'s `beginTime` is derived from the
+        /// shared `AutoskeletonShimmerClock`'s absolute origin (ADR-8), not from
+        /// the moment it happens to run.
+        private func syncGradientGeometry() {
+            guard let bounds = surface?.bounds, bounds != gradientLayer.frame else { return }
+            let widthChanged = bounds.width != gradientLayer.bounds.width
+            gradientLayer.frame = bounds
+            guard widthChanged, !reducedMotion else { return }
+            gradientLayer.removeAnimation(forKey: Self.shimmerAnimationKey)
+            applyShimmer()
+        }
+
         func setReducedMotion(_ reducedMotion: Bool) {
+            self.reducedMotion = reducedMotion
             gradientLayer.removeAnimation(forKey: Self.shimmerAnimationKey)
             gradientLayer.removeAnimation(forKey: Self.pulseAnimationKey)
             if reducedMotion {

@@ -6,9 +6,17 @@
 // with a shimmer gradient driven ENTIRELY by Reanimated shared values on
 // the UI thread — NFR-7 (zero React re-renders attributable to animation):
 // the shared value's frame-by-frame mutation never touches React state, so
-// no commit is ever scheduled by the animation itself. Per-shape stagger
-// uses `withDelay`, keyed by wire shape INDEX (plan.md §4.1: "order is
-// meaningful … the tier-2 Skia renderer staggers `withDelay` by index").
+// no commit is ever scheduled by the animation itself.
+//
+// PER-SHAPE STAGGER IS NOT IMPLEMENTED — corrected here 2026-08-29, because
+// this header previously asserted that it was ("per-shape stagger is
+// expressed as a `withDelay` OFFSET applied to derived values below, keyed by
+// wire index"), and no such derived values exist. What ships is ONE union
+// path and ONE gradient for the whole overlay, so there is nothing per-shape
+// to offset. plan.md §4.1's index stagger is therefore a DROPPED FEATURE, not
+// dead code: `staggerDelayForIndex` below is its formula, exported, unit-
+// tested, and reached by nothing. See its own doc comment for what wiring it
+// would actually cost.
 //
 // Neither `@shopify/react-native-skia` nor `react-native-reanimated` is
 // statically imported anywhere in this file — both are resolved via a
@@ -35,7 +43,7 @@
 // confirm the exact prop names/shapes below against the installed
 // versions and correct any drift from Skia/Reanimated's real APIs.
 
-import { useMemo, type ReactElement } from 'react';
+import { useEffect, useMemo, type ReactElement } from 'react';
 import type { Renderer, RendererHandle, RenderProps } from '../../core/contracts';
 import type { ShapeInfo } from '../../core/types';
 import { tier2PeersAvailable, type PeerRequire } from './peerAvailability';
@@ -64,7 +72,7 @@ interface SkiaModule extends SkiaPathModule, SkiaRRectModule {
   vec: (x: number, y: number) => { x: number; y: number };
 }
 
-interface ReanimatedModule {
+export interface ReanimatedModule {
   useSharedValue<T>(initial: T): { value: T };
   useDerivedValue<T>(updater: () => T, deps?: readonly unknown[]): { value: T };
   withRepeat: (animation: number, count?: number, reverse?: boolean) => number;
@@ -111,6 +119,17 @@ export function createSkiaTier2Renderer(requireFn?: PeerRequire): Renderer<never
 
 const STAGGER_STEP_MS = 40;
 
+/** The one shared drive animation: an infinite, auto-reversing sweep of the
+ *  0..1 driver over `speedMs`. Exported standalone so its SHAPE is unit-
+ *  testable without a React renderer that runs effects — this repo has none
+ *  under Vitest (node environment, jsdom banned project-wide), which is the
+ *  same limitation already carried as open item (i). The effect WIRING is
+ *  therefore not covered by a test here, and this comment is the honest
+ *  record of that, not a claim to the contrary. */
+export function createDriveAnimation(Reanimated: ReanimatedModule, speedMs: number): number {
+  return Reanimated.withRepeat(Reanimated.withTiming(1, { duration: speedMs }), -1, true);
+}
+
 export interface SkiaShimmerOverlayProps {
   readonly shapes: readonly ShapeInfo[];
   readonly baseColor: string;
@@ -149,13 +168,26 @@ export function SkiaShimmerOverlay(props: SkiaShimmerOverlayProps): ReactElement
   }, [props.shapes, Skia]);
 
   // ONE shared driver value for the whole overlay (ADR-8: one clock, not
-  // per-shape ticking); per-shape stagger is expressed as a `withDelay`
-  // OFFSET applied to derived values below, keyed by wire index — never as
-  // N independent `useSharedValue` drivers, which would defeat "one clock".
+  // per-shape ticking) — never N independent `useSharedValue` drivers, which
+  // would defeat "one clock".
+  //
+  // Adversarial-review defect (2026-08-29): this assignment used to sit bare
+  // in the render body. Beyond being a documented Reanimated correctness
+  // violation (an external side effect in the render phase, unsafe under
+  // StrictMode double-invocation and any concurrent render React discards),
+  // it re-assigned a FRESH `withRepeat(withTiming(...))` on EVERY render, so
+  // any unrelated parent re-render silently restarted the sweep — the exact
+  // opposite of ADR-8's "every instance in phase". An effect runs once per
+  // change of the values the animation actually depends on.
   const drive = Reanimated.useSharedValue(0);
-  if (!props.reducedMotion) {
-    drive.value = Reanimated.withRepeat(Reanimated.withTiming(1, { duration: props.speedMs }), -1, true);
-  }
+  useEffect(() => {
+    if (props.reducedMotion) {
+      return;
+    }
+    drive.value = createDriveAnimation(Reanimated, props.speedMs);
+    // `Reanimated` is the module object from `requireFn`, stable by the
+    // require cache; `drive` is a stable shared-value handle.
+  }, [drive, Reanimated, props.reducedMotion, props.speedMs]);
 
   const gradientStart = Reanimated.useDerivedValue(
     () => ({ x: -props.width + drive.value * props.width * 2, y: 0 }),
@@ -177,7 +209,20 @@ export function SkiaShimmerOverlay(props: SkiaShimmerOverlayProps): ReactElement
 
 /** Per-shape stagger delay in ms for wire index `i` (plan.md §4.1: order is
  *  meaningful, staggered by INDEX). Exported standalone so it is
- *  independently unit-testable without mounting Skia/Reanimated at all. */
+ *  independently unit-testable without mounting Skia/Reanimated at all.
+ *
+ *  NOT WIRED — deliberately, and stated here so the green unit test on it can
+ *  never be mistaken for a shipped feature (the exact trap task G.15 found in
+ *  the native accessibility helpers). `SkiaShimmerOverlay` draws ONE union
+ *  path under ONE gradient, so there is no per-shape node to delay. Wiring
+ *  this needs one `<Skia.Path>` per shape, each with its own
+ *  `useDerivedValue` — i.e. hooks in a loop over a variable-length array,
+ *  which the rules of hooks forbid — or a Skia runtime shader carrying a
+ *  per-shape phase uniform. Either is a redesign of a tier that is opt-in,
+ *  disabled by default, and (per this file's header) never yet verified
+ *  against the real Skia/Reanimated APIs, and neither can be gated by any
+ *  test this repo can run today. Kept rather than deleted so plan.md §4.1's
+ *  requirement is not silently dropped; carried forward as an open item. */
 export function staggerDelayForIndex(index: number): number {
   return index * STAGGER_STEP_MS;
 }
