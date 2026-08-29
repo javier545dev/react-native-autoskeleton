@@ -90,3 +90,37 @@ radius for most of your rounded views). This is the actionable signal to
 add a typed `radius` hint to the affected views, since Android has no
 reliable public API to recover an arbitrary view's corner radius (see
 `docs/product-brief.md` §9c for the full, measured limitation).
+
+## Typed hints: `<AutoSkeleton.Hint>` — one API, one known asymmetry
+
+`<AutoSkeleton.Hint>` exists on **both** native (`src/native/Hint.tsx`) and
+web (`src/web/Hint.tsx`), added 2026-08-28 after `spec.md` NFR-6 was revised
+a second time (8 kB → 9 kB) specifically to buy back this API symmetry —
+see NFR-6's row for the full rationale.
+
+```tsx
+<AutoSkeleton.Hint id="avatar" radius={24}>
+  <RoundedAvatar />
+</AutoSkeleton.Hint>
+```
+
+| Prop | Native | Web |
+|---|---|---|
+| `id` (required) | ✅ stamps `nativeID`/`testID` | ✅ stamps `data-autoskeleton-id` |
+| `radius` | ✅ primary radius mechanism on Android (ADR-2 R0); overrides `layer.cornerRadius` on iOS | ✅ stamps `data-autoskeleton-radius`, the same self-sufficient attribute channel a consumer could already set by hand |
+| `lines` | ✅ consulted by both native sensors | ❌ **not a prop on web at all — a real, documented gap, not an oversight** |
+
+**Why web has no `lines` prop.** Web's DOM sensor (`src/web/dom-sensor.ts`)
+never calls `hints.linesFor()` anywhere in its traversal. Its one
+theoretical consultation point — the `textLeafShapes` `clientrects-empty`
+fallback, which only runs when `Range.getClientRects()` returns zero rects
+for a text leaf — was live-probed in Playwright (`display:none`,
+zero-font-size, zero-width-overflow-hidden constructions) and found
+genuinely unreachable under non-degenerate geometry given the module's
+current `isTextLeaf` gate: any construction that drives `getClientRects()`
+to empty also makes the element's own frame degenerate, so the branch never
+fires for real content. Wiring a `lines` prop through to an unreachable
+branch would be a silent no-op, not a fix, so it was deliberately left out
+of the web `Hint` API rather than shipped as dead code. Making it reachable
+would require redesigning `isTextLeaf` itself — real surgery, not a small
+wiring change — and is tracked as an open item, not silently dropped.

@@ -83,11 +83,83 @@ protocol AutoskeletonHintRegistry {
     func isIgnored(_ nodeId: String) -> Bool
 }
 
-/// A `HintRegistry` with nothing configured — every lookup misses. The production
-/// default until Phase 5 wires a real typed-prop-backed registry through the bridge.
+/// A `HintRegistry` with nothing configured — every lookup misses. Used by
+/// tests and as a documented degenerate case; production now uses
+/// `AutoskeletonMapHintRegistry` (below), built from the bridge's marshaled
+/// `AutoskeletonHintEntry` list.
 struct AutoskeletonEmptyHintRegistry: AutoskeletonHintRegistry {
     func lines(for nodeId: String) -> Int? { nil }
     func radius(for nodeId: String) -> CGFloat? { nil }
+    func isIgnored(_ nodeId: String) -> Bool { false }
+}
+
+/// Plain-Swift mirror of one `AutoskeletonHintEntry`
+/// (`src/native/NativeAutoskeleton.ts`) — the typed-hint channel's marshaled
+/// DATA crossing the Turbo Module boundary (never `HintRegistry`'s
+/// functions, which cannot cross it at all). `lines`/`radius` are already
+/// decoded from the wire's `0`/`-1` "no override" sentinels back to `nil`
+/// by `AutoskeletonModuleBridge`'s dictionary-decoding step, so `nil` here
+/// always means "genuinely no hint for this field".
+struct AutoskeletonHintEntry {
+    let nodeId: String
+    let lines: Int?
+    let radius: CGFloat?
+
+    /// Decodes ONE marshaled dictionary (`Autoskeleton.mm` builds one per
+    /// `config.hints()` `LazyVector` element — `@objc`-bridgeable
+    /// `NSDictionary<NSString, NSObject>` is the chosen crossing shape,
+    /// since a Swift STRUCT cannot itself be `@objc` and therefore cannot
+    /// cross the ObjC++/Swift boundary directly). Applies the SAME
+    /// `lines: 0` / `radius: -1` "no override" sentinel convention
+    /// `NativeAutoskeleton.ts` and Android's `toHintEntries()` already
+    /// document — decoded back to `nil` here, never left as a
+    /// misleading "real" `0`/`-1` value.
+    static func decode(_ dict: [String: Any]) -> AutoskeletonHintEntry? {
+        guard let nodeId = dict["nodeId"] as? String else {
+            return nil
+        }
+        let lines = (dict["lines"] as? NSNumber)?.intValue ?? 0
+        let radius = (dict["radius"] as? NSNumber)?.doubleValue ?? -1
+        return AutoskeletonHintEntry(
+            nodeId: nodeId,
+            lines: lines == 0 ? nil : lines,
+            radius: radius == -1 ? nil : CGFloat(radius)
+        )
+    }
+}
+
+/// Typed-hint channel (plan.md ADR-2 R0 on Android; a deliberate OVERRIDE of
+/// `layer.cornerRadius` on iOS — see `AutoskeletonSensor.swift`'s
+/// `leafShapes(for:root:source:ctx:)`). The real registry built from
+/// `AutoskeletonHintEntry` entries that crossed the Turbo Module boundary —
+/// the production default `AutoskeletonModuleBridge.computeWireArray` now
+/// passes instead of `AutoskeletonEmptyHintRegistry`. `isIgnored` stays
+/// always `false`: `<AutoSkeleton.Ignore>` uses its own self-sufficient
+/// `autoskeletonIgnoreMarkerNativeId` marker channel, checked directly by
+/// `AutoskeletonSensor.traverse()` before this registry is ever consulted —
+/// the same deliberate split `core/hint-registry.ts`'s `createHintRegistry`
+/// makes on the JS side and Android's `AutoskeletonMapHintRegistry` makes.
+struct AutoskeletonMapHintRegistry: AutoskeletonHintRegistry {
+    private let linesByNodeId: [String: Int]
+    private let radiusByNodeId: [String: CGFloat]
+
+    init(_ entries: [AutoskeletonHintEntry]) {
+        var lines: [String: Int] = [:]
+        var radius: [String: CGFloat] = [:]
+        for entry in entries {
+            if let l = entry.lines {
+                lines[entry.nodeId] = l
+            }
+            if let r = entry.radius {
+                radius[entry.nodeId] = r
+            }
+        }
+        self.linesByNodeId = lines
+        self.radiusByNodeId = radius
+    }
+
+    func lines(for nodeId: String) -> Int? { linesByNodeId[nodeId] }
+    func radius(for nodeId: String) -> CGFloat? { radiusByNodeId[nodeId] }
     func isIgnored(_ nodeId: String) -> Bool { false }
 }
 
@@ -130,17 +202,20 @@ struct AutoskeletonSensorOptions {
 /// (`src/native/NativeAutoskeleton.ts`) — the codegen'd param arrives as the
 /// C++ struct `JS::NativeAutoskeleton::AutoskeletonGetShapesConfig` (verified
 /// against the actual generated `AutoskeletonSpec.h`), visible only to
-/// Objective-C++, so `Autoskeleton.mm` decodes it into four primitive
-/// scalars at the ObjC++/Swift boundary; `AutoskeletonModuleBridge` collects
-/// them back into this struct so `computeWireArray` and its tests stay
-/// pure Swift. See `AutoskeletonModuleBridge.getShapes(reactTag:cacheKey:
-/// defaultRadius:budgetMs:maxShapes:collectDebugSidecars:resolveView:)`'s
-/// doc comment for the full rationale.
+/// Objective-C++, so `Autoskeleton.mm` decodes it into primitive scalars
+/// (plus an `NSArray<NSDictionary>` for `hints`, the typed-hint channel's
+/// marshaled entries) at the ObjC++/Swift boundary;
+/// `AutoskeletonModuleBridge` collects them back into this struct so
+/// `computeWireArray` and its tests stay pure Swift. See
+/// `AutoskeletonModuleBridge.getShapes(reactTag:cacheKey:defaultRadius:
+/// budgetMs:maxShapes:collectDebugSidecars:hints:resolveView:)`'s doc
+/// comment for the full rationale.
 struct AutoskeletonGetShapesConfig {
     let defaultRadius: CGFloat
     let budgetMs: Double
     let maxShapes: Int
     let collectDebugSidecars: Bool
+    let hints: [AutoskeletonHintEntry]
 }
 
 /// Mirrors `SensorResult` in `src/core/contracts.ts`.

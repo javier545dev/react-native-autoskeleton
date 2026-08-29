@@ -11,8 +11,12 @@ import UIKit
 //
 // Radius resolution is deliberately simple relative to Android's ADR-2 ladder:
 // `layer.cornerRadius` is a fully public API on every `UIView`, so iOS never needs a
-// degradation rung — every shape's `radiusSource` is `.measured` (brief §4:
-// "Radius from `layer.cornerRadius`"; plan.md ADR-2: "iOS is exact").
+// DEGRADATION rung — no fallback/probe ladder exists here (brief §4: "Radius from
+// `layer.cornerRadius`"; plan.md ADR-2: "iOS is exact"). Typed-hint channel: a
+// registered `radius` hint (`HintRegistry.radius(for:)`) still OVERRIDES the
+// measured value when present — a deliberate cross-platform consistency choice,
+// not a gap-filling fallback — so `radiusSource` is `.hint` in that one case and
+// `.measured` otherwise.
 //
 // Collapsed-text detection is a stated design decision, not a silent one:
 // `RCTParagraphComponentView.attributedText` is a read-only property backed by
@@ -214,7 +218,17 @@ final class AutoskeletonSensor {
             return []
         }
         let nodeId = view.accessibilityIdentifier
-        let radius = view.layer.cornerRadius
+        // Typed-hint channel: a registered `radius` hint OVERRIDES
+        // `layer.cornerRadius` — a deliberate design decision, not a
+        // fallback iOS needs (`layer.cornerRadius` is always directly
+        // readable here, unlike Android's ADR-2 ladder). Overriding keeps
+        // ONE typed prop behaving consistently across platforms instead of
+        // silently doing nothing on iOS — see `Hint.tsx`'s `radius` doc
+        // comment. `radiusSource` reports `.hint` exactly when the override
+        // fired, so `radiusSourceHistogram` stays meaningful here too.
+        let hintRadius = nodeId.flatMap { ctx.options.hints.radius(for: $0) }
+        let radius = hintRadius ?? view.layer.cornerRadius
+        let radiusSource: AutoskeletonRadiusSource = hintRadius != nil ? .hint : .measured
 
         if source == .text, frame.height < ctx.options.defaultLineHeight {
             let lineCount = nodeId.flatMap { ctx.options.hints.lines(for: $0) }
@@ -244,7 +258,7 @@ final class AutoskeletonSensor {
             h: frame.height,
             r: radius,
             source: source,
-            radiusSource: .measured
+            radiusSource: radiusSource
         )
         return [shape]
     }

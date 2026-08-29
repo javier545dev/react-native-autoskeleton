@@ -21,7 +21,8 @@ const test = base.extend<{ measure: (bodyHtml: string, opts?: MeasureOpts) => Pr
     await use(async (bodyHtml, opts = {}) => {
       await loadHarness(page, ENTRY, bodyHtml, { direction: opts.direction });
       return page.evaluate((options) => {
-        const { createDomSensor, createEmptyHintRegistry, composeCacheKey, decodeWire } = window.Autoskeleton;
+        const { createDomSensor, createEmptyHintRegistry, composeCacheKey, decodeWire, RADIUS_SOURCES } =
+          window.Autoskeleton;
         const sensor = createDomSensor!();
         const root = document.getElementById('root')!;
         const key = composeCacheKey!({
@@ -44,12 +45,16 @@ const test = base.extend<{ measure: (bodyHtml: string, opts?: MeasureOpts) => Pr
         }
         const decoded = decodeWire!(result.snapshot.data);
         const marks = performance.getEntriesByName('autoskeleton-traversal', 'measure');
+        const radiusSources = result.snapshot.radiusSources
+          ? Array.from(result.snapshot.radiusSources, (i) => RADIUS_SOURCES![i]!)
+          : undefined;
         return {
           shapes: decoded.shapes.map((s) => ({ x: s.x, y: s.y, w: s.w, h: s.h, r: s.r })),
           degraded: result.degraded,
           traversalMs: result.traversalMs,
           hasProfileMarks: marks.length > 0,
           sourcesLength: result.snapshot.sources?.length,
+          radiusSources,
         };
       }, opts);
     });
@@ -69,6 +74,7 @@ interface MeasureResult {
   readonly traversalMs: number;
   readonly hasProfileMarks: boolean;
   readonly sourcesLength?: number;
+  readonly radiusSources?: readonly string[];
 }
 
 const TEXT_STYLE = 'margin:0;font-size:16px;line-height:20px;white-space:pre-line;';
@@ -162,6 +168,43 @@ test.describe('DOM sensor — container-vs-leaf resolution (spec §1.1)', () => 
     expect(shapes).toHaveLength(1);
     expect(shapes![0]!.w).toBeCloseTo(120, 0);
     expect(shapes![0]!.h).toBeCloseTo(60, 0);
+  });
+});
+
+test.describe('DOM sensor — typed radius hint (R0, plan.md ADR-2)', () => {
+  test('a data-autoskeleton-radius attribute overrides the measured computed-style radius, and radiusSource reports "hint"', async ({
+    measure,
+  }) => {
+    const { shapes, radiusSources } = await measure(
+      `<div id="root" style="position:relative;width:300px;">
+         <div data-autoskeleton-radius="20" style="background:#00ff00;width:120px;height:60px;border-radius:4px;"></div>
+       </div>`,
+    );
+    expect(shapes).toHaveLength(1);
+    expect(shapes![0]!.r).toBe(20);
+    expect(radiusSources).toEqual(['hint']);
+  });
+
+  test('without the attribute, the same node measures its real computed-style radius', async ({ measure }) => {
+    const { shapes, radiusSources } = await measure(
+      `<div id="root" style="position:relative;width:300px;">
+         <div style="background:#00ff00;width:120px;height:60px;border-radius:4px;"></div>
+       </div>`,
+    );
+    expect(shapes).toHaveLength(1);
+    expect(shapes![0]!.r).toBe(4);
+    expect(radiusSources).toEqual(['measured']);
+  });
+
+  test('an invalid (non-numeric) attribute value falls back to the measured radius', async ({ measure }) => {
+    const { shapes, radiusSources } = await measure(
+      `<div id="root" style="position:relative;width:300px;">
+         <div data-autoskeleton-radius="not-a-number" style="background:#00ff00;width:120px;height:60px;border-radius:4px;"></div>
+       </div>`,
+    );
+    expect(shapes).toHaveLength(1);
+    expect(shapes![0]!.r).toBe(4);
+    expect(radiusSources).toEqual(['measured']);
   });
 });
 

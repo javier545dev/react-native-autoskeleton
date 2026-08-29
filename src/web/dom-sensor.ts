@@ -23,8 +23,42 @@ import { encodeWire } from '../core/wire';
  *  the sensor; `<AutoSkeleton.Ignore>` (task 2.3) sets this attribute. */
 export const IGNORE_ATTRIBUTE = 'data-autoskeleton-ignore';
 /** Typed-prop hint channel keyed off this attribute — never className
- *  (REQ-THEME-3). Optional; absent nodes simply get no hint. */
-const HINT_ID_ATTRIBUTE = 'data-autoskeleton-id';
+ *  (REQ-THEME-3). Optional; absent nodes simply get no hint. Kept for the
+ *  pre-existing `isIgnored` registry consultation below (unrelated to the
+ *  typed-hint channel this attribute's name suggests — see
+ *  `HINT_RADIUS_ATTRIBUTE`'s doc comment for why the `radius` hint does NOT
+ *  use this id+registry mechanism). */
+export const HINT_ID_ATTRIBUTE = 'data-autoskeleton-id';
+
+/** Typed-hint channel (radius, plan.md ADR-2 R0) — a SELF-SUFFICIENT data
+ *  attribute, not an id+registry lookup. NFR-6 forced this design: an
+ *  id+registry (`core/hint-registry.ts`, built for the NATIVE bridge-
+ *  crossing constraint — a `HintRegistry`'s functions cannot cross a Turbo
+ *  Module boundary, so native genuinely needs a marshaled-array-to-Map
+ *  registry) pushed the web entry gzip size over the (then-8192-byte, now
+ *  9216-byte — see spec.md NFR-6's second revision) budget when reused here.
+ *  Web has NO equivalent bridge constraint — a consumer sets this attribute
+ *  directly as a plain JSX prop on their own element
+ *  (`<div data-autoskeleton-radius={20}>`), which is exactly what
+ *  `src/web/Hint.tsx`'s `<AutoSkeleton.Hint>` now stamps too (added after
+ *  the NFR-6 revision, registry-free, `cloneElement`-only) — see that
+ *  module's header comment for the full rationale, including why the web
+ *  `lines` hint is STILL NOT wired even after `<AutoSkeleton.Hint>` was
+ *  added: its only consultation point, the `clientrects-empty` fallback
+ *  below, is unreachable with non-degenerate geometry under this module's
+ *  current `isTextLeaf` gate — a real, pre-existing structural gap flagged
+ *  here, not silently papered over. Wiring it would require redesigning
+ *  `isTextLeaf` itself (real surgery), not just adding an attribute read. */
+export const HINT_RADIUS_ATTRIBUTE = 'data-autoskeleton-radius';
+
+function hintRadiusAttr(el: Element): number | undefined {
+  const raw = el.getAttribute(HINT_RADIUS_ATTRIBUTE);
+  if (raw === null) {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
 
 const IMAGE_TAGS = new Set(['IMG']);
 const INPUT_TAGS = new Set(['INPUT', 'BUTTON', 'TEXTAREA', 'SELECT']);
@@ -192,7 +226,7 @@ function pushShape(
 function leafShape(el: Element, ctx: TraversalContext, source: ShapeSource, styleIn?: CSSStyleDeclaration): boolean {
   const style = styleIn ?? getComputedStyle(el);
   const frame = frameOf(el.getBoundingClientRect(), ctx.rootRect);
-  const hintRadius = ctx.hints.radiusFor(nodeId(el));
+  const hintRadius = hintRadiusAttr(el);
   const r = hintRadius ?? parseRadius(style);
   const radiusSource: RadiusSource = hintRadius !== undefined ? 'hint' : 'measured';
   return pushShape(ctx, frame, r, source, radiusSource);

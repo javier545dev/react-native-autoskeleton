@@ -9,19 +9,29 @@
 // bob source would emit broken imports (`../src/core/cache-key` resolving
 // against `lib/**/cli/` instead of the real compiled `core/` output).
 //
-// Bundling with esbuild (the SAME tool `cli/bundle.ts` already uses at
-// capture-time to bundle the browser-side DOM sensor) sidesteps that
-// entirely: everything reachable from `cli/index.ts` and `cli/capture.ts`
-// (their own code plus the `src/core`/`src/web` modules they import) is
-// inlined into two self-contained CommonJS files. `@playwright/test` and
-// `esbuild` itself stay EXTERNAL — both are real `dependencies` of the
-// published package (see package.json) so Node resolves them normally from
-// the consumer's own `node_modules` at runtime, exactly like any other npm
-// package with dependencies; bundling them in would vendor a huge, and in
-// esbuild's case actively wrong (native binary resolution), copy.
+// Bundling with esbuild sidesteps that entirely: everything reachable from
+// `cli/index.ts` and `cli/capture.ts` (their own code plus the
+// `src/core`/`src/web` modules they import) is inlined into two
+// self-contained CommonJS files. `@playwright/test` stays EXTERNAL — it is
+// an optional `peerDependency` of the published package (see
+// package.json), loaded lazily at runtime by `cli/capture.ts`'s
+// `loadChromium` so Node resolves it normally from the CONSUMER's own
+// `node_modules` when they installed it, with an actionable error when they
+// have not (RISK-5 packaging fix — see `cli/peer-dependency.ts`).
+//
+// `esbuild` is kept external here too (bundling a bundler in would vendor a
+// huge, and actively wrong — native binary resolution — copy) but is NO
+// LONGER a runtime dependency of the published package at all: task 9.6
+// (RISK-5 packaging fix) moved it to a plain `devDependency`, because its
+// only runtime use — bundling `cli/browser-runtime.ts` into the IIFE
+// injected into the captured page — bundles a STATIC file with no
+// per-capture parameterization (see `cli/bundle.ts`'s header comment). That
+// bundle is now produced ONCE, right here, at publish time, and shipped as
+// a plain browser-runtime.bundle.js` asset `dist-cli/capture.js` reads at
+// runtime — `esbuild` itself is never `require()`d by a published consumer.
 
 import { build } from 'esbuild';
-import { chmod, copyFile, mkdir } from 'node:fs/promises';
+import { chmod, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -38,6 +48,8 @@ const shared = {
 };
 
 async function main() {
+  await mkdir(path.join(repoRoot, 'dist-cli'), { recursive: true });
+
   // The programmatic `autoskeleton/cli` entry (exports['./cli']).
   await build({
     ...shared,
@@ -60,22 +72,26 @@ async function main() {
   });
   await chmod(path.join(repoRoot, 'dist-cli/capture.js'), 0o755);
 
-  // `cli/bundle.ts`'s `bundleCaptureRuntime()` resolves
-  // `path.join(__dirname, 'browser-runtime.ts')` AT RUNTIME to feed the raw
-  // TypeScript source into its own separate (browser-target) esbuild call —
-  // a real trap for the bundled `bin`/`./cli` output specifically: esbuild's
-  // static bundling inlines `bundle.ts`'s CODE into `dist-cli/capture.js`,
-  // but it cannot rewrite that RUNTIME `__dirname` string, which will then
-  // point at `dist-cli/` (the bundle's own location), not `cli/`. Copying
-  // the raw source alongside the bundle keeps that runtime lookup valid for
-  // both the in-repo path (`cli/capture.ts` run directly, `__dirname` =
-  // `cli/`) and the published/bundled path (`dist-cli/capture.js`,
-  // `__dirname` = `dist-cli/`) without changing `cli/bundle.ts`'s logic.
-  await mkdir(path.join(repoRoot, 'dist-cli'), { recursive: true });
-  await copyFile(
-    path.join(repoRoot, 'cli/browser-runtime.ts'),
-    path.join(repoRoot, 'dist-cli/browser-runtime.ts'),
-  );
+  // `cli/bundle.ts`'s `bundleCaptureRuntime()` reads
+  // `path.join(__dirname, 'browser-runtime.bundle.js')` AT RUNTIME — a
+  // plain browser-target IIFE bundle, not TypeScript source, so a published
+  // consumer never invokes `esbuild` to produce it. Build it here with the
+  // SAME options `cli/bundle.ts`'s dev-only fallback uses, `write: true`
+  // straight to its final location next to `dist-cli/capture.js` (whose own
+  // bundling above inlines `bundle.ts`'s CODE but cannot rewrite its
+  // runtime `__dirname` string, which resolves to `dist-cli/` for the
+  // published/bundled path — matching where this file is written).
+  await build({
+    entryPoints: ['cli/browser-runtime.ts'],
+    outfile: 'dist-cli/browser-runtime.bundle.js',
+    bundle: true,
+    platform: 'browser',
+    target: 'es2020',
+    format: 'iife',
+    define: { 'process.env.NODE_ENV': JSON.stringify('production') },
+    absWorkingDir: repoRoot,
+    logLevel: 'info',
+  });
 }
 
 main().catch((err) => {

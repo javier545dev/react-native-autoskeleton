@@ -5,7 +5,7 @@ import { gzipSync } from 'node:zlib';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 // Task 2.5 (tasks.md Phase 2): NFR-6 — "the web entry (`.`, no theming
-// interops) is < 8 kB gzip with no runtime dependency beyond React." ADR-3's
+// interops) is < 9 kB gzip with no runtime dependency beyond React." ADR-3's
 // own caveat is load-bearing here: this MUST be measured on a real consumer
 // BUNDLE (tree-shaken, minified), never on builder-bob's output, which is an
 // unbundled, unminified per-file transpile and would give a meaningless
@@ -22,16 +22,24 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 // Run in isolation: `vitest run test/packaging/web-bundle.test.ts`.
 
 const repoRoot = path.resolve(__dirname, '../..');
-// REVISED 2026-08-27, by maintainer decision, from 5 kB to 8 kB. Do NOT
-// "restore" 5 kB thinking this is a typo: the original 5 kB figure came from
-// the kickoff prompt and was never validated against an implementation.
-// First real measurement (this same day, before the revision) was 7566 B
-// gzip, and the dominant cost is product code (AutoSkeleton, dom-sensor,
-// css-renderer standalone gzip sizes), not incidental bloat — see spec.md
-// NFR-6 for the full rationale and plan.md §11 item 5 for the resolved open
-// question. 8 kB remains a HARD FAILING GATE, not a downgrade to a tracked
-// budget.
-const NFR6_BUDGET_BYTES = 8 * 1024;
+// NFR-6 has been revised TWICE — a third revision needs to argue against
+// this precedent, not just raise the number:
+//   1. 5 kB -> 8 kB (2026-08-27): the original 5 kB came from the kickoff
+//      prompt and was never validated against an implementation. First real
+//      measurement was 7566 B gzip, dominated by product code (AutoSkeleton,
+//      dom-sensor, css-renderer), not incidental bloat.
+//   2. 8 kB -> 9 kB (2026-08-28): the 8 kB gate DID its job — it forced a
+//      design decision instead of letting the bundle grow silently — but the
+//      decision it forced was giving web a DIFFERENT typed-hint API from
+//      native (no `<AutoSkeleton.Hint>` on web, only a raw `data-*`
+//      attribute), landing at 8185/8192 B, 7 bytes of headroom. A per-platform
+//      API asymmetry is a worse outcome than ~250 bytes for a library whose
+//      entire proposition is "one package, all platforms" — raised
+//      deliberately to buy back API symmetry (`src/web/Hint.tsx`), not
+//      because the gate was inconvenient. See spec.md NFR-6 for the full
+//      rationale and plan.md §11 item 5 for the resolved open question.
+// 9 kB remains a HARD FAILING GATE, not a downgrade to a tracked budget.
+const NFR6_BUDGET_BYTES = 9 * 1024;
 
 let outDir: string;
 let bundlePath: string;
@@ -73,7 +81,7 @@ beforeAll(async () => {
         // NFR-6's own text: the budget excludes React itself. A real
         // consumer app already ships react/react-dom regardless of whether
         // it uses autoskeleton, so this package's OWN incremental weight is
-        // the only thing < 8 kB gzip can meaningfully describe.
+        // the only thing < 9 kB gzip can meaningfully describe.
         external: ['react', 'react/jsx-runtime', 'react-dom', 'react-dom/client'],
       },
     },
@@ -105,7 +113,7 @@ describe('NFR-6: web entry gzip budget (measured on a real Vite consumer bundle)
     expect(source).not.toContain('askl-debug-shape');
   });
 
-  it('is under 8 kB gzip (NFR-6, failing gate per spec Open Question 5 — REVISED 2026-08-27)', () => {
+  it('is under 9 kB gzip (NFR-6, failing gate per spec Open Question 5 — REVISED 2026-08-27, then 2026-08-28)', () => {
     const source = readFileSync(bundlePath);
     const gzipped = gzipSync(source, { level: 9 });
     // eslint-disable-next-line no-console

@@ -7,6 +7,23 @@ detection is architecturally impossible both server- and client-side
 `<AutoSkeleton.SSR>` replays. This document covers running it and the one
 real ergonomic cost it has (RISK-4), stated openly rather than glossed over.
 
+## Install
+
+The CLI drives a real headless browser, so it needs `@playwright/test` —
+an **optional peer dependency** of `autoskeleton`, not installed for you
+automatically (RISK-5: a regular consumer who never touches the CLI
+installs nothing extra). Install it once, alongside the Chromium binary it
+drives:
+
+```bash
+npm install @playwright/test
+npx playwright install chromium
+```
+
+If you run the CLI without it, `runCapture`/`autoskeleton-capture` throws a
+named, actionable error telling you exactly this — never a raw
+`MODULE_NOT_FOUND` (`cli/peer-dependency.ts`).
+
 ## What it does
 
 `cli/capture.ts` launches headless Chromium (Playwright), navigates a

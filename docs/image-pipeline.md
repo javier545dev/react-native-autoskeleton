@@ -19,7 +19,7 @@ rationale; this file is the consumer-facing version of that decision.
 manages blurhash. Two reasons, stated plainly:
 
 1. A blurhash decoder would duplicate what `expo-image` already ships, and
-   would blow the < 8 kB gzip web budget (NFR-6) on its own.
+   would blow the < 9 kB gzip web budget (NFR-6) on its own.
 2. Owning phase 2 would force a hard dependency on one specific image
    component, contradicting the "agnostic to styling and component system"
    design that makes the sensor work at all.

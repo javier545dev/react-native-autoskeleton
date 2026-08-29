@@ -256,6 +256,81 @@ describe('RISK-5 packaging detector (entries.test.ts) — RED until 5.6', () => 
     });
   });
 
+  describe('no non-optional peer outside the allowlist (RISK-5, orchestrator-found defect)', () => {
+    // Sibling of the runtime-`dependencies` guard below, one level up.
+    // npm 7+ AUTO-INSTALLS any peerDependency not marked optional, so a
+    // required peer is a forced download, not merely a declared expectation.
+    //
+    // `react-native` was REQUIRED, which meant a web-only consumer (Vite,
+    // Next.js) downloaded React Native, the Hermes compiler, react-devtools
+    // and Babel to render skeletons in a browser. Measured: 226 packages /
+    // 166 MB, against 1 package / 3.3 MB for the package alone.
+    //
+    // Only `react` genuinely belongs here: it is the one dependency every
+    // consumer of this library has on every platform. Everything else —
+    // react-native, Skia, Reanimated, uniwind, the capture CLI's playwright —
+    // is platform- or feature-specific and must be `optional`, so npm leaves
+    // the choice to the consumer. The web entry's import graph is already
+    // asserted above to contain no native specifier, so a web consumer
+    // genuinely never needs react-native present.
+    const ALLOWED_REQUIRED_PEERS = ['react'];
+
+    it('every peerDependency outside the allowlist is marked optional', () => {
+      const peers = Object.keys(packageJson.peerDependencies ?? {});
+      const meta = (packageJson as { peerDependenciesMeta?: Record<string, { optional?: boolean }> })
+        .peerDependenciesMeta ?? {};
+      const requiredPeers = peers.filter(
+        (name) => meta[name]?.optional !== true && !ALLOWED_REQUIRED_PEERS.includes(name),
+      );
+      expect(
+        requiredPeers,
+        `these peers are not marked optional, so npm 7+ force-installs them for every consumer ` +
+          `regardless of platform: ${requiredPeers.join(', ')}`,
+      ).toEqual([]);
+    });
+  });
+
+  describe('no runtime `dependencies` footprint (RISK-5, orchestrator-found defect)', () => {
+    // Root cause: `@playwright/test` and `esbuild` — real runtime needs of
+    // ONLY the capture CLI (`cli/`), never of the library's own web/native
+    // runtime surface — sat in `package.json`'s top-level `dependencies`.
+    // `dependencies` is installed for EVERY consumer unconditionally, so a
+    // consumer who never touches the CLI was forced to download a full
+    // Chromium-driving test framework and a bundler: measured in a clean
+    // `npm init` sandbox installing only the packed tarball, 231 packages /
+    // 194 MB, for a library whose web entry is ~8 KB gzip. This directly
+    // contradicts NFR-6's own "no runtime dependencies beyond React on web"
+    // framing. `@playwright/test` is an irreducible runtime need of the CLI
+    // (it drives a real browser) and moved to an optional `peerDependency`
+    // instead — a CLI user installs it deliberately, everyone else installs
+    // nothing extra. `esbuild` was only ever used to bundle the injected
+    // browser runtime (`cli/browser-runtime.ts`) AT CAPTURE TIME — that
+    // bundle is static (never parameterized per capture, see
+    // `cli/browser-runtime.ts`), so it is now pre-built once at
+    // `npm run build:cli` time and shipped as `dist-cli/browser-runtime.bundle.js`;
+    // `esbuild` moved to a plain `devDependency` (build-time only, never
+    // required by a published consumer at all — not even as a peer).
+    //
+    // `ALLOWED_RUNTIME_DEPENDENCIES` is a deliberate, reviewed allowlist,
+    // not a blanket ban — a genuine future runtime need of the LIBRARY
+    // itself (not the CLI) would be added here explicitly, never silently.
+    const ALLOWED_RUNTIME_DEPENDENCIES: readonly string[] = [];
+
+    it('the published package.json declares no unreviewed runtime `dependencies`', () => {
+      const deps = Object.keys(packageJson.dependencies ?? {});
+      const unreviewed = deps.filter((d) => !ALLOWED_RUNTIME_DEPENDENCIES.includes(d));
+      expect(
+        unreviewed,
+        `package.json "dependencies" contains unreviewed runtime dependencies that every ` +
+          `consumer installs unconditionally: ${unreviewed.join(', ') || '(none)'}. Move each ` +
+          `to peerDependencies (if it is a genuine runtime need of a consumer-facing surface, ` +
+          `made optional when only some consumers need it) or devDependencies (if it is only a ` +
+          `build/test-time need of this repo), or add it to ALLOWED_RUNTIME_DEPENDENCIES above ` +
+          `with a reviewed justification.`
+      ).toEqual([]);
+    });
+  });
+
   describe('no test artifacts in the published tarball (packaging defect, orchestrator-found)', () => {
     // Root cause: package.json's `files` key excludes `**/__tests__`, but
     // Phase 1 co-located tests as `src/core/*.test.ts` (never in a

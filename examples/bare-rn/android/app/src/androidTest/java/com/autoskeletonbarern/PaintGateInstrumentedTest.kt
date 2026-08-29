@@ -109,6 +109,8 @@ class PaintGateInstrumentedTest {
         private const val LABEL_CARD = "paint-gate-rounded-card"
         private const val LABEL_IGNORED_CONTENT = "paint-gate-ignored-content"
         private const val LABEL_IGNORED_SIBLING = "paint-gate-ignored-sibling"
+        private const val LABEL_HINTED_CARD = "paint-gate-hinted-card"
+        private const val LABEL_UNHINTED_CARD = "paint-gate-unhinted-card"
 
         // ADR-16 defaults (`core/handoff.ts`): handoffTimeoutMs=250,
         // handoffFadeMs=120. Waiting past both, plus slack, before sampling
@@ -172,6 +174,15 @@ class PaintGateInstrumentedTest {
     private fun centerPixel(bitmap: Bitmap, bounds: Rect): Int {
         val x = ((bounds.left + bounds.right) / 2).coerceIn(0, bitmap.width - 1)
         val y = ((bounds.top + bounds.bottom) / 2).coerceIn(0, bitmap.height - 1)
+        return bitmap.getPixel(x, y)
+    }
+
+    /** A pixel [inset] px in from the region's top-left CORNER — the exact
+     *  spot a rounded/near-circular clip excludes but a square clip does
+     *  not. Used by the typed-hint-channel radius gate below. */
+    private fun cornerInsetPixel(bitmap: Bitmap, bounds: Rect, inset: Int): Int {
+        val x = (bounds.left + inset).coerceIn(0, bitmap.width - 1)
+        val y = (bounds.top + inset).coerceIn(0, bitmap.height - 1)
         return bitmap.getPixel(x, y)
     }
 
@@ -356,6 +367,55 @@ class PaintGateInstrumentedTest {
         assertFalse(
             "No skeleton pixels should remain over the rounded card after isLoading=false",
             colorsClose(cardPixel, SKELETON_BASE_COLOR),
+        )
+        scenario.close()
+    }
+
+    /**
+     * Typed-hint channel gate (this session's brief): a `radius` hint must
+     * VISIBLY CHANGE THE PAINTED CORNER on Android — the primary radius
+     * mechanism there, per brief §9c's on-device finding that no public API
+     * otherwise recovers a rounded RN view's corner radius.
+     *
+     * Both fixture regions are SQUARE views (no `borderRadius` style at
+     * all) of the SAME size, in the SAME frame. `hintedCard` is wrapped in
+     * `<AutoSkeleton.Hint radius={40}>` (a near-circular radius on an 80x80
+     * box); `unhintedCard` has no hint. A pixel a few px in from the
+     * top-left CORNER of each region is the oracle: the rounded/circular
+     * clip excludes it for the hinted region but a square clip does not
+     * exclude it for the unhinted one — so the SAME corner-inset pixel must
+     * differ between the two, proving the hint changed what was actually
+     * painted, not merely that the API accepted a `radius` prop.
+     */
+    @RequiresApi(Build.VERSION_CODES.O)
+    @Test
+    fun hintedRadiusChangesThePaintedCornerOnAndroid() {
+        val scenario = launchAndWaitForMount()
+        val hintedBounds = boundsOf(LABEL_HINTED_CARD)
+        val unhintedBounds = boundsOf(LABEL_UNHINTED_CARD)
+        val bitmap = screenshotBitmap(scenario)
+
+        // 3px in from an 80dp-square box's corner sits well inside the
+        // corner arc excluded by radius=40 (sqrt(37^2+37^2) ≈ 52.3 > 40),
+        // while comfortably inside a square (unrounded) box's own bounds.
+        val inset = 3
+        val hintedCorner = cornerInsetPixel(bitmap, hintedBounds, inset)
+        val unhintedCorner = cornerInsetPixel(bitmap, unhintedBounds, inset)
+
+        assertTrue(
+            "Expected the UNHINTED (square) region's corner-inset pixel to show a real " +
+                "skeleton pixel within the shimmer ramp (${hex(SKELETON_BASE_COLOR)}.." +
+                "${hex(SKELETON_HIGHLIGHT_COLOR)}) — a square clip does not exclude a pixel " +
+                "this close to its own corner — but it was ${hex(unhintedCorner)}.",
+            colorInRamp(unhintedCorner, SKELETON_BASE_COLOR, SKELETON_HIGHLIGHT_COLOR),
+        )
+        assertFalse(
+            "Expected the HINTED (radius=40) region's corner-inset pixel to be EXCLUDED " +
+                "from the skeleton's rounded/near-circular clip — proving the radius hint " +
+                "actually changed the painted shape, not just that the API accepted it — " +
+                "but it was ${hex(hintedCorner)}, inside the shimmer ramp just like the " +
+                "unhinted region's corner (${hex(unhintedCorner)}).",
+            colorInRamp(hintedCorner, SKELETON_BASE_COLOR, SKELETON_HIGHLIGHT_COLOR),
         )
         scenario.close()
     }

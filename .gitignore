@@ -93,3 +93,6 @@ coverage/
 # Local agent skill-registry cache (machine-specific)
 .atl/
 .codegraph/
+
+# Impeccable design-hook local cache (machine-specific)
+.impeccable/hook.cache.json

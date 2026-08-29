@@ -48,6 +48,7 @@ describe('createNativeSensor (task 5.1)', () => {
       budgetMs: OPTIONS.budgetMs,
       maxShapes: OPTIONS.maxShapes,
       collectDebugSidecars: OPTIONS.collectDebugSidecars,
+      hints: [],
     });
   });
 
@@ -79,7 +80,55 @@ describe('createNativeSensor (task 5.1)', () => {
       budgetMs: 4,
       maxShapes: 1,
       collectDebugSidecars: true,
+      hints: [],
     });
+  });
+
+  // Typed-hint channel: `target.hintEntries` (the raw, serializable snapshot
+  // from `core/hint-registry.ts`) is marshaled verbatim into `config.hints` —
+  // the ONLY channel that can carry hint DATA across the Turbo Module
+  // boundary, since `SensorOptions.hints` (a `HintRegistry` of live
+  // functions) cannot cross it at all.
+  it('marshals target.hintEntries into config.hints, applying the lines=0/radius=-1 "no override" sentinels', () => {
+    const getShapes = vi.fn().mockReturnValue(wireArrayFor([[0, 0, 10, 10, 2]]));
+    const sensor = createNativeSensor({
+      platform: 'ios',
+      getNativeModule: () => ({ getShapes, evictShapes: vi.fn() }),
+    });
+    sensor.measure(
+      {
+        reactTag: 77,
+        frameWidth: 375,
+        frameHeight: 800,
+        hintEntries: [
+          { nodeId: 'title', lines: 3, radius: 8 },
+          { nodeId: 'avatar', radius: 24 },
+          { nodeId: 'subtitle', lines: 2 },
+        ],
+      },
+      OPTIONS,
+    );
+    expect(getShapes).toHaveBeenCalledWith(
+      77,
+      OPTIONS.key,
+      expect.objectContaining({
+        hints: [
+          { nodeId: 'title', lines: 3, radius: 8 },
+          { nodeId: 'avatar', lines: 0, radius: 24 },
+          { nodeId: 'subtitle', lines: 2, radius: -1 },
+        ],
+      }),
+    );
+  });
+
+  it('defaults config.hints to an empty array when the target carries no hintEntries', () => {
+    const getShapes = vi.fn().mockReturnValue(wireArrayFor([[0, 0, 10, 10, 2]]));
+    const sensor = createNativeSensor({
+      platform: 'ios',
+      getNativeModule: () => ({ getShapes, evictShapes: vi.fn() }),
+    });
+    sensor.measure({ reactTag: 1, frameWidth: 375, frameHeight: 800 }, OPTIONS);
+    expect(getShapes).toHaveBeenCalledWith(1, OPTIONS.key, expect.objectContaining({ hints: [] }));
   });
 
   it('decodes the wire array into a ShapeSnapshot carrying the caller-supplied frame size', () => {

@@ -1459,6 +1459,320 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       mechanism. Deps: 5.5 (native `AutoSkeleton`), 5.9 (confirmed the
       registry channel is bridge-unreachable). Complexity: M.
 
+- [x] **G.6** (2026-08-28, branch `feat/typed-hint-channel`) Built the general typed-hint channel
+      (`radius`/`lines`) end to end across web, iOS and Android — the last item G.5/Phase 9 both
+      explicitly flagged not built, RED→GREEN, strict TDD throughout.
+      **Marshaling shape, a deliberate deviation from the natural
+      `{ [nodeId]: {...} }` map suggestion, justified**: `NativeAutoskeleton.ts`'s
+      `AutoskeletonGetShapesConfig.hints` is `ReadonlyArray<{ nodeId, lines, radius }>` — a plain
+      required-field array of records, not an index-signature map. Verified directly against a
+      REAL regenerated `AutoskeletonSpec.h`/`.java` (`npx react-native-builder-bob build --target
+      codegen`, inspected before writing any bridge code): codegen has no `Record<string,T>`
+      support at all, but DOES generate a clean `facebook::react::LazyVector<AutoskeletonHintEntry>`
+      for an array-of-object field. Required scalar fields (not optional) with sentinels —
+      `lines: 0` / `radius: -1` mean "no override", mirroring the wire schema's own existing `r=-1`
+      "rounded, unknown" convention — were chosen over nullable fields because a codegen'd
+      array-of-object with OPTIONAL members is a materially less-travelled, unverified path; this
+      repo had no existing precedent for one.
+      **Public API, a stated cross-platform split, not an oversight**: native ships
+      `<AutoSkeleton.Hint id="..." lines={n} radius={r}>` (`src/native/Hint.tsx`), matching
+      `<AutoSkeleton.Ignore>`'s exact ergonomics — `React.Children.only` + `cloneElement`, hookless
+      so it stays directly unit-testable like `Ignore`'s own suite, stamping BOTH `nativeID` and
+      `testID` (the SAME iOS/Android asymmetry `Ignore`'s G.5 fix already discovered and flagged
+      for "whoever eventually builds the typed-hint channel" — verified still true, applied here).
+      `id` is a required, developer-supplied string (not `useId()`): an auto-generated id would
+      force `Hint` to become a hook-based component, breaking the hookless testability `Ignore`
+      established. Web has **NO** `<AutoSkeleton.Hint>` component at all — see the NFR-6 paragraph
+      below for why, and why that is the correct fix, not a shortcut.
+      **Producer mechanism, native**: `core/hint-registry.ts` (new, pure TS, Vitest-tested under
+      `src/core/hint-registry.test.ts`) is a module-level `Map` written synchronously in `Hint`'s
+      own render body (no `useEffect` — safe by construction: React fully renders a subtree,
+      including every `Hint` in it, before any consumer reads the registry; native's own read
+      happens a full `requestAnimationFrame` after `onLayout`, far later). `AutoSkeleton.tsx`
+      (native) takes a snapshot via `snapshotHintEntries()` at the same instant it resolves
+      `reactTag`, threads it through a new `NativeSensorTarget.hintEntries` field into
+      `sensor.ts`'s bridge marshaling (`toWireHintEntries`), which applies the sentinel encoding.
+      **Producer mechanism, web — NOT the same as native, a stated deviation**: web sets
+      `data-autoskeleton-radius` directly as a PLAIN JSX prop on the consumer's own element
+      (`<div data-autoskeleton-radius={20}>`) — no wrapper, no registry, no `core/hint-registry.ts`
+      import. `dom-sensor.ts`'s `hintRadiusAttr()` reads it back with a single `getAttribute` +
+      `Number()` parse. **Why this diverged from the id+registry design the id+registry channel
+      already had wired for `isIgnored` (`HINT_ID_ATTRIBUTE`)**: reusing that registry design for
+      `radius`/`lines` was the FIRST implementation this session, and it pushed the web entry from
+      7950 B to 8390 B against NFR-6's 8192 B hard-failing gzip budget (only ~240 B of headroom
+      existed going in). Removing `<AutoSkeleton.Hint>` (web) entirely and switching to a plain
+      self-sufficient attribute — mirroring `IGNORE_ATTRIBUTE`'s own precedent, and matching this
+      session's own "move code out, don't raise the budget" instruction (Phase 8's SSR-exclusion
+      precedent) — brought it to 8185 B, 7 bytes under budget. Web's `lines` hint was NOT wired:
+      its only consultation point (`textLeafShapes`'s `rects.length === 0` fallback) was proven
+      genuinely unreachable with non-degenerate real-browser geometry (multiple DOM constructions
+      tried live in Playwright — `display:none`, zero-font-size, zero-width containers — none
+      produced an empty `getClientRects()` list without also producing a zero-size, already-
+      degenerate frame) under `isTextLeaf`'s current non-empty-content gate; wiring dead code would
+      have spent budget that does not exist. Flagged here as a real, pre-existing structural gap,
+      not silently dropped — `isTextLeaf` would need to treat a hinted-but-currently-empty element
+      as a text leaf to make it reachable, a separate, larger design decision this session's byte
+      budget did not leave room for.
+      **iOS radius — decided to OVERRIDE, not just fall back**: unlike Android (no public radius
+      API at all — ADR-2's R0 is the PRIMARY mechanism there, brief §9c), iOS always resolves
+      `layer.cornerRadius` directly and never needed a hint. A registered `radius` hint now
+      OVERRIDES the measured value anyway (`AutoskeletonSensor.swift`'s `leafShapes`,
+      `radiusSource: .hint` when it fires) — a deliberate choice so ONE typed prop behaves
+      consistently everywhere instead of silently doing nothing on iOS, stated explicitly in both
+      the production doc comment and this entry, not a silent asymmetry.
+      **Bridge wiring, iOS specifics**: `AutoskeletonGetShapesConfig`/`AutoskeletonModuleBridge`
+      (Swift) gained a `hints: [AutoskeletonHintEntry]` field/param; `Autoskeleton.mm` decodes
+      `config.hints()`'s `LazyVector` into an `NSArray<NSDictionary>` (a Swift struct cannot be
+      `@objc` and cross the ObjC++/Swift boundary directly, so a dictionary array is the crossing
+      shape `AutoskeletonHintEntry.decode(_:)` consumes) and passes it through
+      `getShapesWithReactTag:...hints:resolveView:`. `AutoskeletonMapHintRegistry` (both platforms)
+      replaces `AutoskeletonEmptyHintRegistry` as the production default passed into
+      `computeWireArray`/`AutoskeletonModule`'s sensor options.
+      **On-device proof, the brief's hard requirement — Android radius hint visibly changes the
+      painted corner**: extended `PaintGateScreen` (`examples/bare-rn/App.tsx`) with two NEW
+      80x80dp SQUARE regions (no `borderRadius` style at all) in the same row: `hintedCard`
+      (`#FFD700`) wrapped in `<AutoSkeleton.Hint radius={40}>`, `unhintedCard` (`#FF1493`) with no
+      hint. New instrumented test `hintedRadiusChangesThePaintedCornerOnAndroid`
+      (`PaintGateInstrumentedTest.kt`) samples a pixel 3px in from each region's top-left CORNER
+      (not center, deliberately — a near-circular r=40 clip on an 80dp box excludes a
+      corner-adjacent pixel; a square clip does not) and asserts they DIFFER: the unhinted corner
+      is inside the real shimmer ramp, the hinted corner is NOT — run TWICE against the live
+      `Medium_Phone_API_36.1` emulator (Metro up, `adb reverse tcp:8081 tcp:8081`), both times
+      5/5 `PaintGateInstrumentedTest` green including this one. `PaintGateListInstrumentedTest`
+      re-run 5/5 for regression, unaffected.
+      **RED taken and confirmed for the right reason** at every layer before the fix: `src/core/
+      hint-registry.test.ts`/`test/native/hint.test.ts` against nonexistent modules (`Cannot find
+      module`); `test/native/sensor.test.ts`'s new marshaling assertions against the pre-change
+      `config` shape (missing `hints` key); `AutoskeletonModuleTest.kt`'s new hint-decoding/
+      end-to-end tests against `AutoskeletonEmptyHintRegistry` (wrong radius: `0`/`measured`
+      instead of the hinted value); `AutoskeletonModuleBridgeTests.swift`'s new radius-override
+      tests against the un-overridden `layer.cornerRadius` (12, not the hinted 20); Playwright's
+      `dom-sensor.spec.ts` radius-hint tests against the pre-change hardcoded
+      `createEmptyHintRegistry()` (measured, not hint); the on-device
+      `hintedRadiusChangesThePaintedCornerOnAndroid` test against the pre-fix `AutoskeletonModule`
+      wiring (both corners in the ramp, assertion failed the "must differ" half).
+      **radiusSourceHistogram, mandatory per ADR-2**: new Playwright E2E test in
+      `test/web/auto-skeleton.spec.ts` ("typed-hint channel... reaches onMetrics.
+      radiusSourceHistogram") proves a real `<AutoSkeleton>` mount with a plain
+      `data-autoskeleton-radius` attribute on real content reports `radiusSourceHistogram.hint: 1,
+      measured: 0` through the REAL `onMetrics` callback, not a hand-built metrics object — the
+      full producer-to-telemetry pipeline, not just the sensor layer in isolation.
+      **Tests**: vitest 364/364 (was 344, +20: `src/core/hint-registry.test.ts` 9,
+      `test/native/hint.test.ts` 6, `test/native/sensor.test.ts` marshaling cases, existing
+      `test/native/wire-bridge.test.ts` config updates). Playwright 53/53 (was 49, +4: 3 web radius
+      hint cases in `dom-sensor.spec.ts`, 1 `radiusSourceHistogram` E2E case). `npm run typecheck`
+      clean (root + `tsconfig.tests.json`). **NFR-6: 8185 B / 8192 B gzip — razor-thin, 7 bytes of
+      headroom, flagged honestly, not glossed over: the next change that touches the default web
+      entry at all will need its own budget accounting from the start, not an afterthought.**
+      Android unit 114/114 (was 109, +5). iOS unit 78/78 (was 76, +2). Android on-device paint gate
+      5/5 (`PaintGateInstrumentedTest`, was 4, +1 — the radius-corner gate above), re-run twice,
+      stable; `PaintGateListInstrumentedTest` 5/5 unchanged, re-run once for regression.
+      **Not re-run this session** (no `ios/` PAINT-GATE-SPECIFIC source touched beyond the radius
+      override + bridge wiring already covered by the iOS UNIT suite above): the iOS on-device
+      `PaintGateUITests` visual gate (prior baseline 4/4 stands unverified-but-unmodified — the
+      brief's emphasis and this session's remaining budget went to Android, where a hinted radius
+      is the PRIMARY mechanism, not an override). Deps: G.5 (native Ignore's iOS/Android asymmetry
+      discovery, applied here), 5.9 (confirmed the exact bridge gap this closes), Phase 9 (final
+      regression baseline this built on). Complexity: L.
+
+- [x] **G.7** (2026-08-28, branch `feat/typed-hint-channel`, stacked on G.6) Two coupled changes,
+      maintainer decision: **NFR-6 revised a SECOND time (8 kB → 9 kB)**, and **web now has
+      `<AutoSkeleton.Hint>`**, closing the exact per-platform API asymmetry G.6 shipped as a
+      last resort.
+
+      **The decision, recorded so a third revision faces this precedent rather than a blank
+      page.** G.6's own honest framing — "8185 B / 8192 B gzip — razor-thin, 7 bytes of headroom"
+      — was the gate doing its job: it forced a real design decision (web ships with NO
+      `<AutoSkeleton.Hint>`, only a raw `data-autoskeleton-radius` attribute, while native gets
+      the full typed component) instead of letting the bundle grow silently. The maintainer's
+      judgment: that per-platform API divergence is a WORSE outcome than ~250 bytes, for a
+      library whose entire proposition is "one package, all platforms" — a user reading the docs
+      learned two mechanisms for one concept, and 7 bytes of headroom is not a passing gate, it is
+      one that fails on the very next commit. **NFR-6's full revision history is now recorded in
+      spec.md's NFR-6 row itself (the authoritative source)**: (1) 5 kB → 8 kB, 2026-08-27, first
+      real measurement replacing an unvalidated kickoff-prompt figure; (2) 8 kB → 9 kB,
+      2026-08-28, raised deliberately to buy back API symmetry, NOT because the gate was
+      inconvenient. **NFR-6 remains a HARD FAILING GATE** — a third revision needs to argue
+      against this precedent, not just raise the number again.
+
+      **Every location the budget number lived in, all updated together** (grepped for drift per
+      `budgets.json`'s own comment warning): `spec.md` NFR-6 row (authoritative) + Open Question 5
+      resolution note; `docs/product-brief.md` §12; `plan.md` §11 assumption 5; `docs/
+      image-pipeline.md`; `benchmarks/budgets.json`'s `webEntryGzipBytes` (8192 → 9216, source
+      comment records both revisions); `test/packaging/web-bundle.test.ts`'s `NFR6_BUDGET_BYTES`
+      (8 * 1024 → 9 * 1024); `benchmarks/check-budgets.test.ts` and `benchmarks/support/
+      budgets.test.ts`'s hard-coded expectations; code comments in `src/web/AutoSkeleton.tsx`,
+      `src/web/dom-sensor.ts`, `src/index.web.ts` that cited the 8192 B figure. `lib/**` `.d.ts`
+      copies were left alone — generated/gitignored, rebuilt from source.
+
+      **`<AutoSkeleton.Hint>` on web (`src/web/Hint.tsx`, new file)**: mirrors
+      `src/native/Hint.tsx`'s exact ergonomics — `React.Children.only` + `cloneElement`, hookless
+      (no `useId()`, so it stays directly callable/testable without a renderer, same reasoning as
+      native), `id` required and developer-supplied, layout-neutral (`cloneElement` on the
+      consumer's own element, no wrapper `<div>` — smaller AND avoids the extra DOM node web's
+      `Ignore` needs for an independent boolean marker). Deliberately NOT the id+registry
+      mechanism G.6 measured at 8390 B: no `core/hint-registry.ts` import at all. Stamps
+      `HINT_ID_ATTRIBUTE` (`data-autoskeleton-id`) always, and `HINT_RADIUS_ATTRIBUTE`
+      (`data-autoskeleton-radius`) when `radius` is given — the SAME self-sufficient attribute
+      channel `dom-sensor.ts` already read directly, unchanged. **A consumer who already set
+      `data-autoskeleton-radius` by hand keeps working unchanged** — `Hint` is sugar over the
+      existing channel, not a replacement for it (verified: `dom-sensor.spec.ts`'s pre-existing
+      raw-attribute radius-hint tests pass unmodified). Attached as `AutoSkeleton.Hint = Hint` in
+      `src/web/AutoSkeleton.tsx`, replacing the "NO `<AutoSkeleton.Hint>` on web" header comment
+      with the new rationale.
+
+      **`lines` is deliberately NOT a prop on web's `Hint`** — investigated, not assumed. Verified
+      by reading `dom-sensor.ts`'s `textLeafShapes` directly: `hints.linesFor()` is never called
+      anywhere in the traversal, and its one theoretical consultation point (the
+      `clientrects-empty` fallback, only reached when `Range.getClientRects()` returns zero rects)
+      requires geometry that is also degenerate under the current `isTextLeaf` gate — confirmed
+      unreachable for real non-degenerate content, matching G.6's own live Playwright probing
+      (`display:none`, zero-font-size, zero-width-overflow-hidden constructions, none produced
+      empty rects without also being degenerate). Adding a `lines` prop that stamps an attribute
+      nothing reads would be a silent no-op footgun — exactly the undocumented drift this revision
+      exists to avoid — so it was left out of the type signature entirely and documented explicitly
+      in three places: `src/web/Hint.tsx`'s header comment, `src/web/dom-sensor.ts`'s
+      `HINT_RADIUS_ATTRIBUTE` doc comment, and a new "Typed hints" section in
+      `docs/observability.md` with the full native-vs-web prop table. Making it reachable needs an
+      `isTextLeaf` redesign — real surgery, correctly out of scope here, tracked as an open item.
+
+      **iOS visual gate — G.6's own note was a misdiagnosis, corrected here.** G.6 reported the
+      on-device `PaintGateUITests` visual gate as "blocked by a pre-existing Xcode scheme
+      configuration issue". It was not blocked: G.6 ran `xcodebuild` against `-scheme
+      AutoskeletonBareRn`, which genuinely has no test bundles configured, but the visual gate
+      lives in a DIFFERENT scheme, `-scheme PaintGate-UITests`, which does. Run against the
+      correct scheme (maintainer-verified this session): **`PaintGateUITests` 4/4 TEST SUCCEEDED**,
+      and iOS unit **78/78** on a warm run. The prior "unverified-but-unmodified" framing in G.6
+      is retired — the gate is healthy and now positively re-confirmed, not merely un-broken.
+
+      **TDD Cycle Evidence.** `src/web/Hint.test.ts` (new, co-located per `src/web/css-renderer
+      .test.ts`'s precedent — `test/web/**` is Playwright-only, excluded from vitest's `include`):
+      RED against a nonexistent `./Hint` module (confirmed via `vitest run` failing at the global
+      setup's `bob build` type-check step, `TS2307: Cannot find module './Hint'`) → GREEN
+      (5/5) once `src/web/Hint.tsx` was written. `test/web/auto-skeleton.spec.ts` gained one new
+      Playwright case proving `<AutoSkeleton.Hint id radius>` reaches `onMetrics
+      .radiusSourceHistogram` as `"hint"` through the REAL component (not just the raw attribute)
+      — same isLoading true→false transition pattern the pre-existing raw-attribute test already
+      established.
+
+      **Full regression sweep, this session.** `npm run typecheck`: clean (root +
+      `tsconfig.tests.json`). `npx vitest run`: **372/372** (was 364, +8, verified by diffing the
+      full before/after test-name lists across a stashed baseline run, not estimated: 5
+      `src/web/Hint.test.ts`, 1 new `check-budgets.test.ts` boundary case at the new 9216
+      threshold, 2 auto-generated `src/lint/banned-css-properties.test.ts` per-file cases — that
+      suite iterates every `src/**/*.ts(x)` file, so adding `Hint.tsx` + `Hint.test.ts` added one
+      case each). `npx playwright test`: **54/54** (was 53, +1: the
+      `<AutoSkeleton.Hint>` component E2E case). **NFR-6: 8255 B / 9216 B gzip** — comfortably
+      under the revised budget (was 8185/8192 B before this session; the registry-free
+      `cloneElement`-only web `Hint` mechanism cost far less than the id+registry one G.6 measured
+      at 8390 B). Android/iOS untouched this session (no native source changed) — baselines stand:
+      Android unit 114/114, iOS unit 78/78 (re-verified on a warm run, see above), Android
+      on-device paint gate 5/5 + list gate 5/5, **iOS on-device `PaintGateUITests` visual gate
+      4/4** (re-verified against the correct scheme this session, see misdiagnosis correction
+      above). Deps: G.6 (built the channel this closes the API-symmetry gap on), Phase 9 (final
+      regression baseline G.6 built on). Complexity: M.
+
+- [x] **G.8** (2026-08-28, branch `feat/typed-hint-channel`, stacked on G.7) RISK-5 packaging
+      defect fix: `package.json`'s `dependencies` forced EVERY consumer to download the capture
+      CLI's own runtime needs (`@playwright/test`, `esbuild`), not just CLI users. Measured in a
+      clean `npm init` sandbox installing only the packed tarball, **before**: 231 packages /
+      194 MB, for a library whose web entry is 8255 B gzip — directly contradicting NFR-6's own
+      "no runtime dependencies beyond React on web" framing. Root cause: task 9.5 moved both from
+      `devDependencies` to real `dependencies` so the CLI could resolve them at runtime, but never
+      measured the resulting consumer footprint — `test/packaging/entries.test.ts` asserted the
+      tarball's entry files and import graph were clean but never asked what `dependencies` costs.
+      **Verified, not assumed, that both were genuine CLI-runtime needs** before choosing a fix:
+      `dist-cli/capture.js` (esbuild-bundled) still contained `require("@playwright/test")` (module
+      load time, `chromium.launch()`) and `require("esbuild")` (`cli/bundle.ts`'s
+      `bundleCaptureRuntime()`, called every `runCapture`). Neither could be naively demoted to a
+      `devDependency`.
+      **The fix is asymmetric, not "both become optional peers" — verified per-dependency, not
+      assumed:**
+      - `@playwright/test` → real `peerDependency`, `peerDependenciesMeta` optional. Driving a
+        real browser is an IRREDUCIBLE runtime need of the CLI — cannot be precomputed away.
+        `cli/capture.ts`'s `loadChromium()` loads it LAZILY (`require()` inside a function, never a
+        static top-level import) so a consumer who only imports `runCapture`'s types is never
+        forced to resolve it; missing it throws a NAMED, ACTIONABLE error (`npm install
+        @playwright/test && npx playwright install chromium`) instead of a raw `MODULE_NOT_FOUND`
+        (ADR-15's discipline — documented guidance over a silent/cryptic failure — applied to the
+        CLI). `cli/peer-dependency.ts`'s `isModuleNotFoundFor` distinguishes "this exact specifier
+        isn't installed" from a MODULE_NOT_FOUND thrown by one of ITS OWN transitive dependencies,
+        which propagates unchanged.
+      - `esbuild` → plain `devDependency`, not even an optional peer. Investigated WHY it was a
+        runtime need: `cli/bundle.ts` called `esbuild.build()` AT CAPTURE TIME to bundle
+        `cli/browser-runtime.ts` into the IIFE injected into the captured page — but that source
+        file is STATIC (verified: it only exposes `window.__autoskeletonCapture__.captureRoot`,
+        whose arguments arrive later via `page.evaluate`, never baked into the bundle), so
+        rebuilding it per capture run was a design choice, not a necessity.
+        `scripts/build-cli.mjs` now pre-bundles it ONCE, at `npm run build:cli` (publish) time,
+        into `dist-cli/browser-runtime.bundle.js`; `cli/bundle.ts`'s `loadOrBuildBundle` reads that
+        prebuilt asset when present — the path a published consumer ALWAYS takes, needing
+        `esbuild` not at all. The on-the-fly `esbuild.build()` call survives ONLY as a dev/test
+        fallback (reached when running `cli/capture.ts` directly from this repo's own `cli/`
+        source tree, where no prebuilt asset is ever written), loaded lazily with the same
+        actionable-error discipline.
+      **A real second-order packaging bug found and fixed by actually typechecking from a fresh
+      installed consumer, not assumed** (same discipline task 9.5 itself established): the dev
+      fallback's `esbuild` usage was first typed as `typeof import('esbuild')` — since
+      `exports['./cli'].types` points at raw TypeScript source (task 9.5), a CONSUMER's own `tsc`
+      type-checks `cli/bundle.ts` transitively the moment they `import ... from 'autoskeleton/cli'`,
+      so that type reference forced `esbuild`'s OWN package types to be resolvable at THAT
+      consumer's typecheck — reintroducing an unconditional footprint (a type-level one) for the
+      exact dependency this fix removes. Caught by a real `npx tsc --noEmit` against a real
+      `import { runCapture, type RunCaptureOptions } from 'autoskeleton/cli'` snippet from a fresh
+      installed package with `esbuild` deliberately absent (it failed: `Cannot find module
+      'esbuild' or its corresponding type declarations`). Fixed with a local, minimal structural
+      `MinimalEsbuildModule` interface (only the one `build()` shape actually used) instead of
+      importing `esbuild`'s real types; re-verified clean afterward.
+      **RISK-5 guard, taken RED first (strict TDD)**: `test/packaging/entries.test.ts` gained "no
+      runtime `dependencies` footprint" — asserts `package.json`'s `dependencies` contains no
+      unreviewed entries (a deliberate, reviewed `ALLOWED_RUNTIME_DEPENDENCIES` allowlist, empty
+      today) against the REAL `package.json`, not the tarball's copy (`npm pack` never rewrites
+      `dependencies`). RED confirmed against the pre-fix `package.json`, naming the exact offending
+      entries (`@playwright/test, esbuild`); GREEN after the fix. Chose the fast manifest assertion
+      as the ALWAYS-RUN automated guard over a full `npm install`-into-sandbox test in the suite —
+      the existing `test/packaging` global-setup already does a real `npm pack` + tar-extract once
+      per run (no `npm install`), and adding a full install would add real wall-clock cost (13 s
+      measured below) and network/cache variance to every `vitest run`; the stronger install-based
+      proof was run for REAL, twice, manually (see below), which is the actual defect-catching
+      power this guard exists for — a future regression is still caught by the fast manifest
+      assertion, deterministically, on every run.
+      **The full `npm install`-from-tarball proof this task exists to provide, run for real, twice
+      (before and after)**, mirroring exactly how the defect itself was found: `npm pack
+      --pack-destination`, installed into a throwaway `npm init`'d sandbox (never a workspace
+      symlink). **Before**: 231 packages, 194 MB, ~13 s install. **After**: 226 packages, 166 MB
+      (diff isolated with a directory-listing `comm`: exactly `@esbuild`, `@playwright`, `esbuild`,
+      `playwright`, `playwright-core` removed, nothing else changed — the remaining footprint is
+      `react`/`react-native` and their own transitive tree, pulled in by their PRE-EXISTING
+      non-optional `peerDependencies`, unrelated to and unchanged by this fix). From that SAME
+      after-sandbox: `node_modules/.bin/autoskeleton-capture` with no `@playwright/test` installed
+      printed the named actionable error (not `MODULE_NOT_FOUND`); `npm install @playwright/test &&
+      npx playwright install chromium` then a REAL capture (`require('autoskeleton/cli').runCapture`
+      against a tiny local HTTP fixture + real headless Chromium) produced a genuine
+      `manifest.json` + `bundle.css`, exit 0, with `esbuild` **verifiably absent from
+      `node_modules` the entire time** — proving the prebuilt-asset path, not just asserting it.
+      This is task 9.5's own installed-package proof, re-run and still green after this fix.
+      **TDD Cycle Evidence** (strict TDD, every new behavior RED-first): `cli/peer-dependency.ts`'s
+      `isModuleNotFoundFor` (5/5, RED confirmed by temporarily stubbing it to `return false` before
+      restoring the real implementation — 2 of 5 cases failed as expected, then GREEN); `cli/bundle.ts`'s
+      `loadOrBuildBundle` prebuilt-vs-fallback preference (2/2, same RED-then-restore discipline —
+      the prebuilt-preference case failed as expected against a stubbed always-fallback
+      implementation, then GREEN); the RISK-5 packaging guard itself (RED against the real pre-fix
+      `package.json`, GREEN after).
+      Full regression sweep, run for real: `npm run typecheck` clean; `npx vitest run` **380/380**
+      (was 372, +8: 5 `peer-dependency.test.ts` + 2 `bundle.test.ts` + 1 new RISK-5 packaging
+      assertion); `npx playwright test` **54/54** (unchanged); NFR-6 **8255 B / 9216 B gzip**
+      (unchanged — no web-entry source touched). Android/iOS untouched this session (no native
+      source changed) — baselines stand: Android unit 114/114, iOS unit 78/78, Android on-device
+      paint gate 5/5 + list gate 5/5, iOS `PaintGateUITests` visual gate 4/4.
+      **Tests**: `cli/peer-dependency.test.ts` (5/5), `cli/bundle.test.ts` (2/2),
+      `test/packaging/entries.test.ts`'s new RISK-5 block (1/1), PLUS the installed-tarball
+      before/after sandbox proof above, which is what actually exercises the packaging surface
+      these tests can only assert about indirectly (same discipline as task 9.5).
+      **Observability**: N/A, packaging fix. **Performance**: install-time only — see the
+      before/after sandbox numbers above; no runtime (bundle-size/CLI-latency) impact. Deps: 9.5
+      (introduced the defect), Phase 9 (final regression baseline this builds on). Complexity: M.
+
 ## Phase 8: SSR — build-time snapshot capture CLI + `@media`-bucketed CSS bundle
 
 > **Session status (2026-08-28, branch `feat/phase-8-ssr-capture`)**: 8.1–8.4 all complete and

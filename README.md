@@ -74,7 +74,9 @@ every subsequent loading state (including on a fresh mount, before
   warnings, and `onMetrics`.
 - **[SSR capture CLI](docs/ssr-capture-cli.md)** — build-time snapshot
   capture for `<AutoSkeleton.SSR>`, including the registry-maintenance cost
-  (RISK-4) named openly.
+  (RISK-4) named openly and the one extra install step it needs
+  (`@playwright/test`, an optional peer dependency — nothing else installs
+  it for you).
 
 ## TypeScript configuration
 

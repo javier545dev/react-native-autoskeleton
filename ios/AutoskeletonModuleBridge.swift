@@ -95,7 +95,7 @@ public final class AutoskeletonModuleBridge: NSObject {
     /// `AutoskeletonTraversalContext.reserveCapacity`).
     func computeWireArray(view: UIView, cacheKey: String, config: AutoskeletonGetShapesConfig) -> [Double]? {
         let options = AutoskeletonSensorOptions(
-            hints: AutoskeletonEmptyHintRegistry(),
+            hints: AutoskeletonMapHintRegistry(config.hints),
             budgetMs: config.budgetMs,
             maxShapes: config.maxShapes,
             defaultRadius: config.defaultRadius,
@@ -116,13 +116,15 @@ public final class AutoskeletonModuleBridge: NSObject {
         defaultRadius: Double,
         budgetMs: Double,
         maxShapes: Double,
-        collectDebugSidecars: Bool
+        collectDebugSidecars: Bool,
+        hints: [[String: Any]]
     ) -> [NSNumber] {
         let config = AutoskeletonGetShapesConfig(
             defaultRadius: CGFloat(defaultRadius),
             budgetMs: budgetMs,
             maxShapes: Int(maxShapes),
-            collectDebugSidecars: collectDebugSidecars
+            collectDebugSidecars: collectDebugSidecars,
+            hints: hints.compactMap(AutoskeletonHintEntry.decode)
         )
         guard let view = view, let wire = computeWireArray(view: view, cacheKey: cacheKey, config: config) else {
             return []
@@ -162,6 +164,7 @@ public final class AutoskeletonModuleBridge: NSObject {
         budgetMs: Double,
         maxShapes: Double,
         collectDebugSidecars: Bool,
+        hints: [[String: Any]],
         resolveView: @escaping (NSNumber) -> UIView?
     ) -> [NSNumber] {
         let result: [NSNumber]? = uiThreadDispatcher.runAndWait(timeoutMs: 200) { [weak self] in
@@ -172,7 +175,8 @@ public final class AutoskeletonModuleBridge: NSObject {
                 defaultRadius: defaultRadius,
                 budgetMs: budgetMs,
                 maxShapes: maxShapes,
-                collectDebugSidecars: collectDebugSidecars
+                collectDebugSidecars: collectDebugSidecars,
+                hints: hints
             )
         }
         return result ?? []

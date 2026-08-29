@@ -4,9 +4,14 @@
     "tasks.md 9.1 — every number here is reconciled against spec.md §3 (Non-Functional",
     "Requirements) and plan.md §6 ADR-1's serialization exit criterion, NOT transcribed from",
     "tasks.md's own prose. tasks.md 9.1's original text said 'web entry <5 kB gzip' — that figure",
-    "is RETIRED (spec.md NFR-6, revised 2026-08-27 by maintainer decision after the first real",
-    "measurement; see spec.md line 477). The value below is 8192 bytes, matching",
-    "test/packaging/web-bundle.test.ts's NFR6_BUDGET_BYTES exactly. Do not 'restore' 5 kB."
+    "is RETIRED. spec.md NFR-6 has been revised TWICE: 5 kB -> 8 kB (2026-08-27, first real",
+    "measurement showed 7566 B, the original 5 kB was never validated against an implementation);",
+    "then 8 kB -> 9 kB (2026-08-28, maintainer decision: the 8 kB gate forced a per-platform API",
+    "divergence — no <AutoSkeleton.Hint> on web — to stay at 8185/8192 B, and a worse API asymmetry",
+    "was traded for ~250 bytes of headroom to restore one API across platforms). See spec.md",
+    "line 477 for the full history. The value below is 9216 bytes, matching",
+    "test/packaging/web-bundle.test.ts's NFR6_BUDGET_BYTES exactly. Do not 'restore' 8192 without",
+    "re-arguing this precedent."
   ],
   "traversalP95Ms": {
     "value": 2,
@@ -29,8 +34,8 @@
     "source": "spec.md NFR-1: tier-1 sustains 60 fps / tier-2 sustains 120 Hz; fails if fps drops below target for more than 5% of sampled frames during the CI 50-cell scroll benchmark. Expressed here as the frame-drop-count tolerance for that same scroll."
   },
   "webEntryGzipBytes": {
-    "value": 8192,
-    "source": "spec.md NFR-6 (REVISED 2026-08-27 from 5 kB → 8 kB by maintainer decision, after the first real measurement showed 7566 B and the original 5 kB was never validated against an implementation). Identical to test/packaging/web-bundle.test.ts's NFR6_BUDGET_BYTES — both must be changed together or they will silently diverge."
+    "value": 9216,
+    "source": "spec.md NFR-6 — SECOND revision. (1) REVISED 2026-08-27 from 5 kB → 8 kB by maintainer decision, after the first real measurement showed 7566 B and the original 5 kB was never validated against an implementation. (2) REVISED 2026-08-28 from 8 kB → 9 kB by maintainer decision: the 8 kB gate did its job (forced a design decision instead of letting the bundle grow silently) but the decision it forced — a per-platform typed-hint API divergence, no `<AutoSkeleton.Hint>` on web — is a worse outcome than ~250 bytes for a library whose entire proposition is 'one package, all platforms'. Raised deliberately to buy back API symmetry, not because the gate was inconvenient; it remains a HARD FAILING GATE and a third revision needs to argue against this precedent. Identical to test/packaging/web-bundle.test.ts's NFR6_BUDGET_BYTES — both must be changed together or they will silently diverge."
   },
   "maxRegressionRatio": {
     "value": 1.5,

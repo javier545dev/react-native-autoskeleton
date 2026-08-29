@@ -11,15 +11,23 @@
 // test/web).
 
 import type { composeCacheKey } from '../../../src/core/cache-key';
-import type { AnimationKind, ShapeSnapshot } from '../../../src/core/types';
+import type { createHintRegistry } from '../../../src/core/hint-registry';
+import type { AnimationKind, RadiusSource, ShapeSnapshot } from '../../../src/core/types';
 import type { decodeWire, encodeWire } from '../../../src/core/wire';
 import type { createCssRenderer, createShimmerClock, buildShimmerStylesheet } from '../../../src/web/css-renderer';
-import type { createDomSensor, createEmptyHintRegistry, IGNORE_ATTRIBUTE } from '../../../src/web/dom-sensor';
+import type {
+  createDomSensor,
+  createEmptyHintRegistry,
+  HINT_ID_ATTRIBUTE,
+  IGNORE_ATTRIBUTE,
+} from '../../../src/web/dom-sensor';
 
 export interface AutoskeletonTestGlobal {
   createDomSensor?: typeof createDomSensor;
   createEmptyHintRegistry?: typeof createEmptyHintRegistry;
+  createHintRegistry?: typeof createHintRegistry;
   IGNORE_ATTRIBUTE?: typeof IGNORE_ATTRIBUTE;
+  HINT_ID_ATTRIBUTE?: typeof HINT_ID_ATTRIBUTE;
   composeCacheKey?: typeof composeCacheKey;
   decodeWire?: typeof decodeWire;
   encodeWire?: typeof encodeWire;
@@ -29,6 +37,7 @@ export interface AutoskeletonTestGlobal {
   buildShimmerStylesheet?: typeof buildShimmerStylesheet;
   AnimationKind?: AnimationKind;
   ShapeSnapshot?: ShapeSnapshot;
+  RADIUS_SOURCES?: readonly RadiusSource[];
 }
 
 declare global {
