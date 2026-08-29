@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "src/web/AutoSkeleton.tsx"
+        ],
+        "createdAt": "2026-08-28T23:56:53.982Z",
+        "reason": "Sole <img> occurrence in this file is inside a JSDoc comment documenting why onSuccessorPainted did not fire; no JSX img element exists. Verified three times as the comment migrated (L447 -> L471 -> L474)."
+      }
+    ]
+  }
+}
