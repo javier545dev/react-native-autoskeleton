@@ -16,9 +16,28 @@ import './App.css'
 // neither on screen.
 function HeroWithSkeleton() {
   const [isLoading, setIsLoading] = useState(true)
+  // The image drives the FIRST handoff on its own, which is the honest demo:
+  // a real consumer's skeleton disappears when the thing it stands in for
+  // arrives. On localhost with a warm cache that happens in the same tick, so
+  // the loading state is real but unobservable — hence the manual control
+  // below, which lets you put it back and actually look at it.
   return (
     <div className="hero">
-      <AutoSkeleton isLoading={isLoading} skeletonKey="vite-hero" expectsPlaceholder>
+      <button
+        type="button"
+        className="counter"
+        data-testid="toggle-loading"
+        style={{ marginBottom: 12 }}
+        onClick={() => setIsLoading((v) => !v)}
+      >
+        {isLoading ? 'Stop loading' : 'Replay loading'}
+      </button>
+      {/* `skeletonOnRefresh` is REQUIRED for the replay button to show anything.
+          Without it, REQ-PTR-1's stale-while-revalidate default suppresses the
+          skeleton on every load AFTER the first — deliberately, so a refresh
+          does not blank out content the reader is already looking at. Opting in
+          here is what makes the loading state observable on demand. */}
+      <AutoSkeleton isLoading={isLoading} skeletonKey="vite-hero" expectsPlaceholder skeletonOnRefresh>
         <img
           src={heroImg}
           className="base"
