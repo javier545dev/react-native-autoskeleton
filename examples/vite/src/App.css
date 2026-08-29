@@ -182,3 +182,26 @@
     border-right-color: var(--border);
   }
 }
+
+/* tasks.md 7.1: the Tailwind-v4-themed skeleton demo (`ThemedCardDemo` in
+   App.tsx). Only box geometry and an opaque fill live here — every COLOUR the
+   skeleton itself paints comes from the `@theme` tokens in
+   `src/tailwind-theme.css`, never from this file and never from a React prop. */
+#themed-demo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 32px 20px;
+}
+
+.themed-card {
+  width: 240px;
+  height: 140px;
+  background: var(--code-bg);
+}
+
+.themed-controls {
+  display: flex;
+  gap: 12px;
+}

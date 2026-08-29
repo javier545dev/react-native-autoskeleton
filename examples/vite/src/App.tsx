@@ -53,6 +53,67 @@ function HeroWithSkeleton() {
   )
 }
 
+// tasks.md 7.1 (spec REQ-THEME-1), app-level complement to
+// `test/web/theme-cascade.spec.ts`: that suite proves the Tailwind v4
+// COMPILER contract against a synthetic harness page; this section proves the
+// same contract inside a REAL consuming app, so `test/web/tailwind-app-theme.
+// spec.ts` can gate it against this app's own `vite build` output.
+//
+// The skeleton below receives NO colour prop of any kind and no
+// `SkeletonProvider` — every colour it paints comes from the Tailwind v4
+// `@theme` tokens in `src/tailwind-theme.css`, aliased onto the library's
+// `--skl-base`/`--skl-highlight` contract at `:root`, and re-aliased under
+// `.dark`. Toggling the theme button below only flips a class on `<html>`:
+// no React prop changes, no remount, no renderer method call.
+function ThemedCardDemo() {
+  const [isLoading, setIsLoading] = useState(true)
+  const [dark, setDark] = useState(false)
+
+  function toggleTheme() {
+    const next = !dark
+    setDark(next)
+    document.documentElement.classList.toggle('dark', next)
+  }
+
+  return (
+    <section id="themed-demo" data-testid="themed-demo">
+      <h2 className="text-lg font-medium">Tailwind v4 themed skeleton</h2>
+      <p>
+        Colours come from <code>@theme</code> tokens only — this{' '}
+        <code>&lt;AutoSkeleton&gt;</code> passes no colour prop.
+      </p>
+      <AutoSkeleton
+        isLoading={isLoading}
+        skeletonKey="vite-themed-card"
+        skeletonOnRefresh
+      >
+        {/* A single opaque block: the DOM sensor resolves it to exactly one
+            shape, so the overlay's clip-path is a plain rounded rect and the
+            gate has an unambiguous sampling target at its centre. */}
+        <div data-testid="themed-card" className="themed-card rounded-xl" />
+      </AutoSkeleton>
+      <div className="themed-controls">
+        <button
+          type="button"
+          className="counter"
+          data-testid="toggle-themed-loading"
+          onClick={() => setIsLoading((v) => !v)}
+        >
+          {isLoading ? 'Stop loading' : 'Replay loading'}
+        </button>
+        <button
+          type="button"
+          className="counter"
+          data-testid="toggle-theme"
+          onClick={toggleTheme}
+        >
+          {dark ? 'Light theme' : 'Dark theme'}
+        </button>
+      </div>
+    </section>
+  )
+}
+
 function App() {
   const [count, setCount] = useState(0)
 
@@ -74,6 +135,10 @@ function App() {
           Count is {count}
         </button>
       </section>
+
+      <div className="ticks"></div>
+
+      <ThemedCardDemo />
 
       <div className="ticks"></div>
 
