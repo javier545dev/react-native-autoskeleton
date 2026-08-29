@@ -53,7 +53,14 @@ export function checkAbsoluteBudgets(results: BenchmarkResults): readonly Absolu
       budget: budgets.serializationRatioOfTraversalBudget,
     });
   }
-  if (results.droppedFrames > budgets.droppedFramesPerScroll) {
+  // Adversarial-review fix: `results.droppedFrames` defaults to an
+  // unmeasured `0` placeholder (see `run.ts`), and `budgets.json`'s
+  // `droppedFramesPerScroll` is also `0` — comparing them unconditionally
+  // was STRUCTURALLY `0 > 0`, a gate that could never fail. Evaluate this
+  // metric ONLY when `droppedFramesMeasured` is true; `main()` below prints
+  // a visible SKIPPED marker when it is not, so an unmeasured run never
+  // silently reads as "budget satisfied".
+  if (results.droppedFramesMeasured && results.droppedFrames > budgets.droppedFramesPerScroll) {
     violations.push({
       metric: 'droppedFrames',
       measured: results.droppedFrames,
@@ -79,6 +86,14 @@ function main(): void {
     process.exit(2);
   }
   const results = JSON.parse(readFileSync(resultsPath, 'utf8')) as BenchmarkResults;
+  if (!results.droppedFramesMeasured) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `SKIPPED: droppedFrames was not measured in ${resultsPath} — never silently compared against ` +
+        'budget. See PaintGateListFrameDropsInstrumentedTest.kt for the authoritative on-device gate ' +
+        '(runs independently, in a separate CI job, and can independently fail).',
+    );
+  }
   const violations = checkAbsoluteBudgets(results);
   if (violations.length === 0) {
     // eslint-disable-next-line no-console

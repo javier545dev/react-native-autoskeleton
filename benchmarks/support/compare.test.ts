@@ -19,6 +19,7 @@ function results(overrides: Partial<BenchmarkResults> = {}): BenchmarkResults {
     cacheLookupP95Ms: 0.1,
     serializationP95Ms: 0.3,
     droppedFrames: 0,
+    droppedFramesMeasured: true,
     webEntryGzipBytes: 7950,
     ...overrides,
   };
