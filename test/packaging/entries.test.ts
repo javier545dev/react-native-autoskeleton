@@ -256,6 +256,47 @@ describe('RISK-5 packaging detector (entries.test.ts) — RED until 5.6', () => 
     });
   });
 
+  describe('no runtime `dependencies` footprint (RISK-5, orchestrator-found defect)', () => {
+    // Root cause: `@playwright/test` and `esbuild` — real runtime needs of
+    // ONLY the capture CLI (`cli/`), never of the library's own web/native
+    // runtime surface — sat in `package.json`'s top-level `dependencies`.
+    // `dependencies` is installed for EVERY consumer unconditionally, so a
+    // consumer who never touches the CLI was forced to download a full
+    // Chromium-driving test framework and a bundler: measured in a clean
+    // `npm init` sandbox installing only the packed tarball, 231 packages /
+    // 194 MB, for a library whose web entry is ~8 KB gzip. This directly
+    // contradicts NFR-6's own "no runtime dependencies beyond React on web"
+    // framing. `@playwright/test` is an irreducible runtime need of the CLI
+    // (it drives a real browser) and moved to an optional `peerDependency`
+    // instead — a CLI user installs it deliberately, everyone else installs
+    // nothing extra. `esbuild` was only ever used to bundle the injected
+    // browser runtime (`cli/browser-runtime.ts`) AT CAPTURE TIME — that
+    // bundle is static (never parameterized per capture, see
+    // `cli/browser-runtime.ts`), so it is now pre-built once at
+    // `npm run build:cli` time and shipped as `dist-cli/browser-runtime.bundle.js`;
+    // `esbuild` moved to a plain `devDependency` (build-time only, never
+    // required by a published consumer at all — not even as a peer).
+    //
+    // `ALLOWED_RUNTIME_DEPENDENCIES` is a deliberate, reviewed allowlist,
+    // not a blanket ban — a genuine future runtime need of the LIBRARY
+    // itself (not the CLI) would be added here explicitly, never silently.
+    const ALLOWED_RUNTIME_DEPENDENCIES: readonly string[] = [];
+
+    it('the published package.json declares no unreviewed runtime `dependencies`', () => {
+      const deps = Object.keys(packageJson.dependencies ?? {});
+      const unreviewed = deps.filter((d) => !ALLOWED_RUNTIME_DEPENDENCIES.includes(d));
+      expect(
+        unreviewed,
+        `package.json "dependencies" contains unreviewed runtime dependencies that every ` +
+          `consumer installs unconditionally: ${unreviewed.join(', ') || '(none)'}. Move each ` +
+          `to peerDependencies (if it is a genuine runtime need of a consumer-facing surface, ` +
+          `made optional when only some consumers need it) or devDependencies (if it is only a ` +
+          `build/test-time need of this repo), or add it to ALLOWED_RUNTIME_DEPENDENCIES above ` +
+          `with a reviewed justification.`
+      ).toEqual([]);
+    });
+  });
+
   describe('no test artifacts in the published tarball (packaging defect, orchestrator-found)', () => {
     // Root cause: package.json's `files` key excludes `**/__tests__`, but
     // Phase 1 co-located tests as `src/core/*.test.ts` (never in a

@@ -1672,6 +1672,107 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       above). Deps: G.6 (built the channel this closes the API-symmetry gap on), Phase 9 (final
       regression baseline G.6 built on). Complexity: M.
 
+- [x] **G.8** (2026-08-28, branch `feat/typed-hint-channel`, stacked on G.7) RISK-5 packaging
+      defect fix: `package.json`'s `dependencies` forced EVERY consumer to download the capture
+      CLI's own runtime needs (`@playwright/test`, `esbuild`), not just CLI users. Measured in a
+      clean `npm init` sandbox installing only the packed tarball, **before**: 231 packages /
+      194 MB, for a library whose web entry is 8255 B gzip — directly contradicting NFR-6's own
+      "no runtime dependencies beyond React on web" framing. Root cause: task 9.5 moved both from
+      `devDependencies` to real `dependencies` so the CLI could resolve them at runtime, but never
+      measured the resulting consumer footprint — `test/packaging/entries.test.ts` asserted the
+      tarball's entry files and import graph were clean but never asked what `dependencies` costs.
+      **Verified, not assumed, that both were genuine CLI-runtime needs** before choosing a fix:
+      `dist-cli/capture.js` (esbuild-bundled) still contained `require("@playwright/test")` (module
+      load time, `chromium.launch()`) and `require("esbuild")` (`cli/bundle.ts`'s
+      `bundleCaptureRuntime()`, called every `runCapture`). Neither could be naively demoted to a
+      `devDependency`.
+      **The fix is asymmetric, not "both become optional peers" — verified per-dependency, not
+      assumed:**
+      - `@playwright/test` → real `peerDependency`, `peerDependenciesMeta` optional. Driving a
+        real browser is an IRREDUCIBLE runtime need of the CLI — cannot be precomputed away.
+        `cli/capture.ts`'s `loadChromium()` loads it LAZILY (`require()` inside a function, never a
+        static top-level import) so a consumer who only imports `runCapture`'s types is never
+        forced to resolve it; missing it throws a NAMED, ACTIONABLE error (`npm install
+        @playwright/test && npx playwright install chromium`) instead of a raw `MODULE_NOT_FOUND`
+        (ADR-15's discipline — documented guidance over a silent/cryptic failure — applied to the
+        CLI). `cli/peer-dependency.ts`'s `isModuleNotFoundFor` distinguishes "this exact specifier
+        isn't installed" from a MODULE_NOT_FOUND thrown by one of ITS OWN transitive dependencies,
+        which propagates unchanged.
+      - `esbuild` → plain `devDependency`, not even an optional peer. Investigated WHY it was a
+        runtime need: `cli/bundle.ts` called `esbuild.build()` AT CAPTURE TIME to bundle
+        `cli/browser-runtime.ts` into the IIFE injected into the captured page — but that source
+        file is STATIC (verified: it only exposes `window.__autoskeletonCapture__.captureRoot`,
+        whose arguments arrive later via `page.evaluate`, never baked into the bundle), so
+        rebuilding it per capture run was a design choice, not a necessity.
+        `scripts/build-cli.mjs` now pre-bundles it ONCE, at `npm run build:cli` (publish) time,
+        into `dist-cli/browser-runtime.bundle.js`; `cli/bundle.ts`'s `loadOrBuildBundle` reads that
+        prebuilt asset when present — the path a published consumer ALWAYS takes, needing
+        `esbuild` not at all. The on-the-fly `esbuild.build()` call survives ONLY as a dev/test
+        fallback (reached when running `cli/capture.ts` directly from this repo's own `cli/`
+        source tree, where no prebuilt asset is ever written), loaded lazily with the same
+        actionable-error discipline.
+      **A real second-order packaging bug found and fixed by actually typechecking from a fresh
+      installed consumer, not assumed** (same discipline task 9.5 itself established): the dev
+      fallback's `esbuild` usage was first typed as `typeof import('esbuild')` — since
+      `exports['./cli'].types` points at raw TypeScript source (task 9.5), a CONSUMER's own `tsc`
+      type-checks `cli/bundle.ts` transitively the moment they `import ... from 'autoskeleton/cli'`,
+      so that type reference forced `esbuild`'s OWN package types to be resolvable at THAT
+      consumer's typecheck — reintroducing an unconditional footprint (a type-level one) for the
+      exact dependency this fix removes. Caught by a real `npx tsc --noEmit` against a real
+      `import { runCapture, type RunCaptureOptions } from 'autoskeleton/cli'` snippet from a fresh
+      installed package with `esbuild` deliberately absent (it failed: `Cannot find module
+      'esbuild' or its corresponding type declarations`). Fixed with a local, minimal structural
+      `MinimalEsbuildModule` interface (only the one `build()` shape actually used) instead of
+      importing `esbuild`'s real types; re-verified clean afterward.
+      **RISK-5 guard, taken RED first (strict TDD)**: `test/packaging/entries.test.ts` gained "no
+      runtime `dependencies` footprint" — asserts `package.json`'s `dependencies` contains no
+      unreviewed entries (a deliberate, reviewed `ALLOWED_RUNTIME_DEPENDENCIES` allowlist, empty
+      today) against the REAL `package.json`, not the tarball's copy (`npm pack` never rewrites
+      `dependencies`). RED confirmed against the pre-fix `package.json`, naming the exact offending
+      entries (`@playwright/test, esbuild`); GREEN after the fix. Chose the fast manifest assertion
+      as the ALWAYS-RUN automated guard over a full `npm install`-into-sandbox test in the suite —
+      the existing `test/packaging` global-setup already does a real `npm pack` + tar-extract once
+      per run (no `npm install`), and adding a full install would add real wall-clock cost (13 s
+      measured below) and network/cache variance to every `vitest run`; the stronger install-based
+      proof was run for REAL, twice, manually (see below), which is the actual defect-catching
+      power this guard exists for — a future regression is still caught by the fast manifest
+      assertion, deterministically, on every run.
+      **The full `npm install`-from-tarball proof this task exists to provide, run for real, twice
+      (before and after)**, mirroring exactly how the defect itself was found: `npm pack
+      --pack-destination`, installed into a throwaway `npm init`'d sandbox (never a workspace
+      symlink). **Before**: 231 packages, 194 MB, ~13 s install. **After**: 226 packages, 166 MB
+      (diff isolated with a directory-listing `comm`: exactly `@esbuild`, `@playwright`, `esbuild`,
+      `playwright`, `playwright-core` removed, nothing else changed — the remaining footprint is
+      `react`/`react-native` and their own transitive tree, pulled in by their PRE-EXISTING
+      non-optional `peerDependencies`, unrelated to and unchanged by this fix). From that SAME
+      after-sandbox: `node_modules/.bin/autoskeleton-capture` with no `@playwright/test` installed
+      printed the named actionable error (not `MODULE_NOT_FOUND`); `npm install @playwright/test &&
+      npx playwright install chromium` then a REAL capture (`require('autoskeleton/cli').runCapture`
+      against a tiny local HTTP fixture + real headless Chromium) produced a genuine
+      `manifest.json` + `bundle.css`, exit 0, with `esbuild` **verifiably absent from
+      `node_modules` the entire time** — proving the prebuilt-asset path, not just asserting it.
+      This is task 9.5's own installed-package proof, re-run and still green after this fix.
+      **TDD Cycle Evidence** (strict TDD, every new behavior RED-first): `cli/peer-dependency.ts`'s
+      `isModuleNotFoundFor` (5/5, RED confirmed by temporarily stubbing it to `return false` before
+      restoring the real implementation — 2 of 5 cases failed as expected, then GREEN); `cli/bundle.ts`'s
+      `loadOrBuildBundle` prebuilt-vs-fallback preference (2/2, same RED-then-restore discipline —
+      the prebuilt-preference case failed as expected against a stubbed always-fallback
+      implementation, then GREEN); the RISK-5 packaging guard itself (RED against the real pre-fix
+      `package.json`, GREEN after).
+      Full regression sweep, run for real: `npm run typecheck` clean; `npx vitest run` **380/380**
+      (was 372, +8: 5 `peer-dependency.test.ts` + 2 `bundle.test.ts` + 1 new RISK-5 packaging
+      assertion); `npx playwright test` **54/54** (unchanged); NFR-6 **8255 B / 9216 B gzip**
+      (unchanged — no web-entry source touched). Android/iOS untouched this session (no native
+      source changed) — baselines stand: Android unit 114/114, iOS unit 78/78, Android on-device
+      paint gate 5/5 + list gate 5/5, iOS `PaintGateUITests` visual gate 4/4.
+      **Tests**: `cli/peer-dependency.test.ts` (5/5), `cli/bundle.test.ts` (2/2),
+      `test/packaging/entries.test.ts`'s new RISK-5 block (1/1), PLUS the installed-tarball
+      before/after sandbox proof above, which is what actually exercises the packaging surface
+      these tests can only assert about indirectly (same discipline as task 9.5).
+      **Observability**: N/A, packaging fix. **Performance**: install-time only — see the
+      before/after sandbox numbers above; no runtime (bundle-size/CLI-latency) impact. Deps: 9.5
+      (introduced the defect), Phase 9 (final regression baseline this builds on). Complexity: M.
+
 ## Phase 8: SSR — build-time snapshot capture CLI + `@media`-bucketed CSS bundle
 
 > **Session status (2026-08-28, branch `feat/phase-8-ssr-capture`)**: 8.1–8.4 all complete and

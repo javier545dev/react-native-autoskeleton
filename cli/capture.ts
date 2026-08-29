@@ -22,7 +22,17 @@
 // (task 8.3). Performance: N/A — build-time tool, not part of any runtime NFR.
 
 import { mkdir, writeFile } from 'node:fs/promises';
-import { chromium } from '@playwright/test';
+// `@playwright/test` is an OPTIONAL peerDependency, not an eager
+// `dependencies` entry (RISK-5 packaging fix, orchestrator-found defect —
+// see `test/packaging/entries.test.ts`'s "no runtime `dependencies`
+// footprint" guard). A static top-level `import { chromium } from
+// '@playwright/test'` would `require()` it unconditionally at module load,
+// throwing a raw `MODULE_NOT_FOUND` for a consumer who only imports
+// `runCapture`'s types. `type import(...)` is erased at compile time
+// (zero runtime cost); the real value is loaded lazily by `loadChromium`
+// below, at the point of use, with an actionable error when the peer is
+// missing (ADR-15's discipline, applied to the CLI).
+import type { chromium as ChromiumLauncher } from '@playwright/test';
 import { WIDTH_BUCKETS } from '../src/core/cache-key';
 import { DEFAULT_BUDGET_MS, DEFAULT_MAX_SHAPES } from '../src/core/metrics';
 import type { Direction } from '../src/core/types';
@@ -30,7 +40,37 @@ import { bundleCaptureRuntime } from './bundle';
 import { buildSsrCssBundle } from './media-bundle';
 import type { AutoSkeletonSSRManifest, AutoSkeletonSSRManifestEntry, CaptureReport } from './manifest';
 import { SSR_MANIFEST_VERSION } from './manifest';
+import { isModuleNotFoundFor } from './peer-dependency';
 import { resolveCaptureUrl, resolveOutputFile } from './route-safety';
+
+const PLAYWRIGHT_PEER_SPECIFIER = '@playwright/test';
+
+/** Loads `@playwright/test`'s `chromium` launcher lazily (see the import
+ *  comment above). Throws a named, actionable error — naming exactly what
+ *  to install — instead of letting a raw `MODULE_NOT_FOUND` surface when
+ *  the optional peer is missing. Any OTHER failure (including a
+ *  `MODULE_NOT_FOUND` thrown by one of `@playwright/test`'s own missing
+ *  transitive dependencies) propagates unchanged. */
+function loadChromium(): typeof ChromiumLauncher {
+  let playwright: typeof import('@playwright/test');
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    playwright = require(PLAYWRIGHT_PEER_SPECIFIER) as typeof import('@playwright/test');
+  } catch (error) {
+    if (isModuleNotFoundFor(error, PLAYWRIGHT_PEER_SPECIFIER)) {
+      throw new Error(
+        'autoskeleton capture CLI requires the optional peer dependency ' +
+          `"${PLAYWRIGHT_PEER_SPECIFIER}" to drive headless Chromium, but it is not installed. ` +
+          'Install it and its browser binary:\n\n' +
+          `  npm install ${PLAYWRIGHT_PEER_SPECIFIER}\n` +
+          '  npx playwright install chromium\n\n' +
+          'See docs/ssr-capture-cli.md for details.',
+      );
+    }
+    throw error;
+  }
+  return playwright.chromium;
+}
 // Task 9.5 packaging fix: `browser-runtime.ts` is never IMPORTED at runtime
 // (`bundle.ts` resolves it as a raw file path for esbuild, at runtime, via
 // `__dirname` — see that file's header) but its `declare global { interface
@@ -131,6 +171,7 @@ export async function runCapture(options: RunCaptureOptions): Promise<RunCapture
   }
 
   const bundle = await bundleCaptureRuntime();
+  const chromium = loadChromium();
   const browser = await chromium.launch();
   const entries: AutoSkeletonSSRManifestEntry[] = [];
   const failedKeys = new Set<string>();
