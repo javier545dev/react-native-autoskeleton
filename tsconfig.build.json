@@ -1,5 +1,21 @@
 {
   "extends": "./tsconfig",
-  "include": ["src"],
+  // `cli` joins `src` here (adversarial review, batch 3) so
+  // react-native-builder-bob's `typescript` target emits REAL declarations for
+  // the `./cli` subpath export too. Before this, `exports['./cli'].types`
+  // pointed at `./cli/index.ts` — raw TypeScript source — and a consumer's own
+  // `tsc` compiled our whole `cli/` + `src/**` tree under THEIR options.
+  // `skipLibCheck` cannot rescue that: it skips `.d.ts` files, and a `.ts` file
+  // is not one.
+  //
+  // This reuses the EXISTING mechanism rather than adding a build step: bob
+  // runs `tsc --emitDeclarationOnly --project tsconfig.build.json`, and because
+  // `tsconfig.json` sets `rootDir: "."`, `cli/index.ts` lands at
+  // `lib/typescript/{commonjs,module}/cli/index.d.ts`, exactly mirroring how
+  // `src/index.ts` lands at `.../src/index.d.ts`. `scripts/build-cli.mjs` still
+  // owns the RUNTIME bundle (`dist-cli/`) — esbuild is needed there because
+  // `cli/`'s relative imports into `../src/**` would not survive bob's
+  // filename-preserving per-file transpile (see that script's header).
+  "include": ["src", "cli"],
   "exclude": ["lib", "**/__tests__/**"]
 }

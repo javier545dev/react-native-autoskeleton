@@ -106,9 +106,45 @@ see NFR-6's row for the full rationale.
 
 | Prop | Native | Web |
 |---|---|---|
-| `id` (required) | ✅ stamps `nativeID`/`testID` | ✅ stamps `data-autoskeleton-id` |
+| `id` (required) | ✅ stamps `nativeID`, and `testID` only when the child set none — see "Your `testID` is never overwritten" below | ✅ stamps `data-autoskeleton-id` |
 | `radius` | ✅ primary radius mechanism on Android (ADR-2 R0); overrides `layer.cornerRadius` on iOS | ✅ stamps `data-autoskeleton-radius`, the same self-sufficient attribute channel a consumer could already set by hand |
 | `lines` | ✅ consulted by both native sensors | ❌ **not a prop on web at all — a real, documented gap, not an oversight** |
+
+### Your `testID` is never overwritten (native)
+
+Wrapping an element in `<AutoSkeleton.Hint>` **keeps whatever `testID` that
+element already had.** `testID` is the handle Detox, Maestro, Appium and
+argent match on (Android: `R.id.react_test_id` plus the plain view tag; iOS:
+`accessibilityIdentifier`), so overwriting it would silently break e2e tests
+that already pass — a failure that gets misattributed, because nothing points
+back at us.
+
+The conflict is real rather than cosmetic: on iOS the sensor reads
+`accessibilityIdentifier`, which is *exactly* what `testID` sets, so our
+lookup key and your e2e handle are the same native property. When they
+differ, both are kept working:
+
+- your `testID` stays untouched;
+- `nativeID` still carries the hint `id` (Android's lookup channel; no e2e
+  tool reads `nativeID`);
+- the hint values are **also** registered under your `testID`, so the iOS
+  sensor still resolves them;
+- a dev-build (`__DEV__`) `console.warn` fires **once** per distinct
+  conflict, naming both ids and the element.
+
+Silence the warning by keying the hint off the value that is already there:
+
+```tsx
+<AutoSkeleton.Hint id="checkout-button" radius={12}>
+  <Pressable testID="checkout-button" />
+</AutoSkeleton.Hint>
+```
+
+**Known gap, not fixed here:** `<AutoSkeleton.Ignore>` still overwrites both
+`nativeID` and `testID`, because its channel value is a fixed sentinel both
+native sensors compare against literally — there is no alias to register, so
+preserving a consumer `testID` would make `Ignore` silently stop working on
+iOS. Closing it needs a native-side second marker channel.
 
 **Why web has no `lines` prop.** Web's DOM sensor (`src/web/dom-sensor.ts`)
 never calls `hints.linesFor()` anywhere in its traversal. Its one

@@ -2,7 +2,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { PACK_EXTRACT_DIR } from './global-setup';
-import { resolveExportsTarget, walkFiles, walkTransitiveSpecifiers } from './helpers/resolve';
+import {
+  collectTypesTargets,
+  resolveExportsTarget,
+  walkFiles,
+  walkTransitiveSpecifiers,
+} from './helpers/resolve';
 
 // Task 0.6 (tasks.md Phase 0) — the RISK-5 packaging detector, written FIRST per
 // plan.md's ordering (plan.md §9 RISK-5, ADR-3, ADR-14).
@@ -153,6 +158,74 @@ describe('RISK-5 packaging detector (entries.test.ts) — RED until 5.6', () => 
       });
     }
   );
+
+  describe('EVERY exports condition ships real declarations, never raw TypeScript', () => {
+    // Adversarial review, batch 3. `exports['./cli'].default.types` pointed at
+    // `./cli/index.ts` — RAW TypeScript SOURCE, not a built `.d.ts`. A consumer
+    // following `docs/ssr-capture-cli.md`'s documented Programmatic API therefore
+    // had OUR entire `cli/` + `src/core/` + `src/web/` source tree pulled into
+    // THEIR `tsc` program and compiled under THEIR compiler options, producing a
+    // wall of errors in files they never wrote.
+    //
+    // `skipLibCheck` does NOT rescue this, and that is the whole reason this
+    // guard is worth its weight: `skipLibCheck` skips type checking of
+    // DECLARATION (`.d.ts`) files only. A `.ts` file is not one, so it is fully
+    // checked no matter what the consumer sets.
+    //
+    // The existing per-condition assertions above only covered `exports['.']`,
+    // which is exactly how a hand-authored subpath slipped through. This walks
+    // the WHOLE `exports` tree instead, so any future subpath is covered the day
+    // it is added rather than the day someone remembers to extend a test.
+    const typesTargets = collectTypesTargets(packageJson.exports);
+
+    it('finds a types condition under every subpath that declares one (guards the walker itself)', () => {
+      expect(typesTargets.length).toBeGreaterThanOrEqual(6);
+      expect(typesTargets.map((t) => t.path)).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('./cli'),
+          expect.stringContaining('./uniwind'),
+          expect.stringContaining('./ssr'),
+        ]),
+      );
+    });
+
+    it.each(typesTargets.map((t) => [t.path, t.target] as const))(
+      'exports[%s] points at a built .d.ts, not raw TypeScript source',
+      (conditionPath, target) => {
+        expect(
+          target.endsWith('.d.ts'),
+          `exports[${conditionPath}] is "${target}". A consumer's tsc COMPILES a non-.d.ts ` +
+            `target under their own options — skipLibCheck skips .d.ts files only, so it cannot ` +
+            `rescue this. Point it at a built declaration file instead.`,
+        ).toBe(true);
+      },
+    );
+
+    it.each(typesTargets.map((t) => [t.path, t.target] as const))(
+      'exports[%s] resolves to a file that actually exists in the packed tarball',
+      (conditionPath, target) => {
+        const resolved = tarballPath(target.replace(/^\.\//, ''));
+        expect(
+          existsSync(resolved),
+          `exports[${conditionPath}] resolves to ${target}, which is not in the packed tarball`,
+        ).toBe(true);
+      },
+    );
+
+    it('ships no raw .ts source under the published cli/ directory either (the source that used to be the types target)', () => {
+      // The `types` field is the pointer; `files` is what actually ships. Both
+      // had to be wrong together for the defect to reach a consumer, so both
+      // are asserted — a `.d.ts` pointer with the raw sources still shipped
+      // alongside is a foot-gun waiting for the next hand-authored subpath.
+      const shipped = walkFiles(packageDir).filter(
+        (f) => f.startsWith(`cli${path.sep}`) && f.endsWith('.ts') && !f.endsWith('.d.ts'),
+      );
+      expect(
+        shipped,
+        `these raw TypeScript sources ship under cli/ in the tarball: ${shipped.join(', ')}`,
+      ).toEqual([]);
+    });
+  });
 
   describe('Metro resolution simulation for platform:"web" (brief §2)', () => {
     /**

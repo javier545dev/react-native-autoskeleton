@@ -100,3 +100,28 @@ export function walkTransitiveSpecifiers(entryFile: string): { allSpecifiers: Se
   }
   return { allSpecifiers, visitedFiles: visited.size };
 }
+
+/** Every `types` condition target anywhere in a package's `exports` map,
+ *  paired with the dotted path of the condition chain that reaches it (e.g.
+ *  `./cli > default > types`). Walks the WHOLE tree rather than resolving a
+ *  single condition set, because the defect class this guards against is "one
+ *  subpath's `types` was authored by hand and points somewhere invalid" — a
+ *  condition-by-condition resolution would only ever inspect the conditions
+ *  the test author happened to think of. */
+export function collectTypesTargets(
+  exportsField: unknown,
+  trail: string[] = [],
+): { readonly path: string; readonly target: string }[] {
+  if (!exportsField || typeof exportsField !== 'object') {
+    return [];
+  }
+  const found: { path: string; target: string }[] = [];
+  for (const [key, value] of Object.entries(exportsField as Record<string, unknown>)) {
+    if (key === 'types' && typeof value === 'string') {
+      found.push({ path: [...trail, key].join(' > '), target: value });
+      continue;
+    }
+    found.push(...collectTypesTargets(value, [...trail, key]));
+  }
+  return found;
+}

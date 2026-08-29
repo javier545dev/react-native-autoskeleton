@@ -2041,6 +2041,118 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       Deps: Phase 9 (built the CI benchmark suite this fixes), task 1.2 (built `wire.ts`'s version
       negotiation this fixes), Phase 5 (built `native/sensor.ts` this fixes). Complexity: M.
 
+- [x] **G.12** (2026-08-28, branch `feat/typed-hint-channel`, stacked on G.11) adversarial-review
+      **batch 3 — two defects whose victim is the CONSUMER'S OWN TEST SUITE, not ours**. Both were
+      taken RED-first (strict TDD); both REDs were captured against the real pre-fix code, not
+      asserted.
+      **Defect 1 — `<AutoSkeleton.Hint>` destroyed the consumer's `testID`** (`src/native/Hint.tsx`):
+      it stamped `testID: props.id` UNCONDITIONALLY via `cloneElement`, silently overwriting whatever
+      `testID` the wrapped element already carried. `testID` is THE element handle every e2e suite
+      matches on — verified from `node_modules/react-native`, not assumed: Android
+      `BaseViewManager.setTestId` -> `view.setTag(R.id.react_test_id, testId)` PLUS the plain
+      `view.setTag(testId)` its own comment keeps "to avoid end to end test regressions"; iOS
+      `RCTViewComponentView.mm` -> `self.accessibilityIdentifier`. A previously-green
+      Detox/Maestro/Appium/argent selector therefore stopped matching with nothing anywhere naming us.
+      **The conflict is real, not an ordering preference**, and that is why "just stop stamping
+      testID" would have traded one silent failure for another: `AutoskeletonSensor.kt` reads
+      `view.getTag(R.id.view_tag_native_id)` (JS `nativeID`), while `AutoskeletonSensor.swift:143,220`
+      reads `view.accessibilityIdentifier` (JS `testID`) — on iOS our lookup key and the consumer's
+      e2e handle are literally the same native property. **Fix**: the consumer's `testID` wins
+      untouched; `nativeID` still carries `props.id` (Android's channel, read by no e2e tool); and the
+      hint values are ADDITIONALLY registered under the consumer's `testID` as an alias node id, so
+      the iOS sensor still resolves the hint. Neither half is sacrificed. A `__DEV__` `console.warn`
+      fires ONCE per distinct `id`+`testID` pair (module-level latch + `__resetHintTestIdConflict
+      WarningsForTests`, the same convention as `nativeModuleAccessor.ts`'s once-per-process latch),
+      naming both ids and the element, built from a pure `formatHintTestIdConflictWarning` — the
+      existing `core/metrics.ts` / `web/ssr/uncaptured-warning.ts` format+emit split, not a new shape.
+      **RED (real, captured)**: `test/native/hint.test.ts` 5 failed / 12 passed against the unmodified
+      `Hint.tsx` — `expected 'row-title' to be 'checkout-button'` (the clobber itself), the missing
+      alias registration, and 3 warning cases at `expected "warn" to be called 1 times, but got 0
+      times`. The pre-existing test that ASSERTED the defect ("overwrites a nativeID/testID the child
+      already set") was rewritten, not deleted — it now asserts only the `nativeID` half, which is
+      still correct and deliberate. GREEN: 19/19 (was 6).
+      **Defect 2 — `exports['./cli'].types` shipped RAW TypeScript** (`package.json`,
+      `tsconfig.build.json`): it pointed at `./cli/index.ts`, so a consumer following
+      `docs/ssr-capture-cli.md`'s Programmatic API pulled **19 of our `.ts` files** (`cli/**` plus
+      their `src/core/**` / `src/web/**` imports) into THEIR `tsc` program, compiled under THEIR
+      options. `skipLibCheck` cannot rescue this — it skips DECLARATION files, and a `.ts` file is
+      not one. **Fix, reusing the EXISTING mechanism rather than adding a build step**:
+      `tsconfig.build.json`'s `include` gained `cli` alongside `src`, so react-native-builder-bob's
+      `typescript` target (which already runs `tsc --emitDeclarationOnly --project tsconfig.build.json`)
+      emits `lib/typescript/{commonjs,module}/cli/**.d.ts` exactly the way it already emits
+      `src/**.d.ts` — `rootDir: "."` makes the layout fall out for free, and bob's
+      `rewriteDeclarationImports` fixes the `../src/core/types.js` specifiers in the module variant.
+      `exports['./cli'].default.types` now points at `./lib/typescript/module/cli/index.d.ts`, the
+      same `lib/typescript/module/**` shape `.`/`./uniwind`/`./ssr` already use. `scripts/build-cli.mjs`
+      is untouched — it still owns the RUNTIME bundle, which esbuild must produce because `cli/`'s
+      relative imports into `../src/**` would not survive bob's filename-preserving transpile.
+      `files` also dropped `"cli"`: shipping the raw sources was what made the bad pointer resolvable
+      at all, and nothing at runtime reads them (`cli/bundle.ts` resolves its prebuilt asset from
+      `__dirname`, which is `dist-cli/` in a published install).
+      **Proven against a REAL consumer, twice, not just our own typecheck**: new committed fixture
+      `examples/vite/scripts/capture-skeletons.ts` + `examples/vite/tsconfig.cli-consumer.json` +
+      `npm run typecheck:cli-consumer`, against the example's tarball install
+      (`file:../../.tarball/autoskeleton-0.1.0.tgz`), never a workspace symlink. It extends
+      `tsconfig.app.json`, NOT `tsconfig.json` — documented in the file: the root config here is
+      solution-style (`"files": []` + `references`, no `include`), so `tsc --noEmit -p tsconfig.json`
+      compiles NOTHING and exits 0, a green result proving nothing. **BEFORE** (pre-fix tarball
+      packed and installed for real): **26 `error TS…` lines in files the consumer never wrote** —
+      `TS2591 Cannot find name 'node:fs/promises'`, `TS2304 Cannot find name '__dirname'`, `TS2503
+      Cannot find namespace 'NodeJS'`, and four `TS1294 … 'erasableSyntaxOnly'` inside
+      `src/core/wire.ts`. **AFTER**: 0 errors, exit 0; `--listFiles` shows **19 raw `.ts` -> 0**, with
+      7 real `.d.ts` resolved instead. The `examples/next` Node-typed config happened to compile our
+      raw sources CLEAN — recorded here deliberately: that is luck, not safety, and is why the fixture
+      lives in the vite example. **Negative probe** (declarations proven load-bearing, not `any`):
+      a deliberately wrong `RunCaptureOptions` was rejected with `TS2322 Type 'number' is not
+      assignable to type 'string'` (x2) and `TS2345`, then removed. **Runtime re-proof** from the same
+      installed copy: `require('autoskeleton/cli')` -> `runCapture: function`,
+      `buildSsrCssBundle: function`, `SSR_MANIFEST_VERSION: 1`.
+      **RISK-5 detector extended so this class cannot come back** (`test/packaging/entries.test.ts` +
+      `helpers/resolve.ts`'s new `collectTypesTargets`): it now walks the WHOLE `exports` tree — not
+      just `exports['.']`, which is exactly how a hand-authored subpath slipped past the existing
+      per-condition assertions — and asserts, for EVERY `types` condition anywhere in it, that the
+      target (a) ends in `.d.ts` and (b) exists in the packed tarball; plus that no raw `.ts` ships
+      under `cli/`. RED against the pre-fix `package.json`: 2 failures naming `exports[./cli > default
+      > types] is "./cli/index.ts"` and the 8 raw `cli/*.ts` files in the tarball. GREEN after.
+      **Full regression sweep, run for real**: `npm run typecheck` clean. `npx vitest run`
+      **428/428** (was 401, +27: +13 `test/native/hint.test.ts`, +14 `test/packaging/entries.test.ts`).
+      `npx playwright test` **62/62** unchanged. NFR-6 **8791 B / 9216 B gzip — byte-identical to the
+      G.11 baseline**, as expected: `src/native/Hint.tsx` is native-only and never enters the web
+      entry's graph. Android unit **117/117**, iOS unit **82/82** — both re-run for real AFTER
+      `npm run pack:tarball` + `npm install autoskeleton@file:…` into all four example apps, because
+      both schemes build from `examples/bare-rn/node_modules/autoskeleton`, not the repo root (the
+      documented tarball trap). No `ios/**` or `android/**` source changed this session.
+      **NOT DONE, deliberately, with reasons** — (1) `<AutoSkeleton.Ignore>` has the IDENTICAL
+      `testID` clobber, but its channel value is a fixed sentinel both native sensors compare against
+      literally (`AUTOSKELETON_IGNORE_MARKER_ID`), so there is no alias to register and preserving a
+      consumer `testID` would make `Ignore` silently stop working on iOS; closing it needs a
+      native-side second marker channel, which is real surgery and its own change. Flagged in
+      `Hint.tsx`'s header and `docs/observability.md`, not silently absorbed. (2) `nativeID` is still
+      overwritten with the hint `id`: no e2e tool reads it, and it is Android's lookup channel —
+      recorded so the maintainer can overrule the asymmetry deliberately rather than discover it.
+      (3) **`npm run bench` is structurally flaky and it is PRE-EXISTING, not caused here** —
+      measured: with every change in this session stashed (`git stash push -u`), a pristine
+      `npm run bench` failed **2 of 3** consecutive runs with `Command failed: npx bob build` /
+      `ENOENT … lib/typescript/module/src/index.web.d.ts.map` / `ENOENT … lib/module/native/
+      wire-bridge.js.map`. Cause: `benchmarks/web-benchmarks.bench.test.ts` and
+      `benchmarks/absolute.bench.test.ts` (via `run.ts` -> `measureWebEntryGzip`) BOTH call
+      `ensureLibBuilt()` -> `npx bob build` into the SAME `lib/`, and `vitest.bench.config.ts` has
+      neither a `globalSetup` nor `fileParallelism: false` — the exact structural race
+      `test/packaging/global-setup.ts`'s doc comment describes having already fixed for the main
+      suite, never applied to the bench config. It passes when the two workers happen not to overlap
+      (7/7 observed twice this session, including the run recorded above). Left unfixed on purpose:
+      it is outside this batch's scope and a race deserves its own RED-first treatment; the fix that
+      matches this repo's own precedent is a `globalSetup` in `vitest.bench.config.ts` that builds
+      `lib/` once, with `ensureLibBuilt()` skipping when that setup already ran.
+      **Tests**: `test/native/hint.test.ts` (19/19), `test/packaging/entries.test.ts` (41/41), PLUS
+      the real installed-tarball consumer typecheck (before 26 errors / after 0) and its negative
+      probe, which is what actually exercises the packaging surface a unit test can only assert about
+      indirectly. **Observability**: the new dev-build conflict warning is itself the observability
+      deliverable — this defect was silent by construction. **Performance**: N/A (no animation or
+      traversal path touched). Deps: G.5 (`Ignore`'s marker channel and the iOS asymmetry it
+      documented), the typed-hint channel this `Hint` belongs to, task 9.5/9.6 (CLI packaging).
+      Complexity: M.
+
 ## Phase 8: SSR — build-time snapshot capture CLI + `@media`-bucketed CSS bundle
 
 > **Session status (2026-08-28, branch `feat/phase-8-ssr-capture`)**: 8.1–8.4 all complete and

@@ -1,0 +1,18 @@
+{
+  // Extends `tsconfig.app.json`, NOT `tsconfig.json`. That is deliberate and is
+  // the whole reason this file exists as its own project: `tsconfig.json` here
+  // is a solution-style file (`"files": []` plus `references`) with no
+  // `include` of its own, so `tsc --noEmit -p tsconfig.json` compiles NOTHING
+  // and exits 0 — a green result that proves nothing at all. The consumer
+  // option set that actually type-checks app code is `tsconfig.app.json`'s.
+  //
+  // `include` is narrowed to `scripts` so this project typechecks only the
+  // `autoskeleton/cli` consumer fixture; `tsconfig.app.json` keeps owning
+  // `src`, and Vite's own build is untouched.
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.cli-consumer.tsbuildinfo"
+  },
+  "include": ["scripts"]
+}
