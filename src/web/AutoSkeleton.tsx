@@ -714,15 +714,61 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
     props.onSuccessorPainted,
   );
 
+  // REQ-A11Y-1 (G.16). `overlayVisible` is the single predicate for "the
+  // skeleton is actually painted over the real content RIGHT NOW", mirroring
+  // `native/AutoSkeleton.tsx`'s predicate of the same name (G.15) rather than
+  // inventing a third notion. Web has no `OverlayComponent` to resolve (the
+  // DOM renderer is imported statically), so the native
+  // `showSkeleton && snapshot !== null && OverlayComponent !== null` reduces
+  // to exactly these two terms — which are also, together, what actually
+  // decides whether any shape is painted: `useOverlayRenderer` above is fed
+  // `showSkeleton ? snapshot : null` and mounts nothing for a null snapshot.
+  //
+  // It replaces `phase === 'skeleton'`, which was wrong in THREE directions:
+  //  - `phase` is initialised to `'skeleton'` and only ever leaves it inside
+  //    the handoff cycle, which `shouldRunHandoffCycle` suppresses entirely on
+  //    the DEFAULT REQ-PTR-1 stale-while-revalidate path (and which never runs
+  //    at all for a component that simply mounts with `isLoading={false}`).
+  //    Content that is fully visible was therefore hidden from assistive
+  //    technology PERMANENTLY, with no skeleton on screen to explain why.
+  //  - during the `delay` window `showSkeleton` is still false, so nothing is
+  //    painted, yet `phase` is already `'skeleton'` — the same over-hiding for
+  //    the length of the delay.
+  //  - during the ADR-16 handoff tail `phase` is `'placeholder'` while the
+  //    overlay is still fully painted, so the content was EXPOSED underneath a
+  //    skeleton the sighted user is still looking at. That is precisely the
+  //    defect G.15 fixed on native, in the other direction.
+  const overlayVisible = showSkeleton && snapshot !== null;
+
   // ADR-16 reveal-before-hide: `props.children` is ALWAYS mounted (never
   // `display:none`) so it is already painted underneath the still-visible
   // overlay by the time the overlay is removed — there is no instant where
   // neither is on screen. Only the accessibility exposure of that content
-  // toggles, and only while genuinely loading (`phase === 'skeleton'`);
-  // during the handoff tail the content is already considered "shown".
+  // toggles, and only while the skeleton is genuinely covering it.
+  //
+  // `aria-hidden` goes on the inner content-only wrapper, NOT on the outer one
+  // (where native puts its equivalent props): web's `role="status"` element
+  // lives INSIDE the outer wrapper, whereas native's is a sibling of it, so
+  // hiding the outer wrapper here would also hide the one thing the user has
+  // left to read. `display: contents` does not weaken it — `aria-hidden` prunes
+  // the subtree before the box is collapsed (verified against Chromium's own
+  // accessibility tree: the descendant is reported `ignored` with
+  // `ariaHiddenSubtree`).
+  //
+  // `aria-busy` cannot ride along on that same element, because a
+  // `display: contents` box produces NO accessibility node for the property to
+  // live on (also verified). It goes on the outer wrapper, and it is driven by
+  // `props.isLoading || overlayVisible`, deliberately NOT by `overlayVisible`
+  // alone: on the suppressed stale-while-revalidate path the content stays
+  // readable ON PURPOSE, so the skeleton — the only cue a sighted user gets
+  // that the data is being refreshed — is absent by design. Dropping the busy
+  // signal there would leave a screen-reader user with stale content and no
+  // indication it is stale, which is the accessible equivalent of the very bug
+  // above. `|| overlayVisible` covers the handoff tail, where `isLoading` has
+  // already flipped false but the transition is not finished.
   return (
-    <div ref={wrapperRef} style={{ position: 'relative' }}>
-      <div aria-hidden={phase === 'skeleton' ? true : undefined} style={{ display: 'contents' }}>
+    <div ref={wrapperRef} aria-busy={props.isLoading || overlayVisible ? true : undefined} style={{ position: 'relative' }}>
+      <div aria-hidden={overlayVisible ? true : undefined} style={{ display: 'contents' }}>
         {props.children}
       </div>
       {showSkeleton && (

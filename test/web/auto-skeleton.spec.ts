@@ -97,6 +97,12 @@ test.describe('AutoSkeleton — REQ-A11Y-1/2', () => {
     });
     await settle(page);
 
+    // NOTE (G.16): `contentAriaHidden` below is an ATTRIBUTE check, and it was
+    // satisfied by the OLD, wrong `phase === 'skeleton'` predicate too — it
+    // only ever exercised the one state in which both predicates agree. The
+    // predicate itself is gated by `test/web/accessibility.spec.ts`, which
+    // reads Chromium's own accessibility tree across every state. This test
+    // stays as the cheap markup-level regression for the covered case.
     const info = await page.evaluate(() => {
       const overlayHost = document.querySelector('[role="status"]');
       const realContent = document.getElementById('real-content')!;
