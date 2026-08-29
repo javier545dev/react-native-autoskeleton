@@ -489,6 +489,7 @@ into something the developer can see and act on.
 | Architecture | New Architecture (Fabric) only — old architecture unsupportable, no code path exists on current RN | Brief §2 |
 | Expo | Supported via a development build / prebuild. Exact minimum Expo SDK: **to be pinned during implementation**. | Brief §1, §3b |
 | Expo Go | **NOT SUPPORTED.** A custom native module is absent from the Expo Go binary. This MUST surface as documented guidance pointing the user to a development build, never as a silent failure. | Brief §3b |
+| `react-native-web` / Expo Web | **SUPPORTED for the `<AutoSkeleton>` surface, at `~0.21.0`** (Expo SDK 57's own `bundledNativeModules` pin; `react-dom` `19.2.3`). Proven, not declared, by two gates that were each shown to fail: `test/web/react-native-web.spec.ts` (the DOM sensor against real RNW output) and `test/web/expo-web-export.spec.ts` (a real `expo export --platform web` of `examples/expo`, served and hit-tested in Chromium). **NOT supported on web: the virtualized-list API** (`SkeletonList`, `SkeletonListFooter`, `SkeletonCell`, `useSkeletonCell`, `templateTraversalCounter`) and **the `autoskeleton/uniwind` theming subpath**. See the EXPO WEB CONSTRAINTS block below — the list API's absence is a RUNTIME `undefined`, never a compile error. | Measured 2026-08-29, tasks.md G.17 |
 | Autolinking | Two distinct mechanisms must BOTH be satisfied by one published artifact: `@react-native-community/cli` (bare — reads `react-native.config.js`, `.podspec`, `build.gradle`) and `expo-modules-autolinking` (Expo). Whether `create-react-native-library`'s default output satisfies both must be VERIFIED in CI, not assumed. | Brief §3b |
 | Metro resolution | `preferNativePlatform: true` is set unconditionally by Metro core (`DependencyGraph.js:153`) and is overridden by NONE of `metro-config` 0.87.0, `@expo/metro-config` 57.0.11, or `@react-native/metro-config` 0.87.1. The explicit `index.web.ts`/`index.native.ts` pair plus `exports` conditions is therefore required and sufficient across bare RN, Expo, and Expo Web alike. | Brief §2 |
 | Nitro Modules (if selected by the bridge ADR) | `react-native-nitro-modules` >= 0.37; requires RN >= 0.75, Swift 5.9 / Xcode 16.4 (iOS), NDK 27+ / compileSdk 34+ (Android) | Brief §2 |
@@ -502,6 +503,58 @@ into something the developer can see and act on.
 | Build tooling | `create-react-native-library` + `react-native-builder-bob` 0.43.0. **S4 is RESOLVED: a distinct web entry IS supported, no custom tooling needed** — builder-bob's `compile.js` is a filename-preserving per-file Babel transpile (globs `**/*`, writes `path.join(output, path.relative(source, filepath))`), so `src/index.web.ts` emits `index.web.js` automatically. Two caveats: `exports` conditions must be hand-authored (`init.js:182-223` generates a default without them and PROMPTS TO REPLACE an existing one — decline it), and the NFR-6 gzip budget must be measured on a consumer bundle, never on builder-bob output. | Brief §14 |
 
 ---
+
+**EXPO WEB CONSTRAINTS (measured 2026-08-29, tasks.md G.17).** Every claim below was measured
+against `react-native-web@0.21.2` in a real browser or against a real `expo export --platform web`;
+none of it is inferred from reading RNW's source alone.
+
+1. **The DOM sensor is correct against react-native-web output.** This was the open question, because
+   RNW emits none of the semantic markup the sensor was written against: a `<View>` is a `<div>` with
+   `display:flex` and `background-color: rgba(0,0,0,0)`, and a top-level `<Text>` is ALSO a `<div>`
+   (a `<span>` when nested), not a text-bearing tag. `isTextLeaf` does not require a text-bearing
+   tag — it requires zero element children and non-empty `textContent`, which an RNW `<Text>` div
+   satisfies exactly — so text still resolves per line box via `Range.getClientRects()`, `<View>`
+   backgrounds and radii resolve from computed style, and `<TextInput>` renders a real `<input>`.
+
+2. **`<Image>` is the one real asymmetry with native.** RNW attaches `background-image` (and renders
+   its hidden accessibility `<img>`) only once `ImageLoader` reports LOADED. Until then the whole
+   `<Image>` is a transparent box that paints nothing, so there is nothing for the sensor to shape —
+   whereas a native sensor shapes the image view's leaf class regardless. Mitigation, verified by a
+   test: give the `<Image>` a `backgroundColor`, and its own box is shaped. A loaded `<Image>`
+   produces exactly ONE shape (the hidden `opacity: 0` `<img>` is skipped — see NFR-6 note below).
+
+3. **Mixed-content text loses the unwrapped run.** `<Text>Outer <Text>inner</Text></Text>` shapes only
+   `inner`. This is pre-existing and platform-agnostic (identical for `<p>Hello <b>x</b></p>`), not
+   an RNW regression; it follows from `isTextLeaf` requiring zero element children.
+
+4. **`autoskeleton/uniwind` is native-only.** It imports `src/native/AutoSkeleton`, so a web build
+   fails hard at bundle time with `Importing native-only module
+   "react-native/Libraries/Utilities/codegenNativeComponent" on web`. That is a loud, correct
+   failure, and `examples/expo` splits `App.web.tsx` from `App.tsx` because of it.
+
+5. **The virtualized-list API is a native-only NON-GOAL, and its absence on web is a RUNTIME
+   `undefined` — NOT a compile error.** Do not assume the type system catches this. Expo's own
+   `expo/tsconfig.base.json` sets `customConditions: ['react-native']` with no platform variation,
+   and TypeScript has no notion of a build platform, so one tsconfig typechecks a universal app for
+   iOS, Android AND web at once against the NATIVE declarations. Measured: `tsc --noEmit` reports
+   zero errors for `import { SkeletonList } from 'autoskeleton'`, `expo export --platform web`
+   bundles successfully, and the served page reports `SkeletonList=undefined` with no page error.
+   `test/packaging/entries.test.ts` now pins both halves of that asymmetry so it cannot drift.
+   **The supported pattern is a `.native.tsx` file split**, exactly as `examples/expo` does for its
+   own screen.
+
+   Why native-only rather than a web implementation or a graceful degradation: the API's contract is
+   virtualized-cell recycling amortisation (measure a template once, replay the cached snapshot into
+   every recycled cell, count the traversals that actually ran). Web has no recycling and no bridge,
+   so `useSkeletonCell`'s `cacheHit`/`isFallback`/`pendingTemplateNode`/`templateRef`/
+   `onTemplateLayout` and `templateTraversalCounter` have no web referent — a web export would have
+   to report values that are structurally meaningless. NFR-6 then decides the rest. Measured against
+   the 9216 B budget, from an 8862 B baseline (354 B headroom):
+   throwing native-only stubs **9097 B** (+235); a stub-level graceful degradation **9108 B** (+246);
+   a degradation with a truthful cache key and store read **9152 B** (+290, 64 B left). Every option
+   consumes 66–82 % of all remaining headroom — for reference, the last two real web fixes cost 24 B
+   and 12 B each — so shipping one is materially the same decision as revising the budget, which is
+   the maintainer's call and not taken here.
 
 **THEMING CONSTRAINT (measured 2026-08-28):** `uniwind` and `nativewind` CANNOT share one
 `node_modules` tree — they require conflicting Tailwind CSS majors (v4 and v3 respectively).
