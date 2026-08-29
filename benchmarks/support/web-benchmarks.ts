@@ -12,7 +12,6 @@
 // This module is intentionally NOT run by the fast default `npm test` suite
 // (it launches a browser and runs a Vite build) — see `vitest.bench.config.ts`.
 
-import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -20,6 +19,7 @@ import { gzipSync } from 'node:zlib';
 import { chromium } from '@playwright/test';
 import { bundleEntry } from '../../test/web/helpers/bundle';
 import { buildReferenceScreenHtml } from '../web/reference-screen';
+import { ensureLibBuilt } from './lib-build';
 import { percentile } from './percentiles';
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
@@ -92,10 +92,6 @@ export async function benchmarkWebSensorTraversal(
   }
 }
 
-function ensureLibBuilt(): void {
-  execFileSync('npx', ['bob', 'build'], { cwd: REPO_ROOT, stdio: 'pipe' });
-}
-
 export interface WebEntryGzipResult {
   readonly rawBytes: number;
   readonly gzipBytes: number;
@@ -105,7 +101,12 @@ export interface WebEntryGzipResult {
  *  gate: a real Vite library-mode build of `lib/module/index.web.js` with
  *  `react`/`react-dom` external, minified, gzip-measured. Kept as its own
  *  small re-measurement here (rather than importing that test file) so the
- *  benchmark suite has no dependency on Vitest's test lifecycle. */
+ *  benchmark suite has no dependency on Vitest's test lifecycle.
+ *
+ *  tasks.md G.13: under `npm run bench` the `ensureLibBuilt()` below is a
+ *  deliberate NO-OP — `benchmarks/global-setup.ts` already built `lib/` once,
+ *  before any worker existed. It still performs a real build under
+ *  `npm run bench:run`, which runs outside Vitest and has no globalSetup. */
 export async function measureWebEntryGzip(): Promise<WebEntryGzipResult> {
   ensureLibBuilt();
   const entry = path.join(REPO_ROOT, 'lib/module/index.web.js');

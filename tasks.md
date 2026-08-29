@@ -2144,6 +2144,11 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       it is outside this batch's scope and a race deserves its own RED-first treatment; the fix that
       matches this repo's own precedent is a `globalSetup` in `vitest.bench.config.ts` that builds
       `lib/` once, with `ensureLibBuilt()` skipping when that setup already ran.
+      **G.13 CORRECTION — the "7/7 observed twice" above is RETRACTED, do not trust it as a
+      baseline.** It was luck, not a measurement: re-measured on a pristine tree at 3aa3462, `npm run
+      bench` failed **0 pass / 5 fail**. Reporting any pass tally for a race as a green baseline is
+      itself the defect. G.13 implements exactly the fix predicted above and records the real
+      before/after tallies (0/5 -> 8/8).
       **Tests**: `test/native/hint.test.ts` (19/19), `test/packaging/entries.test.ts` (41/41), PLUS
       the real installed-tarball consumer typecheck (before 26 errors / after 0) and its negative
       probe, which is what actually exercises the packaging surface a unit test can only assert about
@@ -2152,6 +2157,104 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       traversal path touched). Deps: G.5 (`Ignore`'s marker channel and the iOS asymmetry it
       documented), the typed-hint channel this `Hint` belongs to, task 9.5/9.6 (CLI packaging).
       Complexity: M.
+
+- [x] **G.13** (2026-08-28, branch `feat/typed-hint-channel`, stacked on G.12) **Fixed the
+      structurally racy `npm run bench` gate — and retracted the "bench 7/7" numbers G.12 reported.**
+      Taken RED-first (strict TDD); both REDs captured against the real pre-fix code.
+      **The retraction first, because it is the important part.** G.12's own notes recorded
+      `npm run bench` as "7/7 observed twice this session" and treated that as a green baseline. That
+      was **not a measurement, it was luck**, and it should never have been reported as a baseline.
+      Re-measured this session on a pristine tree at 3aa3462 (nothing stashed, nothing modified):
+      **0 of 5** consecutive `npm run bench` runs passed. Every single failure was
+      `Error: Command failed: npx bob build`, and — this is the tell — the ENOENT victim file was
+      DIFFERENT every run: `lib/typescript/module/src/native/nativeModuleAccessor.d.ts.map` (run 1),
+      `lib/module/native/sensor.js.map` (run 2), `lib/typescript/commonjs/src/index.d.ts` +
+      `lib/commonjs/web/dom-sensor.js.map` (run 3), `lib/typescript/module/cli/capture.d.ts` (run 4),
+      `lib/commonjs/types/react-native-codegen-types.d.js.map` (run 5). A nondeterministic victim is
+      the signature of a concurrent write, not of a missing file. **A race is never proven green by
+      one passing run**; recording 7/7 as a baseline is precisely the error that let this gate look
+      trustworthy for two sessions while it was not.
+      **Cause (G.12's diagnosis, now verified rather than asserted)**:
+      `benchmarks/web-benchmarks.bench.test.ts` and `benchmarks/absolute.bench.test.ts` (the latter
+      via `run.ts` -> `measureWebEntryGzip`) both reached `ensureLibBuilt()` -> `npx bob build`,
+      writing into the SAME `lib/`, while `vitest.bench.config.ts` had neither a `globalSetup` nor
+      `fileParallelism: false`. Under default file parallelism the two files run in separate workers
+      and one observes the other's mid-rebuild cleanup. `absolute.bench.test.ts` alone calls
+      `runAllBenchmarks()` four times, so a single `npm run bench` invoked `bob build` **five** times
+      where one was needed.
+      **Fix — this repo's OWN precedent, not a new invention**: `test/packaging/global-setup.ts`
+      exists for the identical hazard in the packaging suite and its doc comment already describes
+      both the failure mode and the remedy; it was simply never applied to the bench config. New
+      `benchmarks/global-setup.ts` (wired as `globalSetup` in `vitest.bench.config.ts`) builds `lib/`
+      exactly ONCE, and new `benchmarks/support/lib-build.ts` becomes the single owner of writing to
+      `lib/` (`ensureLibBuilt` moved out of `web-benchmarks.ts`, which now only reads). **No retry,
+      no sleep, no lock file** — after the fix there is no second writer left to coordinate with.
+      **The skip is CONDITIONAL, deliberately.** `benchmarks/run.ts` (`npm run bench:run`) calls
+      `measureWebEntryGzip()` OUTSIDE Vitest entirely — a plain `tsx` process where no `globalSetup`
+      ever runs — so an unconditional skip would have shipped a CLI that measures a stale or absent
+      `lib/`. `shouldBuildLib()` gates on `AUTOSKELETON_BENCH_LIB_PREBUILT === '1'`, a marker the
+      globalSetup ACTUALLY sets (`stampLibPrebuilt`, stamped only AFTER a successful build, so a
+      failed build fails loudly in one process instead of promising workers a build nobody made).
+      Only the exact stamp counts; any other value still builds, so a stale variable degrades toward
+      "build anyway", never toward a missing `lib/`.
+      **Two mechanism assumptions were verified empirically, not assumed.** (1) `npx bob build`
+      empties its target output dirs but not `lib/` root: `touch lib/module/__probe__.txt` +
+      `touch lib/__probe_root__.txt`, rebuild — the `lib/module/` one is GONE, the `lib/` root one
+      SURVIVES. That is why the test marker lives in `lib/module/` (the same place
+      `test/packaging/global-setup.ts`'s own precedent probe used); a root-level marker would have
+      been a false green. (2) Vitest's `globalSetup` runs in a different global scope, so a
+      module-level flag there is invisible to workers — but `process.env` mutations DO reach them
+      because the setup completes before any worker spawns. Verified with a throwaway config against
+      BOTH `--pool=forks` (Vitest 3's default) and `--pool=threads`; probe scaffolding deleted after.
+      **RED (real, captured)**: (a) `benchmarks/web-benchmarks.bench.test.ts`'s new "does not rebuild
+      lib/ inside a Vitest worker" — a marker written into `lib/module/`, then `measureWebEntryGzip()`
+      called, then the marker asserted to survive — failed against the unmodified `web-benchmarks.ts`
+      with `expected false to be true`, direct behavioural proof that the worker rebuilt `lib/`. Run
+      as a single file so the failure came from the rebuild itself and not from the race. (b)
+      `benchmarks/support/lib-build.test.ts` (5 tests, fast default suite) failed to even load:
+      `Cannot find module './lib-build'`. GREEN after: 5/5, and the bench test passes.
+      **After tally — 8 of 8 consecutive `npm run bench` runs passed** (0/5 before). The structural
+      guarantee, stated so it is not just "the runs happened to pass": Vitest runs `globalSetup` in a
+      single process, exactly once per `vitest run`, strictly before ANY test file and therefore any
+      worker starts, independent of file parallelism or worker pool; after it stamps the environment,
+      `ensureLibBuilt()` is a no-op in every worker, so `lib/` has exactly one writer and zero
+      concurrent writers by construction. Bench wall-clock also dropped ~14.8s -> ~4.6s (five
+      `bob build` invocations collapsed to one), which is a side effect, not the goal.
+      **CLI path re-proven for real, not reasoned about**: `rm -rf lib` then `npm run bench:run` ->
+      exit 0 and `lib/module/index.web.js` present again (the conditional genuinely still builds);
+      stdout parses as strict JSON via `JSON.parse` (`webEntryGzipBytes: 8791`); `--out <file>` still
+      writes; and `npm run bench:check -- <file>` consumes it, exit 0, "All budgets satisfied" with
+      the `droppedFrames` SKIPPED line intact.
+      **Full regression sweep, run for real**: `npm run typecheck` clean. `npx vitest run` **433/433**
+      (was 428, +5 — the new `benchmarks/support/lib-build.test.ts`). `npx playwright test` **62/62**
+      unchanged. NFR-6 **8791 B / 9216 B gzip — byte-identical across all 8 after-runs** and identical
+      to the G.12 baseline (425 B of headroom untouched; no budget was raised). Android unit
+      **117/117** — note the first `./gradlew :autoskeleton:testDebugUnitTest` came back `UP-TO-DATE`,
+      a cached no-op that proves nothing, so it was re-run with `--rerun` (1 task executed) and the
+      count taken from the JUnit XML (14 files, 117 tests, 0 failures/errors, 0 skipped). iOS unit
+      **82/82** via `xcodebuild test -workspace AutoskeletonBareRn.xcworkspace -scheme
+      Autoskeleton-Unit-Tests`, "Executed 82 tests, with 0 failures". No `src/**`, `ios/**`,
+      `android/**` or `package.json` file changed — the benchmark harness is not published
+      (`benchmarks/` is not in `files`), so the packaged artifact is bit-identical.
+      **Not committed**: `npx vitest run` / `npx playwright test` regenerate
+      `examples/next/generated/autoskeleton-ssr/manifest.json` with fresh `capturedAt` timestamps
+      (verified diff is 4 changed lines, ALL of them `capturedAt`, geometry untouched). Pre-existing
+      churn from running the suites, unrelated to this change, so it was reverted rather than
+      smuggled into the commit.
+      **NOT DONE, deliberately**: `fileParallelism: false` was NOT added to `vitest.bench.config.ts`.
+      It would also stop the race, but by serialising the suite rather than by removing the second
+      writer — it hides the shared-mutable-`lib/` design instead of fixing it, and it would silently
+      re-break the moment a third bench file appeared. The globalSetup keeps parallelism AND removes
+      the hazard.
+      **Tests**: `benchmarks/support/lib-build.test.ts` (5/5, fast suite — pins the `bench:run`
+      asymmetry and that the marker's writer and reader agree), `benchmarks/web-benchmarks.bench.test.ts`
+      (4/4, +1 — the behavioural single-build gate that fails loudly if a worker ever writes `lib/`
+      again). **Observability**: the new bench test IS the observability deliverable — this defect
+      was invisible precisely because it presented as an unrelated-looking `bob build` error.
+      **Performance**: N/A (no animation or traversal path touched; bench wall-clock improvement is
+      incidental). Deps: Phase 9 (built the CI benchmark suite this fixes), G.12 (diagnosed this race
+      and deliberately left it for its own RED-first change — this is that change),
+      `test/packaging/global-setup.ts` (the precedent followed). Complexity: S.
 
 ## Phase 8: SSR — build-time snapshot capture CLI + `@media`-bucketed CSS bundle
 
