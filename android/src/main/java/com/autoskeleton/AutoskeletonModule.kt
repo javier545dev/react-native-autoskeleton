@@ -10,6 +10,8 @@ import com.facebook.react.bridge.WritableArray
 import com.facebook.react.uimanager.UIManagerHelper
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /** Plain-Kotlin mirror of one `AutoskeletonHintEntry`
  *  (`src/native/NativeAutoskeleton.ts`) — the typed-hint channel's marshaled
@@ -116,30 +118,60 @@ class AutoskeletonSystemViewResolver(private val reactContext: ReactApplicationC
  *  Modules use (e.g. `react-native-view-shot`) — with a bounded timeout so
  *  a stuck UI thread degrades to `null` (same "unresolved tag" contract
  *  `Sensor.measure` already documents) instead of hanging the JS thread
- *  forever. */
+ *  forever.
+ *
+ *  Adversarial-review defect (2026-08-28), THREE distinct problems fixed
+ *  together:
+ *  1. `latch.await(...)`'s `Boolean` return value (completed vs timed out)
+ *     used to be discarded entirely — the caller had no way to distinguish
+ *     the two outcomes. Now used directly to decide the return value.
+ *  2. The Runnable posted to `UiThreadUtil.runOnUiThread` is NEVER
+ *     cancellable once posted (Android exposes no handle for it) — it
+ *     keeps running after the caller times out and moves on. `block` used
+ *     to run to completion regardless, including its own shared-state
+ *     writes (`AutoskeletonModule.computeWireArray`'s `shapeCache.set`),
+ *     writing stale geometry into the shared cache for a `cacheKey` that,
+ *     on a recycled list, may by then belong to a different row. Since the
+ *     Runnable itself cannot be forcibly cancelled, `block` now receives a
+ *     cooperative `isCancelled: () -> Boolean` check it MUST consult before
+ *     any observable side effect — see `computeWireArray`'s own guard.
+ *  3. `result` was a plain, non-`@Volatile` `var` written on the UI thread
+ *     and read on the calling thread with NO visibility guarantee under the
+ *     Java Memory Model — a genuine data race, independent of the timeout
+ *     bug. Replaced with `AtomicReference`/`AtomicBoolean`, which establish
+ *     the required happens-before relationship for both the result and the
+ *     cancellation flag. */
 interface AutoskeletonUiThreadDispatcher {
   /** Runs `block` guaranteed on the UI thread and returns its result,
-   *  blocking the caller. Returns `null` if `block` itself returns `null`
-   *  OR if the UI thread never became available within `timeoutMs`. */
-  fun <T> runAndWait(timeoutMs: Long, block: () -> T): T?
+   *  blocking the caller. `block` receives an `isCancelled` check it can
+   *  consult (typically right before any shared-state write) to detect
+   *  that its caller already gave up. Returns `null` if `block` itself
+   *  returns `null` OR if the UI thread never became available within
+   *  `timeoutMs`. */
+  fun <T> runAndWait(timeoutMs: Long, block: (isCancelled: () -> Boolean) -> T): T?
 }
 
 object AutoskeletonSystemUiThreadDispatcher : AutoskeletonUiThreadDispatcher {
-  override fun <T> runAndWait(timeoutMs: Long, block: () -> T): T? {
+  override fun <T> runAndWait(timeoutMs: Long, block: (isCancelled: () -> Boolean) -> T): T? {
     if (UiThreadUtil.isOnUiThread()) {
-      return block()
+      return block { false }
     }
-    var result: T? = null
+    val result = AtomicReference<T?>(null)
+    val timedOut = AtomicBoolean(false)
     val latch = CountDownLatch(1)
     UiThreadUtil.runOnUiThread {
       try {
-        result = block()
+        result.set(block { timedOut.get() })
       } finally {
         latch.countDown()
       }
     }
-    latch.await(timeoutMs, TimeUnit.MILLISECONDS)
-    return result
+    val completedInTime = latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+    if (!completedInTime) {
+      timedOut.set(true)
+      return null
+    }
+    return result.get()
   }
 }
 
@@ -216,9 +248,20 @@ class AutoskeletonModule(
    *  no-op fast path when already on the UI thread (the common case in
    *  `AutoskeletonModuleTest`, which never dispatches), and bounds the
    *  wait so a stuck UI thread degrades to `null` instead of hanging the
-   *  JS thread forever. */
+   *  JS thread forever.
+   *
+   *  Adversarial-review defect (2026-08-28): the `shapeCache.set` write
+   *  below is the USER-VISIBLE half of the timeout defect — a timed-out
+   *  caller already moved on, but the posted UI-thread Runnable itself
+   *  cannot be cancelled (Android exposes no handle for that), so it used
+   *  to keep running and write stale geometry into the SHARED cache under
+   *  `cacheKey`, which on a recycled list may by then belong to a
+   *  completely different row. The traversal itself still runs (it cannot
+   *  be stopped mid-flight either), but the observable side effect — the
+   *  cache write — is now guarded by `isCancelled()`, checked as late as
+   *  possible, right before the mutation. */
   internal fun computeWireArray(reactTag: Double, cacheKey: String, config: AutoskeletonGetShapesConfig): DoubleArray? =
-    uiThreadDispatcher.runAndWait(UI_THREAD_DISPATCH_TIMEOUT_MS) {
+    uiThreadDispatcher.runAndWait(UI_THREAD_DISPATCH_TIMEOUT_MS) { isCancelled ->
       val view = viewResolver.resolve(reactTag.toInt()) ?: return@runAndWait null
       val density = view.resources?.displayMetrics?.density?.takeIf { it > 0f } ?: 1f
 
@@ -235,6 +278,12 @@ class AutoskeletonModule(
       ) ?: return@runAndWait null
 
       val wire = encodeWireArray(measured.shapes, density)
+      if (isCancelled()) {
+        // The caller already gave up waiting -- do not retroactively
+        // poison the shared cache with geometry nobody will read via this
+        // call, and which may now belong to a different recycled row.
+        return@runAndWait null
+      }
       shapeCache.set(cacheKey, wire)
       wire
     }

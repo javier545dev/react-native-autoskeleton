@@ -2,6 +2,7 @@ package com.autoskeleton
 
 import android.content.Context
 import android.graphics.Color
+import android.os.Looper
 import android.view.View
 import android.widget.FrameLayout
 import com.facebook.react.bridge.Callback
@@ -27,6 +28,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 
 /**
  * Task 5.1 (tasks.md Phase 5) / plan.md ADR-1: `AutoskeletonModule`'s
@@ -379,6 +381,56 @@ class AutoskeletonModuleTest {
         )!!
 
         assertEquals(0.0, unhinted[5], 0.0001) // no background radius set, no matching hint -> R1 MEASURED 0
+    }
+
+    // MARK: - Adversarial-review defect (2026-08-28): a timed-out `getShapes`
+    // used to abandon its UI-thread work rather than cancel it, and that
+    // abandoned work went on to write into the SHARED native shape cache
+    // after the caller had already given up -- on a recycled list, that
+    // `cacheKey` may by then belong to a different row, so the cache could
+    // hold shapes measured for one row keyed to another. No existing test
+    // exercised the timeout path at all (every test above resolves inline,
+    // same-thread, well within the 200ms `UI_THREAD_DISPATCH_TIMEOUT_MS`).
+
+    @Test
+    fun computeWireArrayDoesNotPoisonTheSharedCacheWhenTheCallerTimesOutBeforeTheUiThreadRuns() {
+        AutoskeletonNativeShapeCache.clear()
+        val fixture = SyntheticHierarchyBuilder.loadFixture("nested-offsets")
+        val root = SyntheticHierarchyBuilder.build(fixture)
+        val module = moduleFor(root) // default uiThreadDispatcher = AutoskeletonSystemUiThreadDispatcher
+
+        var result: DoubleArray? = doubleArrayOf(-1.0) // sentinel, must be overwritten by the call below
+        val thread = Thread {
+            result = module.computeWireArray(42.0, "recycled-cache-key", defaultConfig)
+        }
+        thread.start()
+        // Robolectric's main looper is PAUSED by default and nothing idles
+        // it concurrently, so the 200ms `UI_THREAD_DISPATCH_TIMEOUT_MS`
+        // genuinely elapses -- the exact "UI thread busy but alive" case
+        // the reviewer described, not a crash or a permanently stuck
+        // thread.
+        thread.join(2000)
+
+        assertNull("the caller must give up and return null on timeout", result)
+        assertNull(
+            "the abandoned UI-thread computation must not have run yet (queue still paused)",
+            AutoskeletonNativeShapeCache.get("recycled-cache-key"),
+        )
+
+        // Now let the ABANDONED work actually run -- mirrors the real-device
+        // timing this defect describes: a busy-but-alive UI thread
+        // eventually drains its queue, well after the JS-thread caller
+        // already moved on.
+        shadowOf(Looper.getMainLooper()).idle()
+
+        // THE ACTUAL DEFECT: pre-fix, `computeWireArray`'s UI-thread block
+        // never checked whether the caller already gave up, so it wrote
+        // into the shared cache regardless -- even though `reactTag` 42 may
+        // by then belong to a completely different recycled row.
+        assertNull(
+            "abandoned work must not retroactively poison the shared cache after the caller already timed out",
+            AutoskeletonNativeShapeCache.get("recycled-cache-key"),
+        )
     }
 
     @Test

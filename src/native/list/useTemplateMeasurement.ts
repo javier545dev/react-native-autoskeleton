@@ -25,6 +25,20 @@
 // `SkeletonList.tsx`'s own doc comments): the fallback keeps rendering
 // forever, correctly (never a crash, never a stale/wrong shape), just never
 // resolves to a measured one for that itemType.
+//
+// Adversarial-review defect (2026-08-28): claiming an itemType
+// (`registry.markScheduled`, synchronously in the render body above) and
+// resolving that claim (`registry.markMeasured`/`markFailed`, only inside
+// the deferred effect below) are separated by an arbitrary amount of real
+// time — `scheduleAfterInteractions` plus up to `MAX_LAYOUT_WAIT_FRAMES`
+// RAF retries. A FlashList cell recycled to a DIFFERENT itemType while its
+// own claim is still unresolved (or a genuine unmount) runs this effect's
+// cleanup before the claim ever resolves. The cleanup below MUST release
+// that claim (`registry.releaseClaim`) so the next bind for that itemType
+// can retry — see `TemplateRegistry.releaseClaim`'s own doc comment
+// (`src/core/list.ts`) for the full defect writeup and why a `'failed'`
+// give-up is tracked as a state DISTINCT from `'measured'`, with a bounded
+// retry ceiling (`MAX_MEASUREMENT_ATTEMPTS`).
 
 import { useEffect, useRef, useState, type ComponentRef, type ReactNode, type RefObject } from 'react';
 import { findNodeHandle, View, type LayoutChangeEvent } from 'react-native';
@@ -67,7 +81,7 @@ export function useTemplateMeasurement(
 ): UseTemplateMeasurementResult {
   const { itemType, cacheKey, cacheHit, renderTemplate, registry, store, budgetMs, maxShapes, defaultRadius } =
     options;
-  const decision = decideCellBind(cacheHit, registry.stateFor(itemType));
+  const decision = decideCellBind(cacheHit, registry.stateFor(itemType), registry.attemptsFor(itemType));
   const shouldSchedule = decision.shouldScheduleTemplateMeasurement && renderTemplate !== undefined;
 
   // REAL, on-device-found race (Phase 6 apply session): when N sibling list
@@ -122,9 +136,26 @@ export function useTemplateMeasurement(
     }
     let cancelled = false;
     let frameHandle: number | null = null;
+    // Set the instant EITHER `finish()` variant below runs — lets cleanup
+    // (below) tell "this claim resolved, one way or another" apart from
+    // "this claim was abandoned mid-flight" (adversarial-review defect,
+    // 2026-08-28: see `TemplateRegistry.releaseClaim`'s doc comment).
+    let settled = false;
 
-    const finish = (): void => {
+    const finishMeasured = (): void => {
+      settled = true;
       registry.markMeasured(itemType);
+      setMounted(false);
+    };
+
+    // Distinct from `finishMeasured`: a "gave up" outcome must never
+    // masquerade as a successful measurement (adversarial-review defect,
+    // 2026-08-28 — see `TemplateRegistry.markFailed`'s doc comment). No
+    // cache entry is written either way; the fallback keeps rendering until
+    // a bounded retry (`MAX_MEASUREMENT_ATTEMPTS`) succeeds or exhausts.
+    const finishFailed = (): void => {
+      settled = true;
+      registry.markFailed(itemType);
       setMounted(false);
     };
 
@@ -141,8 +172,10 @@ export function useTemplateMeasurement(
       if (!layout || reactTag == null) {
         // The template never laid out (e.g. `renderTemplate` returned
         // something with zero size) — give up cleanly rather than retry
-        // forever. No cache entry is written; the fallback keeps rendering.
-        finish();
+        // forever within THIS attempt. No cache entry is written; the
+        // fallback keeps rendering until a bounded future retry (see
+        // `finishFailed`/`MAX_MEASUREMENT_ATTEMPTS`).
+        finishFailed();
         return;
       }
       const result = nativeSensor.measure(
@@ -163,7 +196,7 @@ export function useTemplateMeasurement(
       if (result) {
         store.set(result.snapshot.key, result.snapshot);
         templateTraversalCounter.increment();
-        finish();
+        finishMeasured();
         return;
       }
       // A resolved `reactTag` with a `null` measure result means the JS-side
@@ -182,7 +215,7 @@ export function useTemplateMeasurement(
         frameHandle = requestAnimationFrame(() => attemptMeasure(attemptsLeft - 1));
         return;
       }
-      finish();
+      finishFailed();
     };
 
     const interactionHandle = scheduleAfterInteractions(() => {
@@ -194,6 +227,22 @@ export function useTemplateMeasurement(
       interactionHandle.cancel();
       if (frameHandle !== null) {
         cancelAnimationFrame(frameHandle);
+      }
+      // Adversarial-review defect, 2026-08-28: a cell recycled (FlashList
+      // rebinding this same component instance to a DIFFERENT itemType) or
+      // genuinely unmounted BEFORE its deferred measurement ever resolved
+      // used to leave `itemType` stranded at `'scheduled'` forever — this
+      // effect's cleanup never touched the registry, and `markMeasured`
+      // only ran inside `finishMeasured`/`finishFailed`, which a cancelled
+      // effect never reaches. Releasing the claim here — ONLY when neither
+      // `finish*` variant ran (`!settled`) — lets the very next bind for
+      // this itemType (a different cell, or this same cell re-bound after
+      // recycling) retry instead of being poisoned into the fallback for
+      // the rest of the app session. Uses the OLD `itemType` this closure
+      // captured (the effect re-runs with the NEW one on recycle), so the
+      // correct itemType's claim is the one released.
+      if (!settled) {
+        registry.releaseClaim(itemType);
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

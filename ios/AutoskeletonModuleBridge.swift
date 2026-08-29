@@ -93,7 +93,24 @@ public final class AutoskeletonModuleBridge: NSObject {
     /// `maxShapes` are the fields with an observable effect here (a
     /// tightened `maxShapes` visibly truncates the emitted shape count via
     /// `AutoskeletonTraversalContext.reserveCapacity`).
-    func computeWireArray(view: UIView, cacheKey: String, config: AutoskeletonGetShapesConfig) -> [Double]? {
+    /// - Parameter isCancelled: adversarial-review defect (2026-08-28):
+    ///   defaults to `{ false }` for every direct caller (this file's own
+    ///   pre-existing call sites, and every test that predates the defect
+    ///   fix). The dispatched `getShapes(reactTag:...)` entry point below
+    ///   supplies a real one — see `AutoskeletonUiThreadDispatcher.swift`'s
+    ///   header comment for the full defect writeup. Checked as LATE as
+    ///   possible, right before the one observable side effect
+    ///   (`shapeCache.set`): the traversal itself still runs (it cannot be
+    ///   stopped mid-flight either), but a cancelled caller must never have
+    ///   its abandoned work retroactively poison the SHARED cache under a
+    ///   `cacheKey` that, on a recycled list, may by then belong to a
+    ///   different row.
+    func computeWireArray(
+        view: UIView,
+        cacheKey: String,
+        config: AutoskeletonGetShapesConfig,
+        isCancelled: () -> Bool = { false }
+    ) -> [Double]? {
         let options = AutoskeletonSensorOptions(
             hints: AutoskeletonMapHintRegistry(config.hints),
             budgetMs: config.budgetMs,
@@ -106,6 +123,9 @@ public final class AutoskeletonModuleBridge: NSObject {
             return nil
         }
         let wire = Self.encodeWireArray(measured.shapes)
+        guard !isCancelled() else {
+            return nil
+        }
         shapeCache.set(cacheKey, wire)
         return wire
     }
@@ -117,7 +137,8 @@ public final class AutoskeletonModuleBridge: NSObject {
         budgetMs: Double,
         maxShapes: Double,
         collectDebugSidecars: Bool,
-        hints: [[String: Any]]
+        hints: [[String: Any]],
+        isCancelled: () -> Bool = { false }
     ) -> [NSNumber] {
         let config = AutoskeletonGetShapesConfig(
             defaultRadius: CGFloat(defaultRadius),
@@ -126,7 +147,9 @@ public final class AutoskeletonModuleBridge: NSObject {
             collectDebugSidecars: collectDebugSidecars,
             hints: hints.compactMap(AutoskeletonHintEntry.decode)
         )
-        guard let view = view, let wire = computeWireArray(view: view, cacheKey: cacheKey, config: config) else {
+        guard let view = view,
+              let wire = computeWireArray(view: view, cacheKey: cacheKey, config: config, isCancelled: isCancelled)
+        else {
             return []
         }
         return wire.map { NSNumber(value: $0) }
@@ -167,7 +190,7 @@ public final class AutoskeletonModuleBridge: NSObject {
         hints: [[String: Any]],
         resolveView: @escaping (NSNumber) -> UIView?
     ) -> [NSNumber] {
-        let result: [NSNumber]? = uiThreadDispatcher.runAndWait(timeoutMs: 200) { [weak self] in
+        let result: [NSNumber]? = uiThreadDispatcher.runAndWait(timeoutMs: 200) { [weak self] isCancelled in
             guard let self = self else { return [] }
             return self.getShapes(
                 view: resolveView(reactTag),
@@ -176,7 +199,8 @@ public final class AutoskeletonModuleBridge: NSObject {
                 budgetMs: budgetMs,
                 maxShapes: maxShapes,
                 collectDebugSidecars: collectDebugSidecars,
-                hints: hints
+                hints: hints,
+                isCancelled: isCancelled
             )
         }
         return result ?? []
@@ -188,7 +212,7 @@ public final class AutoskeletonModuleBridge: NSObject {
     /// eviction can never reorder ahead of an in-flight `getShapes` write
     /// dispatched moments earlier.
     @objc public func evictShapesDispatched(_ cacheKeys: [String]) {
-        _ = uiThreadDispatcher.runAndWait(timeoutMs: 200) { [weak self] () -> Bool? in
+        _ = uiThreadDispatcher.runAndWait(timeoutMs: 200) { [weak self] (_: () -> Bool) -> Bool? in
             self?.evictShapes(cacheKeys)
             return true
         }

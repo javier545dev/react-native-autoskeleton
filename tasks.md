@@ -1843,6 +1843,124 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       (built `dom-sensor.ts`/`clip-path.ts` this fixes), G.7 (built `Hint.tsx`, audited not
       modified). Complexity: M.
 
+- [x] **G.10** (2026-08-28, branch `feat/typed-hint-channel`, stacked on G.9) two adversarial-review
+      concurrency/lifecycle defect fixes, strict TDD RED-first throughout, one commit each.
+      1. **Recycling a cell mid-measurement permanently stranded that `itemType` in fallback** —
+         `useTemplateMeasurement.ts` claimed an itemType synchronously during render
+         (`registry.markScheduled`), but only resolved that claim (`markMeasured`) inside a deferred
+         effect (`scheduleAfterInteractions` + up to `MAX_LAYOUT_WAIT_FRAMES` RAF retries). A
+         FlashList cell recycled to a DIFFERENT itemType while its own claim was still unresolved —
+         or a genuine unmount — ran the effect's cleanup before `finish()` ever ran, and the cleanup
+         never touched the registry: nothing ever reset that itemType back to `'idle'`. Once stuck at
+         `'scheduled'`, `decideCellBind` (requires `'idle'`) returned `false` for that itemType
+         FOREVER, for the rest of the app session, across the whole app — every cell of that itemType
+         silently fell back to `FallbackSkeletonBlock`. A second, independent poisoning path: the
+         give-up branches (template never laid out; RAF retries exhausted) called `finish()` ->
+         `markMeasured(itemType)` with NOTHING cached, masquerading a failure as a success and
+         blocking any future retry, even by a different valid cell. Fix: `TemplateRegistry`
+         (`src/core/list.ts`) gains `releaseClaim(itemType)` (reverts a cancelled `'scheduled'` claim
+         back to `'idle'`, no-op for any other state — never un-measures a real success) and a
+         DISTINCT `'failed'` state via `markFailed(itemType)`, bounded to `MAX_MEASUREMENT_ATTEMPTS`
+         (3) retries via an observable `attemptsFor(itemType)` ceiling — never a silent infinite retry
+         loop. `decideCellBind` gained a third `failedAttempts` parameter to enforce the bound.
+         `useTemplateMeasurement.ts`'s effect now tracks a local `settled` flag: `finishMeasured()`/
+         `finishFailed()` set it before touching the registry, and cleanup calls `registry
+         .releaseClaim(itemType)` ONLY when `!settled` (the claim was abandoned mid-flight, neither a
+         success nor a failure). RED: `src/core/list.test.ts` — TypeScript compile failure against
+         the pre-fix registry API (`releaseClaim`/`markFailed`/`attemptsFor` did not exist), then 9
+         new cases (a cancelled claim unblocks `decideCellBind` for the very next bind; `releaseClaim`
+         is a no-op for `'measured'`/`'idle'`; `markFailed` never masquerades as measured; bounded
+         retry via `MAX_MEASUREMENT_ATTEMPTS`, ceiling enforced and observable). GREEN: 21/21
+         `list.test.ts` cases (was 12). No RN test renderer exists under Vitest's node environment
+         (`vitest.config.ts`'s own documented constraint) — this codebase's established ADR-9 split
+         ("core holds policy, native is a thin wrapper") is what keeps the actual state-machine fix
+         Vitest-provable at all; the hook wiring itself (mechanical once the policy is proven) is not
+         independently unit-tested and remains a native-E2E-provable gap, carried forward as item (i)
+         below. Commit `1920a7c`.
+      2. **A timed-out `getShapes` abandoned its UI-thread work, which then wrote stale data into the
+         shared cache** — both platforms. Android (`AutoskeletonModule.kt`) and iOS
+         (`AutoskeletonUiThreadDispatcher.swift`) shared the identical shape: `latch.await`/
+         `semaphore.wait`'s return value was discarded (the caller could never distinguish "completed"
+         from "timed out"); the posted UI-thread Runnable / dispatched main-thread block was NEVER
+         cancelled (neither platform exposes a handle to cancel an already-posted unit of work), so it
+         kept running after the caller gave up and its `shapeCache.set(cacheKey, wire)` wrote stale
+         geometry into the SHARED native cache — on a recycled list, `cacheKey` may by then belong to
+         a different row entirely; and `result` was a plain, unsynchronized `var` read across threads
+         with no visibility guarantee (Android: no `@Volatile`; iOS: no explicit synchronization
+         either — the same hazard, just no language keyword to flag it). Fix: `runAndWait` on both
+         platforms now hands `block` a cooperative `isCancelled: () -> Boolean`/`Bool` check —
+         genuine cancellation of an already-posted unit of work is not available on either platform,
+         so this is deliberate cooperative cancellation, consulted as LATE as possible, right before
+         the one observable side effect (`computeWireArray`'s cache write) — the traversal itself
+         still runs (it cannot be stopped mid-flight either), but the write a cancelled caller could
+         no longer observe is skipped. `result`/the cancellation flag now live in `AtomicReference`/
+         `AtomicBoolean` (Android) and a new `NSLock`-guarded `LockedBox<T>` (iOS) — explicit,
+         unambiguous cross-thread synchronization rather than relying on `DispatchSemaphore`'s
+         undocumented-if-generally-relied-upon implicit memory barrier. RED: Android —
+         `AutoskeletonUiThreadDispatcherTest.kt` gained `runAndWaitLetsAnAbandonedBlockObserve
+         CancellationOnceItFinallyRuns` (idles Robolectric's paused main looper AFTER the caller
+         already timed out, proving the abandoned block still runs and now observes cancellation) and
+         a negative control; `AutoskeletonModuleTest.kt` gained
+         `computeWireArrayDoesNotPoisonTheSharedCacheWhenTheCallerTimesOutBeforeTheUiThreadRuns`
+         (real `Thread` + paused Robolectric looper + `shadowOf(...).idle()` afterward — the exact
+         "idle the looper afterwards to observe the abandoned block completing and poisoning the
+         cache" coverage gap the launch prompt identified; every pre-existing dispatcher test only
+         ever asserted the prompt caller-side `null`). iOS — `AutoskeletonUiThreadDispatcherTests
+         .swift` gained the equivalent GCD-based case plus a negative control;
+         `AutoskeletonModuleBridgeTests.swift` gained `testComputeWireArrayDoesNotWriteToTheCacheWhen
+         IsCancelledReturnsTrue` plus a negative control proving the default-argument (every
+         pre-existing call site) path is unaffected. Confirmed RED via a real compile failure against
+         the tarball-installed copy on BOTH platforms (`./gradlew :autoskeleton:testDebugUnitTest`;
+         `xcodebuild test -scheme Autoskeleton-Unit-Tests`) before implementing either fix. GREEN:
+         Android unit 117/117 (was 114, +3); iOS unit 82/82 (was 78, +4). Commit `cf1268b`.
+      **The tarball trap, confirmed and worked around both directions**: both platforms' unit-test
+      schemes build from `examples/bare-rn/node_modules/autoskeleton` (Android via
+      `:autoskeleton:testDebugUnitTest`'s Gradle autolinking; iOS via CocoaPods'
+      `pod 'Autoskeleton', :path => '../node_modules/autoskeleton'`), NOT the repo root directly —
+      `npm run pack:tarball` -> `npm install autoskeleton@file:<path>` -> (iOS only) `pod install`
+      was run twice per platform: once with ONLY the new tests added (production code unchanged, to
+      capture genuine RED) and once after the production fix (to capture genuine GREEN).
+      **Full regression sweep, run for real**: `npm run typecheck` clean. `npx vitest run`:
+      **393/393** (was 384, +9 — all `src/core/list.test.ts`, defect 1 is TypeScript-only, no
+      Playwright/native change). `npx playwright test`: **62/62** unchanged (defect 1 does not touch
+      `src/web/**`; defect 2 is native-only). NFR-6: 8512 B / 9216 B gzip, unchanged (no web bundle
+      touched). Android unit **117/117** (was 114, +3). iOS unit **82/82** (was 78, +4). Android
+      on-device gates re-run for real on a booted `Medium_Phone_API_36.1` emulator (was not running at
+      session start): `PaintGateInstrumentedTest` + `PaintGateListInstrumentedTest` **10/10** (5/5 +
+      5/5), 0 failed, 0 skipped — confirms defect 2's `runAndWait`/`computeWireArray` signature change
+      does not regress the real on-device dispatch path either gate exercises. iOS
+      `PaintGate-UITests` visual gate **4/4 TEST SUCCEEDED** (correct scheme, not `AutoskeletonBareRn`
+      — mirrors G.6/G.9's own note). Not pushed, no PR opened (13 open stacked PRs, per standing
+      instruction).
+      **On cancel vs. give-up (registry, defect 1)**: a cancelled/recycled claim now RELEASES back to
+      `'idle'` (`releaseClaim`) — the very next bind for that itemType (a different cell, or the same
+      cell re-bound after recycling) may retry immediately, no penalty. A give-up now records a
+      DISTINCT `'failed'` state (`markFailed`) — never masquerades as `'measured'` — with a bounded
+      retry ceiling (`MAX_MEASUREMENT_ATTEMPTS = 3`, observable via `attemptsFor`); once exhausted, a
+      `'failed'` itemType behaves exactly like `'measured'` (never scheduled again), preventing a
+      silent infinite retry loop for a deterministically-failing itemType while still giving a
+      transient timing gap several independent chances.
+      **Timeout, all three problems confirmed addressed (defect 2)**: (1) `latch.await`/
+      `semaphore.wait`'s return value is now used directly to distinguish completed vs. timed out: (2)
+      the cache write — the user-visible half — is now skipped via cooperative `isCancelled()` once
+      the caller has given up, even though the underlying traversal itself still runs to completion on
+      both platforms (neither exposes a way to forcibly cancel already-posted UI-thread work); (3) the
+      cross-thread `result` (and the new cancellation flag) now live in `AtomicReference`/
+      `AtomicBoolean` (Android) / `LockedBox` (iOS) rather than a plain unsynchronized `var` — the data
+      race the reviewer found but did not report is fixed structurally, not merely worked around; a
+      dedicated flaky race-detection test was deliberately NOT attempted (races are not reliably
+      assertable in JUnit/XCTest), but the cross-thread `isCancelled()` observation tests above
+      indirectly exercise the same visibility guarantee.
+      **Genuinely still open, not this session's scope**: unchanged carried-forward list from G.9,
+      PLUS one new item: (i) `useTemplateMeasurement.ts`'s hook-level wiring (the `settled` flag,
+      `finishMeasured`/`finishFailed`, cleanup's `releaseClaim` call) is mechanical once the core
+      registry state machine is proven, but is not itself independently exercised by a React
+      renderer under Vitest (none exists in this repo's node environment) — a native-E2E FlashList
+      recycle-during-measurement scenario would close this gap but was not built this session (scope
+      was the two named defects). Deps: Phase 6 (built `useTemplateMeasurement.ts`/`decideCellBind`
+      this fixes), Phase 5 (built `AutoskeletonUiThreadDispatcher`/`computeWireArray` this fixes).
+      Complexity: M.
+
 ## Phase 8: SSR — build-time snapshot capture CLI + `@media`-bucketed CSS bundle
 
 > **Session status (2026-08-28, branch `feat/phase-8-ssr-capture`)**: 8.1–8.4 all complete and
