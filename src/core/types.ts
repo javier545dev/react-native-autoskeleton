@@ -46,7 +46,7 @@ export const RADIUS_SOURCES: readonly RadiusSource[] = [
 ];
 
 /** Every silent-degradation mode must be nameable. Task 1.9 asserts this union
- *  enumerates exactly these 8 documented flags (drift guard). */
+ *  enumerates exactly these 9 documented flags (drift guard). */
 export type DegradationFlag =
   | 'radius-unavailable' // rounded confirmed, amount unknown -> defaultRadius used
   | 'radius-probe-failed' // raster probe attempted and could not classify
@@ -55,7 +55,8 @@ export type DegradationFlag =
   | 'shape-cap-reached' // maxShapes hit, tail discarded
   | 'clientrects-empty' // DOM per-line measurement returned no rects
   | 'snapshot-version-mismatch' // stored snapshot rejected by wire version negotiation
-  | 'native-module-unavailable'; // Expo Go: the Turbo Module is not in the binary (ADR-15)
+  | 'native-module-unavailable' // Expo Go: the Turbo Module is not in the binary (ADR-15)
+  | 'depth-cap-reached'; // recursive traversal exceeded the depth bound and was truncated
 
 /** One placeholder rectangle in the root/wrapper coordinate space, in CSS px (web)
  *  or density-independent points (native). `r` is a single uniform corner radius;

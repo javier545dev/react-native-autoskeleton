@@ -191,6 +191,38 @@ function overBudget(ctx: TraversalContext): boolean {
   return false;
 }
 
+/** Hard depth bound (defect fix: unbounded recursion crashed the renderer on
+ *  a ~3000-level singly-nested tree — real trees get this deep: nested
+ *  comment threads, recursive tree/list components). `overBudget()` alone
+ *  cannot prevent this: it is TIME-based and only stops FUTURE recursive
+ *  calls, so a tree that blows the call stack (or overwhelms the renderer)
+ *  in well under `budgetMs` of wall-clock time is never caught by it. 300 is
+ *  generous headroom over any realistically deep real-world UI tree (deeply
+ *  nested comment threads and recursive components rarely exceed a few dozen
+ *  levels) while staying far below any stack-overflow/renderer-crash risk. A
+ *  fixed internal constant, not a `SensorOptions` field, since this is a
+ *  safety bound rather than a per-consumer tunable, and keeps the fix
+ *  scoped to the web sensor (native sensors are a separate traversal). */
+const MAX_TRAVERSAL_DEPTH = 300;
+
+/** Depth guard, checked at the very top of `traverse()` — mirrors
+ *  `overBudget()`'s placement and truncation contract exactly (same
+ *  `ctx.truncated` flag, same `ctx.degraded` set, same "stop everything"
+ *  semantics the caller's `if (ctx.truncated) break;` loops already handle),
+ *  so a runaway subtree degrades the same way every other limit in this
+ *  sensor does: truncate and raise a flag the caller can see, never throw. */
+function overDepth(ctx: TraversalContext, depth: number): boolean {
+  if (ctx.truncated) {
+    return true;
+  }
+  if (depth > MAX_TRAVERSAL_DEPTH) {
+    ctx.truncated = true;
+    ctx.degraded.add('depth-cap-reached');
+    return true;
+  }
+  return false;
+}
+
 function isDegenerateFrame(frame: RelativeFrame): boolean {
   return frame.w <= 0 || frame.h <= 0;
 }
@@ -287,8 +319,8 @@ function textLeafShapes(el: Element, ctx: TraversalContext): boolean {
  *  resolution rule (spec §1.1) needs: a non-transparent container with
  *  detected leaves omits its own shape; with none, it renders its own frame
  *  instead. */
-function traverse(el: Element, ctx: TraversalContext): boolean {
-  if (overBudget(ctx)) {
+function traverse(el: Element, ctx: TraversalContext, depth: number = 0): boolean {
+  if (overBudget(ctx) || overDepth(ctx, depth)) {
     return false;
   }
   if (isIgnored(el, ctx.hints)) {
@@ -308,7 +340,7 @@ function traverse(el: Element, ctx: TraversalContext): boolean {
 
   let childContributed = false;
   for (const child of Array.from(el.children)) {
-    if (traverse(child, ctx)) {
+    if (traverse(child, ctx, depth + 1)) {
       childContributed = true;
     }
     if (ctx.truncated) {
