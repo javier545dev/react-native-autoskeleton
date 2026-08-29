@@ -11,6 +11,15 @@
         ],
         "createdAt": "2026-08-28T23:56:53.982Z",
         "reason": "Sole <img> occurrence in this file is inside a JSDoc comment documenting why onSuccessorPainted did not fire; no JSX img element exists. Verified three times as the comment migrated (L447 -> L471 -> L474)."
+      },
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "src/web/dom-sensor.ts"
+        ],
+        "createdAt": "2026-08-29T15:02:19.831Z",
+        "reason": "Sole <img> occurrence in this file is inside a code comment documenting react-native-web's DOM output (a background-image div plus a full-size opacity:0 img), which is exactly why the leafShape opacity guard exists; dom-sensor.ts renders no UI and contains no img element. Same class as the committed src/web/AutoSkeleton.tsx exception."
       }
     ]
   }
