@@ -1961,6 +1961,86 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       this fixes), Phase 5 (built `AutoskeletonUiThreadDispatcher`/`computeWireArray` this fixes).
       Complexity: M.
 
+- [x] **G.11** (2026-08-28, branch `feat/typed-hint-channel`, stacked on G.10) two adversarial-review
+      **guards that could not fail**, strict TDD RED-first, one commit each. "A guard that cannot
+      fail is worse than no guard: it reports safety it never checked."
+      **Guard 1 — the frame-drop gate was structurally `0 > 0`** (`benchmarks/run.ts`,
+      `benchmarks/check-budgets.ts`, `benchmarks/budgets.json`): `run.ts` hardcoded
+      `droppedFrames: 0`, `budgets.json`'s `droppedFramesPerScroll` is `0`, and
+      `check-budgets.ts` compared `results.droppedFrames > budgets.droppedFramesPerScroll` — always
+      false, a gate incapable of failing. Chose "make the placeholder loud" over wiring the real
+      Android instrumented measurement into the JSON pipeline: that measurement runs in a SEPARATE
+      macos-emulator CI job (`bench-android-frame-drops-and-memory`) with no existing cross-job
+      artifact handoff to `bench-core-and-web`, and this session has no live GitHub Actions runner
+      to verify new cross-job wiring against — consistent with `benchmarks.yml`'s own documented
+      "authored, not executed" precedent. `BenchmarkResults` gains `droppedFramesMeasured: boolean`;
+      `checkAbsoluteBudgets` evaluates `droppedFrames` against budget ONLY when true; `main()` prints
+      a visible `SKIPPED: droppedFrames was not measured...` marker otherwise — never a silent pass
+      via placeholder comparison (verified live: `npm run bench:check` against a real
+      `bench:run` output prints the marker and still reports "All budgets satisfied" honestly).
+      `runAllBenchmarks()` gains a `measuredDroppedFrames` DI seam (test-only, not wired into
+      `main()`) so a test can exercise the REAL `run.ts` -> `check-budgets.ts` pipeline with a
+      genuine over-budget measurement — closing the gap where the only prior coverage
+      (`check-budgets.test.ts`'s "flags droppedFrames > 0") exercised `checkAbsoluteBudgets` in
+      isolation against a hand-built object and never the real pipeline. Also corrected
+      `PaintGateListFrameDropsInstrumentedTest.kt`'s doc comment, which falsely claimed a link to
+      `budgets.json`'s `droppedFramesPerScroll` budget that never existed — its own assertion is a
+      self-contained 5%-of-median-cadence ratio, not a `budgets.json` read. RED (pure-function,
+      `check-budgets.test.ts`): the new "does NOT flag droppedFrames when unmeasured, even if the
+      placeholder would exceed budget" test genuinely failed pre-fix (`expected true to be false`)
+      — confirmed by stashing the fix and re-running. GREEN, real pipeline
+      (`benchmarks/absolute.bench.test.ts`, `npm run bench`): new describe block "frame-drop gate —
+      proven capable of failing through the REAL pipeline" — 2/2 new tests pass, including a genuine
+      over-budget `droppedFrames` value flowing through `runAllBenchmarks()` -> `checkAbsoluteBudgets()`
+      and producing a real violation object (the "prove it can fail" deliverable). Commit
+      `f724498`.
+      **Guard 2 — `decodeWire` silently accepted a NaN/corrupted version, same defect in the same
+      file family in `native/sensor.ts`** (`src/core/wire.ts`, `src/native/sensor.ts`): reproduced —
+      `decodeWire(new Float32Array([NaN, 1, 2, 3, 4, 5]))` returned `{ version: NaN, shapes: [...],
+      degraded: [] }` with no throw. Cause: `foundVersion > WIRE_VERSION` and
+      `foundVersion < WIRE_VERSION` are BOTH false for NaN under IEEE-754 (and `>` alone is also
+      satisfied by +/-Infinity and fractional values, none of which are legitimate "newer version"
+      outcomes), so a corrupted version slot fell through both branches untouched. Fix: validate
+      `!Number.isInteger(foundVersion) || foundVersion < 0` (implies finiteness, so NaN/+/-Infinity/
+      fractional/negative are all rejected in one check) before either comparison, throwing the
+      EXISTING `WireMalformedLengthError` (given an optional `reason` string, not a new error class)
+      rather than inventing a new shape. Same class, same file family: `native/sensor.ts:118`
+      computed `const n = (fetched.data.length - 1) / 5` with NO assertion that
+      `(length - 1) % 5 === 0` — a truncated native payload produced a FRACTIONAL `n`, the loop then
+      read past the end of the array, propagating `NaN` geometry silently (the `!` non-null
+      assertions there are compile-time only). Fixed with the same `WireMalformedLengthError` and
+      the shared `WIRE_HEADER_SLOTS`/`WIRE_STRIDE` constants instead of hardcoded `1`/`5`. RED
+      (genuine, both files): `wire.test.ts`'s new "corrupted version slot rejection" describe block
+      — 4/4 new cases failed pre-fix (NaN/negative: "expected function to throw ... but it didn't";
+      fractional/Infinity: threw the WRONG error type, `WireVersionMismatchError`).
+      `sensor.test.ts`'s new truncated-payload case failed pre-fix identically. GREEN: `wire.test.ts`
+      9->14 (+5), `sensor.test.ts` 10->12 (+2), 100% branch/statement/function/line coverage held on
+      `wire.ts` (core's hard coverage gate). Commit `f09ef87`.
+      **Full regression sweep, run for real after both commits**: `npm run typecheck` clean
+      throughout (root + `tsconfig.tests.json`; required a `compare.ts` `METRICS` type-narrowing fix,
+      `as const satisfies readonly (keyof BenchmarkResults)[]`, after `BenchmarkResults` gained the
+      boolean `droppedFramesMeasured` field). `npx vitest run`: **401/401** (was 393, +8: +7 from
+      guard 2's new tests, +1 from guard 1's new pure-function honest-skip test).
+      `npx vitest run --coverage`: 100%/100%/100%/100% on `cache-key.ts`/`handoff.ts`/`wire.ts`
+      unchanged. `npx playwright test`: **62/62** unchanged (neither guard touches `src/web/**`
+      runtime logic). NFR-6: **8791 B / 9216 B gzip** (was 8512 — guard 2's `wire.ts` change is
+      shared into the web bundle; still 425 B under budget). `npm run bench`: **7/7** real
+      Playwright-backed benchmark tests pass, including the new frame-drop-gate-can-fail proof.
+      Android: `./gradlew :app:compileDebugAndroidTestKotlin` BUILD SUCCESSFUL (verifies guard 1's
+      Kotlin doc-comment-only edit compiles — it lives under `examples/bare-rn/android`'s own test
+      source, NOT the library's packaged `android/`, so the tarball trap does not apply here);
+      `./gradlew :autoskeleton:testDebugUnitTest` **117/117** unchanged (neither guard touches
+      Android production/test source beyond that one doc comment). iOS: untouched this session
+      (neither guard touches `ios/**`); iOS unit 82/82 and iOS visual gate 4/4 carried forward
+      unchanged from G.10. Android on-device gates (`PaintGateInstrumentedTest` +
+      `PaintGateListInstrumentedTest`, 10/10) also carried forward unchanged — neither test class
+      was touched. One incidental side effect observed twice (same as every prior session):
+      `examples/next/generated/autoskeleton-ssr/manifest.json`'s `capturedAt` timestamp regenerated
+      by SSR/Playwright test runs — reverted with `git checkout` before each commit, confirmed clean
+      after. Working tree confirmed clean at the end of the session (only the two fix commits).
+      Deps: Phase 9 (built the CI benchmark suite this fixes), task 1.2 (built `wire.ts`'s version
+      negotiation this fixes), Phase 5 (built `native/sensor.ts` this fixes). Complexity: M.
+
 ## Phase 8: SSR — build-time snapshot capture CLI + `@media`-bucketed CSS bundle
 
 > **Session status (2026-08-28, branch `feat/phase-8-ssr-capture`)**: 8.1–8.4 all complete and
