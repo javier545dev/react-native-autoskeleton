@@ -12,27 +12,82 @@
 import type { ShapeInfo } from './types';
 
 /** A never-seen `itemType` is measured from exactly one template cell, at
- *  most once, ever — tracked per `itemType` so N cells binding concurrently
- *  never each schedule their own traversal (RISK-3's explicit assertion:
- *  "the traversal counter stays flat"). Re-measurement after cache eviction
- *  is a deliberate v1 non-goal, mirroring the LRU-eviction ASSUMPTION in
- *  plan.md §3.3 — `reset()` exists for tests and explicit invalidation only. */
-export type TemplateMeasurementState = 'idle' | 'scheduled' | 'measured';
+ *  most once (per successful measurement), ever — tracked per `itemType` so
+ *  N cells binding concurrently never each schedule their own traversal
+ *  (RISK-3's explicit assertion: "the traversal counter stays flat").
+ *  Re-measurement after cache eviction is a deliberate v1 non-goal,
+ *  mirroring the LRU-eviction ASSUMPTION in plan.md §3.3 — `reset()` exists
+ *  for tests and explicit invalidation only.
+ *
+ *  `'failed'` (adversarial-review defect, 2026-08-28): a DISTINCT terminal
+ *  outcome from `'measured'` for the "gave up" paths (template never laid
+ *  out; RAF retries exhausted with no native result) — a failed attempt
+ *  must never masquerade as a successful one, or the itemType gets marked
+ *  "done" with nothing ever written to the cache, permanently blocking any
+ *  future retry (even by a different, valid cell instance). Bounded, not
+ *  silently retried forever: see `MAX_MEASUREMENT_ATTEMPTS`. */
+export type TemplateMeasurementState = 'idle' | 'scheduled' | 'measured' | 'failed';
+
+/** Ceiling on how many times a single `itemType` may re-attempt its
+ *  one-time template measurement after a `'failed'` outcome
+ *  (adversarial-review defect, 2026-08-28). Bounded deliberately: an
+ *  itemType whose `renderTemplate` deterministically produces zero-size
+ *  content (or whose native view genuinely never mounts) would otherwise
+ *  retry on every single bind, forever — a silent hot-loop, not a fix. Once
+ *  exhausted, the itemType stays `'failed'` and `decideCellBind` never
+ *  schedules it again for the rest of the app session (mirrors the
+ *  existing "at most once, ever" contract `'measured'` already has) — an
+ *  OBSERVABLE ceiling (`attemptsFor`), not a silently-decided one. 3 is
+ *  generous relative to `MAX_LAYOUT_WAIT_FRAMES`'s own already-bounded
+ *  per-attempt RAF retry budget (`useTemplateMeasurement.ts`): each of the
+ *  3 attempts gets its own full frame-wait budget, so a transient timing
+ *  gap gets several independent chances before the itemType gives up for
+ *  good. */
+export const MAX_MEASUREMENT_ATTEMPTS = 3;
 
 export interface TemplateRegistry {
   stateFor(itemType: string): TemplateMeasurementState;
+  /** Number of `markFailed` calls recorded for this `itemType` so far
+   *  (`0` for an itemType that has never failed). Pure observability seam
+   *  (mirrors `TraversalCounter`'s established pattern) so the
+   *  `MAX_MEASUREMENT_ATTEMPTS` ceiling is inspectable, never silent. */
+  attemptsFor(itemType: string): number;
   markScheduled(itemType: string): void;
   markMeasured(itemType: string): void;
+  /** Records a "gave up" outcome — DISTINCT from `markMeasured`, never
+   *  writes/implies a cache entry exists. Increments `attemptsFor`.
+   *  Adversarial-review defect, 2026-08-28: the give-up branches used to
+   *  call `markMeasured` with nothing cached, permanently poisoning the
+   *  itemType. */
+  markFailed(itemType: string): void;
+  /** Releases a `'scheduled'` claim back to `'idle'` WITHOUT touching
+   *  `attemptsFor` — the measurement was neither a success nor a failure,
+   *  it simply never got to run (the claiming cell was recycled to a
+   *  different itemType, or genuinely unmounted, before its deferred
+   *  measurement resolved). No-op for any other state (`'idle'`,
+   *  `'measured'`, `'failed'`): never un-measures a real success, and a
+   *  failed itemType's bounded retry already goes through `markScheduled`
+   *  directly. Adversarial-review defect, 2026-08-28: this method did not
+   *  exist at all — a cancelled/recycled measurement had NO way to release
+   *  its claim, permanently stranding that itemType at `'scheduled'` for
+   *  the rest of the app session. */
+  releaseClaim(itemType: string): void;
   /** Reverts a single `itemType` (or, with no argument, every `itemType`)
-   *  back to `'idle'`. Test seam and explicit-invalidation seam. */
+   *  back to `'idle'`, ALSO clearing its `attemptsFor` count. Test seam and
+   *  explicit-invalidation seam — unlike `releaseClaim`, this is a hard
+   *  reset, not a production cancellation signal. */
   reset(itemType?: string): void;
 }
 
 export function createTemplateRegistry(): TemplateRegistry {
   const state = new Map<string, TemplateMeasurementState>();
+  const attempts = new Map<string, number>();
   return {
     stateFor(itemType) {
       return state.get(itemType) ?? 'idle';
+    },
+    attemptsFor(itemType) {
+      return attempts.get(itemType) ?? 0;
     },
     markScheduled(itemType) {
       state.set(itemType, 'scheduled');
@@ -40,11 +95,22 @@ export function createTemplateRegistry(): TemplateRegistry {
     markMeasured(itemType) {
       state.set(itemType, 'measured');
     },
+    markFailed(itemType) {
+      state.set(itemType, 'failed');
+      attempts.set(itemType, (attempts.get(itemType) ?? 0) + 1);
+    },
+    releaseClaim(itemType) {
+      if (state.get(itemType) === 'scheduled') {
+        state.set(itemType, 'idle');
+      }
+    },
     reset(itemType) {
       if (itemType === undefined) {
         state.clear();
+        attempts.clear();
       } else {
         state.delete(itemType);
+        attempts.delete(itemType);
       }
     },
   };
@@ -60,14 +126,32 @@ export interface CellBindDecision {
 }
 
 /** REQ-LIST-CELL-1 / ADR-13's direct decision function: given whether this
- *  bind's composite cache key is already cached, and the itemType's current
- *  template-measurement state, decide whether THIS bind may schedule the
- *  itemType's one-time deferred template measurement. */
+ *  bind's composite cache key is already cached, the itemType's current
+ *  template-measurement state, and how many times it has already failed
+ *  (`registry.attemptsFor`), decide whether THIS bind may schedule the
+ *  itemType's deferred template measurement.
+ *
+ *  `'idle'` always schedules (the first-ever attempt). `'failed'` schedules
+ *  again ONLY while `failedAttempts < MAX_MEASUREMENT_ATTEMPTS` — a bounded
+ *  retry, never a silent infinite loop (adversarial-review defect,
+ *  2026-08-28: see `MAX_MEASUREMENT_ATTEMPTS`'s own doc comment). Once
+ *  exhausted, a `'failed'` itemType behaves exactly like `'measured'`:
+ *  never scheduled again. */
 export function decideCellBind(
   cacheHit: boolean,
   templateState: TemplateMeasurementState,
+  failedAttempts: number,
 ): CellBindDecision {
-  return { shouldScheduleTemplateMeasurement: !cacheHit && templateState === 'idle' };
+  if (cacheHit) {
+    return { shouldScheduleTemplateMeasurement: false };
+  }
+  if (templateState === 'idle') {
+    return { shouldScheduleTemplateMeasurement: true };
+  }
+  if (templateState === 'failed' && failedAttempts < MAX_MEASUREMENT_ATTEMPTS) {
+    return { shouldScheduleTemplateMeasurement: true };
+  }
+  return { shouldScheduleTemplateMeasurement: false };
 }
 
 export interface TraversalCounter {
