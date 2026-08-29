@@ -9,6 +9,7 @@
 // contract, reused here for consistency across every list sub-case).
 
 import { StyleSheet, View } from 'react-native';
+import { resolveSharedShimmerPeriodMs } from '../../core/shimmer-period';
 import type { AnimationKind, ShapeSnapshot } from '../../core/types';
 import { resolveAutoskeletonOverlayNativeComponent } from '../renderer/AutoskeletonOverlayHostComponent';
 import { FallbackSkeletonBlock } from './FallbackSkeletonBlock';
@@ -26,6 +27,12 @@ export interface SyntheticRowProps {
 
 export function SyntheticRow(props: SyntheticRowProps): React.JSX.Element {
   const OverlayComponent = resolveAutoskeletonOverlayNativeComponent();
+  // ADR-8 arbitration: this is the single funnel every list sub-case
+  // (`SkeletonList` initial load, `SkeletonListFooter` pagination,
+  // `SkeletonCell` per-cell) reaches the native overlay through, so it is the
+  // one place the shared period has to be resolved for all three. See
+  // `core/shimmer-period.ts` for why the FIRST period wins.
+  const speedMs = resolveSharedShimmerPeriodMs(props.speedMs);
   if (props.snapshot && OverlayComponent) {
     return (
       <View style={{ height: props.snapshot.frameHeight, width: '100%' }}>
@@ -34,7 +41,7 @@ export function SyntheticRow(props: SyntheticRowProps): React.JSX.Element {
           baseColor={props.baseColor}
           highlightColor={props.highlightColor}
           defaultRadius={props.defaultRadius}
-          speedMs={props.speedMs}
+          speedMs={speedMs}
           animation={props.animation}
           reducedMotion={props.reducedMotion}
           debugOverlay={false}
