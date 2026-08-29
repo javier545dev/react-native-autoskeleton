@@ -81,6 +81,13 @@ const DEFAULT_THEME: SkeletonTheme = {
 };
 const DEFAULT_BUDGET_MS = 2;
 const DEFAULT_MAX_SHAPES = 60;
+
+/** REQ-A11Y-2. The exact string `src/web/AutoSkeleton.tsx` already renders in
+ *  its visually-hidden `<span>` inside the `role="status"` overlay — one
+ *  user-facing contract across all three platforms, asserted verbatim by the
+ *  on-device gates (`AccessibilityGateInstrumentedTest.kt`,
+ *  `PaintGateUITests.swift`). */
+const LOADING_ACCESSIBILITY_LABEL = 'Loading';
 const DEFAULT_HANDOFF_TIMEOUT_MS = 250;
 const DEFAULT_HANDOFF_FADE_MS = 120;
 
@@ -530,6 +537,25 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
     return <>{props.children}</>;
   }
 
+  // REQ-A11Y-1 (G.15). `overlayVisible` is the single predicate for "the
+  // skeleton is actually painted over the real content RIGHT NOW" — the exact
+  // condition that already gated the overlay's own JSX below, now named so the
+  // accessibility state and the visual state can never drift apart.
+  //
+  // It is deliberately NOT `phase === 'skeleton'` (what `web/AutoSkeleton.tsx`
+  // uses) and deliberately NOT `showSkeleton` alone:
+  //  - `phase` alone stays `'skeleton'` forever on the REQ-PTR-1
+  //    stale-while-revalidate path, where `shouldRunHandoffCycle` suppresses
+  //    `requestHandoff()` entirely — content that is fully visible would be
+  //    permanently hidden from assistive technology. (This is a real, still-open
+  //    defect on the WEB surface; see this session's tasks.md entry. Native does
+  //    not copy it.)
+  //  - `showSkeleton` alone is true during the cold `getShapes` round-trip,
+  //    BEFORE any snapshot exists and therefore before any overlay is mounted.
+  //    Hiding content that is still plainly visible on screen is the same class
+  //    of bug in the other direction.
+  const overlayVisible = showSkeleton && snapshot !== null && OverlayComponent !== null;
+
   // ADR-16 reveal-before-hide: children are ALWAYS mounted underneath the
   // still-painted overlay.
   //
@@ -546,36 +572,97 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   // one-frame timing race the earlier `requestAnimationFrame` deferral
   // (still kept above, since it is a real and separate improvement) could
   // ever have fixed on its own.
+  //
+  // REQ-A11Y-1: the accessibility props go on THIS wrapper, not on a new
+  // wrapper around `props.children`. Both are correct in principle; this one is
+  // correct without cost. `accessibilityElementsHidden` (iOS) and
+  // `importantForAccessibility="no-hide-descendants"` (Android) are SUBTREE
+  // mechanisms — they map to exactly the platform APIs
+  // (`UIView.accessibilityElementsHidden`,
+  // `View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS`) that the now-deleted
+  // native `AutoskeletonAccessibility` helpers called, so React Native already
+  // gives us the whole mechanism declaratively, with no bridge call, no UI-thread
+  // dispatch, and no `resolveView(reactTag)` race (the exact race documented at
+  // length in `useColdMeasurement` above).
+  //
+  // Hiding the wrapper hides the overlay too, which is not a loss: the overlay
+  // is already `accessible={false}` + `no-hide-descendants` below, so it
+  // contributes nothing to the accessibility tree either way. Putting the props
+  // here instead of on a new inner `<View>` keeps the native view hierarchy the
+  // sensor traverses, and every consumer's flex layout, byte-for-byte unchanged.
   return (
-    <View ref={viewRef} onLayout={onLayout} collapsable={false} style={styles.wrapper}>
-      {props.children}
-      {showSkeleton && snapshot && OverlayComponent && (
-        <OverlayComponent
-          cacheKey={cacheKey}
-          baseColor={theme.baseColor}
-          highlightColor={theme.highlightColor}
-          defaultRadius={theme.defaultRadius}
-          // ADR-8: the shared clock has ONE period. `core/shimmer-period.ts`
-          // arbitrates here, in JS, upstream of both native clocks, so the
-          // Swift/Kotlin `setPeriod` calls can never receive two different
-          // values within one JS context — which is what makes this
-          // behaviour identical on iOS, Android and web instead of three
-          // near-misses.
-          speedMs={resolveSharedShimmerPeriodMs(theme.speedMs)}
-          animation={animation}
-          reducedMotion={reducedMotion}
-          debugOverlay={debugOverlayEnabled}
-          accessible={false}
-          importantForAccessibility="no-hide-descendants"
-          style={StyleSheet.absoluteFill}
+    <>
+      <View
+        ref={viewRef}
+        onLayout={onLayout}
+        collapsable={false}
+        accessibilityElementsHidden={overlayVisible}
+        importantForAccessibility={overlayVisible ? 'no-hide-descendants' : 'auto'}
+        style={styles.wrapper}
+      >
+        {props.children}
+        {overlayVisible && (
+          <OverlayComponent
+            cacheKey={cacheKey}
+            baseColor={theme.baseColor}
+            highlightColor={theme.highlightColor}
+            defaultRadius={theme.defaultRadius}
+            // ADR-8: the shared clock has ONE period. `core/shimmer-period.ts`
+            // arbitrates here, in JS, upstream of both native clocks, so the
+            // Swift/Kotlin `setPeriod` calls can never receive two different
+            // values within one JS context — which is what makes this
+            // behaviour identical on iOS, Android and web instead of three
+            // near-misses.
+            speedMs={resolveSharedShimmerPeriodMs(theme.speedMs)}
+            animation={animation}
+            reducedMotion={reducedMotion}
+            debugOverlay={debugOverlayEnabled}
+            accessible={false}
+            importantForAccessibility="no-hide-descendants"
+            style={StyleSheet.absoluteFill}
+          />
+        )}
+      </View>
+      {/* REQ-A11Y-2. With the real content hidden above, a screen-reader user
+       *  would otherwise reach an EMPTY region with no indication anything is
+       *  loading. This mirrors what `web/AutoSkeleton.tsx` actually renders —
+       *  a visually-hidden, statically READABLE "Loading" element — rather than
+       *  `AccessibilityInfo.announceForAccessibility`, which INTERRUPTS the
+       *  screen reader mid-utterance. An interrupting announcement would need a
+       *  slowness threshold this codebase does not have (`delay` defaults to 0,
+       *  and `handoffTimeoutMs` is about the tail, not about slowness), plus
+       *  once-per-cycle bookkeeping — and for a load that resolves in 50ms it is
+       *  strictly worse than silence. A readable element needs none of that: it
+       *  says nothing until the user navigates to it, and it is correct for a
+       *  50ms load and a 5s load alike.
+       *
+       *  `accessibilityLiveRegion="polite"` is Android's real analogue of web's
+       *  `role="status"`: TalkBack announces it WITHOUT interrupting. React
+       *  Native exposes no iOS equivalent, which is precisely why the readable
+       *  element — not the announcement — is the portable mechanism.
+       *
+       *  It is a SIBLING of the wrapper because the wrapper's own subtree is
+       *  hidden above; `position: 'absolute'` keeps it out of flow so it can
+       *  never shift a consumer's layout, and it has no background, so it paints
+       *  nothing. `pointerEvents="none"` keeps it out of the touch path.
+       *  Deliberately no `testID`: it is identified by the string a screen reader
+       *  actually speaks, so no production identifier exists purely for a test. */}
+      {overlayVisible && (
+        <View
+          accessible
+          accessibilityLabel={LOADING_ACCESSIBILITY_LABEL}
+          accessibilityLiveRegion="polite"
+          pointerEvents="none"
+          style={styles.loadingStatus}
         />
       )}
-    </View>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
   wrapper: { position: 'relative' },
+  loadingStatus: { position: 'absolute', width: 1, height: 1 },
 });
 
 AutoSkeleton.Ignore = Ignore;

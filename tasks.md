@@ -2354,6 +2354,145 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       CODE_SIGNING_REQUIRED=NO`. Environment, not code, but the documented command as written is not
       reproducible here.
 
+- [x] **G.15** (2026-08-29, branch `feat/typed-hint-channel`, stacked on G.14) **The native
+      accessibility layer was fully built, fully unit-tested, and had ZERO production call sites.**
+      Verified independently before acting, not taken on trust: grepping `ios/` and `android/src/`
+      for `AutoskeletonAccessibility`, `setLoading`, `announceLoading`, `shouldDegradeAnimation`,
+      `accessibilityElementsHidden` and `importantForAccessibility`, with each helper's own file and
+      its tests excluded, returned nothing. 15 green unit tests (9 Android, 6 iOS) on dead code.
+      **The user-visible defect**: `<AutoSkeleton>`'s OVERLAY was correctly hidden from assistive
+      technology (`accessible={false}` + `no-hide-descendants`, `src/native/AutoSkeleton.tsx`), but
+      nothing hid `props.children` — the real content ADR-16 reveal-before-hide keeps mounted
+      underneath it at all times. VoiceOver and TalkBack read content the sighted user cannot see:
+      placeholder text, empty strings, stale data. Web had always done the equivalent.
+      **THE DESIGN FORK — resolved as (b), do it in JS and DELETE the native helpers.** The question
+      was whether to wire the existing, tested native helpers or use the React Native props. (b),
+      with evidence, on four counts. (1) RN's `accessibilityElementsHidden` and
+      `importantForAccessibility="no-hide-descendants"` map to EXACTLY the platform APIs the helpers
+      called (`UIView.accessibilityElementsHidden`,
+      `View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS`) — same mechanism, not an approximation.
+      (2) Wiring (a) is strictly (b) PLUS cost, never instead of it: `realContentRoot` is the wrapper
+      `View`, a SIBLING of the overlay, so (a) needs a new Turbo Module method, a `reactTag`, a
+      UI-thread dispatch, and it lands squarely in the `FabricUIManager.resolveView(reactTag)`
+      returns-null race this very file already documents at length in `useColdMeasurement`. There is
+      no capability (a) buys. (3) The JS path is already this component's own convention — the
+      overlay's `importantForAccessibility` has been set from JS since Phase 5. (4)
+      `shouldDegradeAnimation` was already duplicated by the JS `useReducedMotion`
+      (`AccessibilityInfo.isReduceMotionEnabled` + the `reduceMotionChanged` listener), so
+      reduce-motion was never a gap — only a second, unused path. Helpers and their tests deleted:
+      Android unit **117 -> 108** (-9), iOS unit **82 -> 76** (-6). The falling counts are correct.
+      **The predicate matters as much as the props.** `overlayVisible = showSkeleton && snapshot !==
+      null && OverlayComponent !== null` — the exact condition that already gated the overlay's JSX,
+      now named so accessibility state and visual state cannot drift. Deliberately NOT
+      `phase === 'skeleton'` and NOT `showSkeleton` alone; see the two defects that choice avoids in
+      the "found, not fixed" note below.
+      **REQ-A11Y-2 — the announcement, and why it is NOT `announceForAccessibility`.**
+      `AccessibilityInfo.announceForAccessibility` INTERRUPTS the screen reader; web's `role="status"`
+      does not. Announcing for a skeleton that lives 50ms is worse than silence, so an interrupting
+      announcement needs a slowness threshold — and this codebase has none to reuse honestly:
+      `delay` defaults to 0 (so it would fire on every skeleton), and `handoffTimeoutMs`/`handoffFadeMs`
+      describe the ADR-16 tail, not slowness. Inventing one was explicitly off the table.
+      Re-reading what web ACTUALLY ships resolved it: the `<span>Loading</span>` inside the
+      `role="status"` overlay is a STATICALLY READABLE element first and a polite announcement
+      second. Native now mirrors the readable element — a zero-footprint `View` with
+      `accessible`, `accessibilityLabel="Loading"`, `pointerEvents="none"`,
+      `position:'absolute'` 1x1 (out of flow, no background, paints nothing), mounted only while
+      `overlayVisible`, as a SIBLING of the wrapper because the wrapper's own subtree is hidden.
+      It needs no threshold and no once-per-cycle bookkeeping: it says nothing until the user
+      navigates to it, and it is correct for a 50ms load and a 5s load alike.
+      `accessibilityLiveRegion="polite"` is added because it IS Android's real analogue of
+      `role="status"` (announces without interrupting) and, unlike an announcement, it is
+      ASSERTABLE — `AccessibilityNodeInfo.getLiveRegion()` is checked on device. RN exposes no iOS
+      equivalent, which is exactly why the readable element and not the announcement is the portable
+      mechanism. Per-row announcement storms were checked and do not apply:
+      `SkeletonCell`/`SkeletonList`/`SkeletonListFooter` accept NO `children` and render a skeleton
+      INSTEAD of content, so REQ-A11Y-1 does not arise there at all.
+      **The proof bar: on-device, both platforms, both states, and proven able to fail.** A new unit
+      test would have proven nothing — unit tests already passed on this dead code, which is the
+      whole defect.
+      Android: new `examples/bare-rn/android/app/src/androidTest/.../AccessibilityGateInstrumentedTest.kt`,
+      3 tests. **A vacuous-gate trap was found and avoided here**: UiAutomator's `UiDevice`
+      deliberately sets `AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS`, which makes
+      `View.includeForAccessibility()` true even when `isImportantForAccessibility()` is false —
+      precisely the state `NO_HIDE_DESCENDANTS` produces. A gate using the default UiAutomator
+      configuration would report the SAME result before and after the fix. This class clears that
+      flag in `@Before` and restores it in `@After` (`PaintGateInstrumentedTest` shares the
+      instrumentation process and needs the default), so every query sees exactly what TalkBack
+      sees. That analysis was then CONFIRMED empirically in the opposite direction: the 5 existing
+      `PaintGateInstrumentedTest` pixel gates, which locate content by `By.desc` WHILE loading, kept
+      passing unchanged.
+      iOS: 3 tests added to `PaintGateUITests.swift`. XCUITest queries the same accessibility server
+      VoiceOver does and has NO include-hidden escape hatch — so `accessibilityElementsHidden`
+      genuinely removes the subtree from XCUITest too, and all 7 iOS tests broke at `waitForMount()`
+      the moment the fix landed. Handled honestly rather than by weakening the fix:
+      `waitForMount` now waits on `paint-gate-toggle` (which renders OUTSIDE `<AutoSkeleton>`), and
+      the three pixel gates capture content frames via a new `contentFrames(_:)` helper that reads
+      them in the LOADED state, then terminates and relaunches for a real cold `isLoading=true`
+      first load. Every coordinate still comes from a real accessibility query against the real
+      running app — none is hardcoded — and the frames are valid across the relaunch because layout
+      does not depend on `isLoading` (ADR-16 keeps children mounted, the overlay is
+      `absoluteFill`, fixture blocks are fixed-size).
+      **Both states asserted, in the same run.** A gate that only checks the hidden state cannot
+      tell you the content ever comes back: `realContentReturnsToTheAccessibilityTreeAfterTheHandoffCompletes`
+      REQUIRES the hidden state as a precondition, then toggles `isLoading` and requires the whole
+      subtree back. **Two controls, so absence can never pass vacuously**: `paint-gate-toggle`
+      (outside `<AutoSkeleton>`, proves app + query are alive) AND the `Loading` status node
+      (mounted by `<AutoSkeleton>` itself, only while the overlay is painted — positive proof the
+      component is mounted and actively showing a skeleton at the instant the content was found
+      absent).
+      **RED, twice, both platforms.** (1) Against the real unfixed build: Android 3/3 failed —
+      `Expected the real content subtree to be EXCLUDED ... but "paint-gate-image" was still
+      reachable by an assistive technology after 8000ms`; iOS 3/3 failed identically, with the
+      control assertions PASSING (so the failures were the gate's own, never fixture failures).
+      (2) Plant-and-revert against the final test code, to prove the restructured gates can still
+      fail: the a11y props and the status element were stripped from the INSTALLED
+      `node_modules/autoskeleton/lib/module/native/AutoSkeleton.js` on a real running app, Metro
+      restarted with `--reset-cache` — Android 3/3 RED, iOS 3/3 RED — then restored and verified
+      byte-identical to the tarball.
+      **GREEN, on real hardware**: Android `:app:connectedDebugAndroidTest --rerun` **14/14**
+      (3 new accessibility + 5 `PaintGateInstrumentedTest` + 5 `PaintGateListInstrumentedTest` +
+      1 `PaintGateListFrameDropsInstrumentedTest`), 0 failures, parsed from the real JUnit XML.
+      iOS `PaintGate-UITests` **7/7 TEST SUCCEEDED** (4 pre-existing pixel gates + 3 new).
+      **FOUND, NOT FIXED — a real WEB defect this work uncovered and deliberately did not absorb.**
+      `src/web/AutoSkeleton.tsx:725` hides content with `aria-hidden={phase === 'skeleton'}`. On the
+      REQ-PTR-1 stale-while-revalidate path `skeletonSuppressed` is true, so
+      `shouldRunHandoffCycle` never calls `requestHandoff()` and `phase` stays `'skeleton'`
+      FOREVER — every `<AutoSkeleton>` that has shown content once and re-enters loading leaves its
+      children permanently `aria-hidden`, fully visible but unreadable by a screen reader. The same
+      predicate also hides content during the `delay` window, before any overlay exists. Native does
+      NOT copy this: `overlayVisible` is correct in both cases. Flagged rather than fixed because it
+      is a separate, web-only defect with its own RED to write in Playwright, and the brief's own
+      standard is that a smaller correct change beats a larger plausible one. A maintainer should
+      replace web's predicate with its own `showSkeleton`-derived equivalent.
+      **ALSO NOT DONE, deliberately**: the list surface (`SkeletonCell`/`SkeletonList`/
+      `SkeletonListFooter`) exposes no `Loading` status element. REQ-A11Y-1 genuinely does not apply
+      there (no children to hide, verified above), but the readable-status parity gap is real and is
+      left open rather than shipped unproven — the list fixture has no accessibility gate, and
+      adding the element without one would repeat this task's own defect.
+      **Tests**: vitest **482/482** unchanged, Playwright **68/68** unchanged, typecheck clean,
+      NFR-6 **8826 B / 9216 B** gzip EXACTLY unchanged (as required — this change is native-only and
+      never enters the web bundle), `npm run bench` **8/8**, Android unit **108/108** (was 117),
+      iOS unit **76/76** (was 82), Android on-device **14/14**, iOS `PaintGate-UITests` **7/7**.
+      Android and iOS were re-run after a real `npm run prepare` + `pack:tarball` + reinstall +
+      `pod install`, and the installed copy was verified to contain the fix and to no longer contain
+      the deleted helpers before any measurement was taken.
+      **TARBALL TRAP, SHARPER EDGE FOUND**: `examples/bare-rn/package-lock.json` pins an `integrity`
+      hash of the locally-built tarball. After `npm run pack:tarball`, a plain `npm install` in
+      `examples/bare-rn` SILENTLY reinstalls the stale cached package (observed: the installed
+      `AutoSkeleton.js` still had 0 occurrences of the new code while its mtime looked fresh), and
+      after `npm cache clean --force` it hard-fails with `EINTEGRITY`. The reinstall that actually
+      works is `npm install autoskeleton@file:../../.tarball/autoskeleton-0.1.0.tgz`, which rewrites
+      the lock's integrity. The resulting one-line lock churn is a local build-artifact hash for a
+      tarball that is not in the repo, so it was reverted before committing, exactly like the
+      `examples/next/generated/autoskeleton-ssr/manifest.json` `capturedAt` churn (also reverted).
+      **Observability**: none added. **Performance**: two declarative props and one 1x1 out-of-flow
+      `View` while loading; no bridge call, no measurement, no bundle impact. Deps: ADR-16 (the
+      reveal-before-hide guarantee that makes hiding necessary at all), task 3.4/4.6 (which built
+      the helpers this deletes), Phase 5 (the JS `useReducedMotion` that already made
+      `shouldDegradeAnimation` redundant). Complexity: M. Example app: `bare-rn` (both platforms,
+      real device gates).
+      Two commits plus this docs commit, on `feat/typed-hint-channel`. Not pushed, no PR opened.
+
 ## Phase 8: SSR — build-time snapshot capture CLI + `@media`-bucketed CSS bundle
 
 > **Session status (2026-08-28, branch `feat/phase-8-ssr-capture`)**: 8.1–8.4 all complete and
