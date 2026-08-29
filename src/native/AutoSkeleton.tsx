@@ -58,6 +58,7 @@ import { assembleMetrics } from '../core/metrics';
 import { shouldRunHandoffCycle } from '../core/refresh-gate';
 import { MemoryShapeStore } from '../core/snapshot';
 import { createHintRegistry, snapshotHintEntries } from '../core/hint-registry';
+import { resolveSharedShimmerPeriodMs } from '../core/shimmer-period';
 import { applyThemeOverride } from '../core/theme-override';
 import type { AnimationKind, OnMetrics, RendererKind, ShapeSnapshot } from '../core/types';
 import { Hint } from './Hint';
@@ -554,7 +555,13 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
           baseColor={theme.baseColor}
           highlightColor={theme.highlightColor}
           defaultRadius={theme.defaultRadius}
-          speedMs={theme.speedMs}
+          // ADR-8: the shared clock has ONE period. `core/shimmer-period.ts`
+          // arbitrates here, in JS, upstream of both native clocks, so the
+          // Swift/Kotlin `setPeriod` calls can never receive two different
+          // values within one JS context — which is what makes this
+          // behaviour identical on iOS, Android and web instead of three
+          // near-misses.
+          speedMs={resolveSharedShimmerPeriodMs(theme.speedMs)}
           animation={animation}
           reducedMotion={reducedMotion}
           debugOverlay={debugOverlayEnabled}

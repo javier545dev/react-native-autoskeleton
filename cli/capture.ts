@@ -36,6 +36,7 @@ import type { chromium as ChromiumLauncher } from '@playwright/test';
 import { WIDTH_BUCKETS } from '../src/core/cache-key';
 import { DEFAULT_BUDGET_MS, DEFAULT_MAX_SHAPES } from '../src/core/metrics';
 import type { Direction } from '../src/core/types';
+import { computeSsrManifestIntegrity } from '../src/web/ssr/integrity';
 import { bundleCaptureRuntime } from './bundle';
 import { buildSsrCssBundle } from './media-bundle';
 import type { AutoSkeletonSSRManifest, AutoSkeletonSSRManifestEntry, CaptureReport } from './manifest';
@@ -232,11 +233,20 @@ export async function runCapture(options: RunCaptureOptions): Promise<RunCapture
   const capturedKeys = Array.from(new Set(entries.map((e) => e.skeletonKey))).filter(
     (key) => !failedKeys.has(key),
   );
-  const manifest: AutoSkeletonSSRManifest = {
+  // `integrity` binds this manifest to the `bundle.css` written from it a few
+  // lines below (`src/web/ssr/integrity.ts`). Computed AFTER the entry set is
+  // final and stamped into the same object the CSS generator then hashes, so
+  // the two artifacts can only ever leave this function agreeing.
+  const manifestWithoutIntegrity: AutoSkeletonSSRManifest = {
     v: SSR_MANIFEST_VERSION,
+    integrity: '',
     widthBuckets,
     capturedKeys,
     entries: entries.filter((e) => capturedKeys.includes(e.skeletonKey)),
+  };
+  const manifest: AutoSkeletonSSRManifest = {
+    ...manifestWithoutIntegrity,
+    integrity: computeSsrManifestIntegrity(manifestWithoutIntegrity),
   };
 
   if (failedKeys.size > 0) {

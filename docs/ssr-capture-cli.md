@@ -55,6 +55,53 @@ an element matching `#autoskeleton-capture-root` (configurable via
 `rootSelector`). See `examples/next/app/dashboard-capture/page.tsx` for a
 real, working capture route.
 
+## The two files are bound together, and they check each other
+
+`manifest.json` and `bundle.css` are two halves of ONE artifact. Regenerate
+one without the other — including by hand-reverting a noisy `manifest.json`
+diff — and the page would previously have replayed geometry that no longer
+corresponded to the CSS actually shipped, silently, at every viewport. A
+skeleton with subtly wrong geometry is worse than one that does not render,
+because the wrong one ships.
+
+Both files therefore carry a **build token** (`manifest.integrity`, and the
+same value baked into every geometry rule's selector in the CSS):
+
+- **A mismatched pair cannot paint the wrong thing.** The CSS geometry rules
+  only select an element stamped with their own token, so a stale pair falls
+  through to a drift-fallback rule that renders the same neutral generic
+  block an uncaptured key renders. This needs no wiring from you.
+- **A dev build tells you why.** `<AutoSkeleton.SSRHydrate>` compares the
+  manifest's token against the one the stylesheet publishes on `:root`
+  (`--askl-ssr-build`) and warns, naming both, in non-production builds only.
+- **You can fail the build instead**, which is the loudest and earliest
+  option:
+
+  ```ts
+  import { assertSsrManifestIntegrity } from 'autoskeleton/cli';
+  import manifest from './generated/autoskeleton-ssr/manifest.json';
+
+  assertSsrManifestIntegrity(manifest); // throws if it was hand-edited
+  ```
+
+The token deliberately **ignores the `capturedAt` timestamps**, which churn
+on every capture run. Re-running the capture with unchanged geometry produces
+the same token, so reverting timestamp-only noise in a `manifest.json` diff
+stays safe and never produces a false mismatch.
+
+## Manifest schema version
+
+`manifest.json` carries a `v` field, and `<AutoSkeleton.SSR>` **validates it
+on read**. A manifest written by a different `autoskeleton` version renders
+the neutral generic block (with a dev-build warning naming both versions)
+rather than replaying geometry this version may no longer interpret the same
+way — and `<AutoSkeleton.SSRHydrate>` refuses to import its snapshots into
+the runtime cache for the same reason.
+
+The current schema is **v2** (`SSR_MANIFEST_VERSION`). A `v1` manifest
+captured before the build token existed is not replayable: re-run the capture
+CLI. This is regeneration of a build artifact, never a hand-edit of `v`.
+
 ## All-or-nothing writes
 
 If ANY registry key fails to capture (navigation timeout, missing capture

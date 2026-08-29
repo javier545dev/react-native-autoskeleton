@@ -14,6 +14,16 @@
 export { runCapture, CaptureFailedError } from './capture';
 export type { CaptureRegistry, RunCaptureOptions, RunCaptureResult } from './capture';
 export type { AutoSkeletonSSRManifest, AutoSkeletonSSRManifestEntry, CaptureReport } from './manifest';
-export { SSR_MANIFEST_VERSION } from './manifest';
+export { isReplayableManifest, SSR_MANIFEST_VERSION } from './manifest';
+// Build-time integrity guard: a consumer's own build step (or CI) calls
+// `assertSsrManifestIntegrity` to FAIL THE BUILD when manifest.json and
+// bundle.css drifted apart, rather than discovering it as a subtly wrong
+// skeleton in production.
+export {
+  assertSsrManifestIntegrity,
+  computeSsrManifestIntegrity,
+  SSR_BUILD_ATTRIBUTE,
+  SSR_BUILD_CSS_VARIABLE,
+} from './manifest';
 export { bucketRanges, buildSsrCssBundle } from './media-bundle';
 export type { BucketRange, BuildSsrCssBundleOptions } from './media-bundle';

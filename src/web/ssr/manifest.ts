@@ -11,7 +11,13 @@
 
 import type { Direction, SerializedShapeSnapshot } from '../../core/types';
 
-export const SSR_MANIFEST_VERSION = 1;
+// BUMPED 1 -> 2 (2026-08-28) when `integrity` became a required field. The
+// bump is what makes the previously-unvalidated `v` field earn its keep: an
+// older manifest has no build token at all, so replaying it would stamp
+// `data-askl-ssr-build="undefined"` and silently never match any CSS rule.
+// `isReplayableManifest` below turns that into the defined ADR-12 neutral
+// degradation instead.
+export const SSR_MANIFEST_VERSION = 2;
 
 /** One captured snapshot for a single (skeletonKey, widthBucket, direction)
  *  combination — the CLI captures the full cross-product declared by
@@ -33,10 +39,28 @@ export interface AutoSkeletonSSRManifestEntry {
  *  against, independent of when a given manifest was captured. */
 export interface AutoSkeletonSSRManifest {
   readonly v: number;
+  /** Build token binding this manifest to the `bundle.css` generated from it
+   *  in the same capture run (`integrity.ts`). It is baked into every
+   *  geometry rule's SELECTOR in that CSS and stamped onto the replayed
+   *  element, so a mismatched manifest/CSS pair cannot select and degrades to
+   *  the ADR-12 neutral block instead of painting stale geometry. */
+  readonly integrity: string;
   readonly widthBuckets: readonly number[];
   /** Every `skeletonKey` the CLI actually captured at least one entry for —
    *  the exact membership test ADR-12's "uncaptured key -> neutral block"
    *  branch reads, identically on server and client. */
   readonly capturedKeys: readonly string[];
   readonly entries: readonly AutoSkeletonSSRManifestEntry[];
+}
+
+/** Read-time schema gate. `v` was written by the capture CLI since task 8.1
+ *  and read by NOTHING until now — a manifest captured by a different library
+ *  version was replayed as if it were current, which is precisely the "subtly
+ *  wrong geometry ships" failure this whole module exists to prevent.
+ *
+ *  A pure predicate on purpose: `<AutoSkeleton.SSR>` (server) and
+ *  `<AutoSkeleton.SSRHydrate>` (client) must reach the SAME verdict from the
+ *  SAME data, or the guard would itself become a hydration mismatch. */
+export function isReplayableManifest(manifest: AutoSkeletonSSRManifest): boolean {
+  return manifest.v === SSR_MANIFEST_VERSION;
 }

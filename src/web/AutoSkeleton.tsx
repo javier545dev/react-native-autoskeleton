@@ -40,6 +40,7 @@ import { MemoryShapeStore } from '../core/snapshot';
 import type { AnimationKind, OnMetrics, ShapeSnapshot } from '../core/types';
 import { WIRE_HEADER_SLOTS, WIRE_STRIDE } from '../core/types';
 import { createCssRenderer, createShimmerClock, DEFAULT_BASE_COLOR, DEFAULT_HIGHLIGHT_COLOR } from './css-renderer';
+import { resolveSharedShimmerPeriodMs } from '../core/shimmer-period';
 import { createDomSensor, createEmptyHintRegistry, IGNORE_ATTRIBUTE } from './dom-sensor';
 import { DebugOverlay } from './DebugOverlay';
 import { Hint } from './Hint';
@@ -232,6 +233,14 @@ function useOverlayRenderer(
     if (!host || !snapshot) {
       return;
     }
+    // ADR-8 arbitration. Before this, `theme.speedMs` reached NOTHING on
+    // web: `sharedClock` was created with `createShimmerClock()`'s 1400 ms
+    // default, nothing ever called `setPeriod`, and `css-renderer.ts` writes
+    // `--askl-speed` from `clock.periodMs` — so an explicitly-set `speedMs`
+    // was silently discarded even with a single theme. The arbiter
+    // (`core/shimmer-period.ts`) is the SAME one the native path uses, which
+    // is what makes the multi-theme answer identical on all three surfaces.
+    sharedClock.setPeriod(resolveSharedShimmerPeriodMs(theme.speedMs));
     if (!handleRef.current) {
       handleRef.current = renderer.mount(host, {
         snapshot,

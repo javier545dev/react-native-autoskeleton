@@ -84,7 +84,17 @@ test.describe('AutoSkeleton.SSR — server markup genuinely contains skeleton ge
     // not script-injected) must carry a REAL clip-path for this bucket,
     // proving the "skeleton geometry" claim isn't just an empty div.
     const cssBundle = await readFile(path.join(GENERATED_DIR, 'bundle.css'), 'utf8');
-    expect(cssBundle).toMatch(/\[data-askl-ssr-key="dashboard"\]\[data-askl-ssr-dir="ltr"\]\{clip-path:path\(/);
+    expect(cssBundle).toMatch(
+      /\[data-askl-ssr-key="dashboard"\]\[data-askl-ssr-dir="ltr"\]\[data-askl-ssr-build="askl1-[0-9a-f]{16}"\]\{clip-path:path\(/,
+    );
+
+    // manifest <-> CSS binding (2026-08-28): the token in the SERVED markup
+    // and the token in the SERVED CSS are the same string, from the same
+    // capture run. This is what makes a stale pair unable to paint: the
+    // qualified geometry rule above simply would not select.
+    const servedToken = /data-askl-ssr-build="(askl1-[0-9a-f]{16})"/.exec(html)?.[1];
+    expect(servedToken).toBeDefined();
+    expect(cssBundle).toContain(`:root{--askl-ssr-build:"${servedToken}";}`);
 
     await context.close();
   });

@@ -19,6 +19,15 @@
 import { buildClipPath } from '../src/core/clip-path';
 import { decodeWire } from '../src/core/wire';
 import { buildShimmerStylesheet } from '../src/web/css-renderer';
+import {
+  computeSsrManifestIntegrity,
+  SSR_BUILD_ATTRIBUTE,
+  SSR_BUILD_CSS_VARIABLE,
+} from '../src/web/ssr/integrity';
+import {
+  NEUTRAL_SKELETON_HEIGHT_PX,
+  NEUTRAL_SKELETON_RADIUS_PX,
+} from '../src/web/ssr/neutral-geometry';
 import type { AutoSkeletonSSRManifest } from './manifest';
 
 export interface BucketRange {
@@ -83,6 +92,13 @@ export interface BuildSsrCssBundleOptions {
  *  that bucket's real captured geometry. A bucket with zero captured entries
  *  contributes no `@media` block at all — nothing to select, nothing to ship. */
 export function buildSsrCssBundle(manifest: AutoSkeletonSSRManifest, options: BuildSsrCssBundleOptions): string {
+  // The token is RECOMPUTED from the manifest's own content rather than read
+  // from `manifest.integrity`. That is the whole point: this CSS is then bound
+  // to the geometry it was actually generated from, so a hand-edited
+  // `manifest.json` whose recorded `integrity` no longer matches its contents
+  // produces an element token that does not match this bundle's rules — and
+  // degrades to the neutral block instead of painting the edited geometry.
+  const buildToken = computeSsrManifestIntegrity(manifest);
   const ranges = bucketRanges(manifest.widthBuckets);
   const blocks = ranges
     .map((range) => {
@@ -103,12 +119,29 @@ export function buildSsrCssBundle(manifest: AutoSkeletonSSRManifest, options: Bu
         });
         const selector =
           `.askl-overlay[data-askl-ssr-key="${cssAttributeValueEscape(entry.skeletonKey)}"]` +
-          `[data-askl-ssr-dir="${entry.direction}"]`;
+          `[data-askl-ssr-dir="${entry.direction}"]` +
+          `[${SSR_BUILD_ATTRIBUTE}="${buildToken}"]`;
         return `${selector}{clip-path:${path};width:${entry.snapshot.frame[0]}px;height:${entry.snapshot.frame[1]}px;}`;
       });
       return `${mediaQuery(range)}{${rules.join('')}}`;
     })
     .filter((block) => block.length > 0);
 
-  return [buildShimmerStylesheet(), ...blocks].join('');
+  // Published so a dev build can compare it against the manifest's own token
+  // and NAME the drift, instead of only observing that nothing matched.
+  const tokenDeclaration = `:root{${SSR_BUILD_CSS_VARIABLE}:"${buildToken}";}`;
+
+  // Drift fallback. Every geometry rule above is qualified by `buildToken`, so
+  // an overlay stamped with a DIFFERENT token matches none of them and would
+  // otherwise collapse to zero height — invisible, which is its own kind of
+  // silent. `:not()` carries its argument's specificity (0,3,0), strictly
+  // below a geometry rule's (0,4,0), so a MATCHING overlay is unaffected and
+  // ordering never matters. The dimensions are the ADR-12 neutral block's own,
+  // imported rather than duplicated, so "degraded to neutral" looks the same
+  // whether it was reached by an uncaptured key or by manifest/CSS drift.
+  const driftFallback =
+    `.askl-overlay[data-askl-ssr-key]:not([${SSR_BUILD_ATTRIBUTE}="${buildToken}"])` +
+    `{height:${NEUTRAL_SKELETON_HEIGHT_PX}px;border-radius:${NEUTRAL_SKELETON_RADIUS_PX}px;clip-path:none;}`;
+
+  return [buildShimmerStylesheet(), tokenDeclaration, driftFallback, ...blocks].join('');
 }

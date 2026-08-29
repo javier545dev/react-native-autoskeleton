@@ -11,8 +11,15 @@
 import { describe, expect, it } from 'vitest';
 import { WIDTH_BUCKETS } from '../src/core/cache-key';
 import type { AutoSkeletonSSRManifest, AutoSkeletonSSRManifestEntry } from './manifest';
-import { SSR_MANIFEST_VERSION } from './manifest';
+import { computeSsrManifestIntegrity, SSR_MANIFEST_VERSION } from './manifest';
 import { bucketRanges, buildSsrCssBundle } from './media-bundle';
+
+/** Stamps a manifest with its own real integrity token — `buildSsrCssBundle`
+ *  recomputes it anyway, but a fixture carrying a fake one would not be a
+ *  manifest any capture run could produce. */
+function withIntegrity(manifest: AutoSkeletonSSRManifest): AutoSkeletonSSRManifest {
+  return { ...manifest, integrity: computeSsrManifestIntegrity(manifest) };
+}
 
 function fakeEntry(
   skeletonKey: string,
@@ -61,27 +68,29 @@ describe('bucketRanges — mirrors cache-key.ts bucketWidth() semantics', () => 
 
 describe('buildSsrCssBundle — one @media block per captured width bucket (RISK-2 drift guard)', () => {
   it('emits exactly one @media block per WIDTH_BUCKETS entry, built from the real runtime constant', () => {
-    const manifest: AutoSkeletonSSRManifest = {
+    const manifest: AutoSkeletonSSRManifest = withIntegrity({
       v: SSR_MANIFEST_VERSION,
+      integrity: '',
       widthBuckets: WIDTH_BUCKETS,
       capturedKeys: ['dashboard'],
       entries: WIDTH_BUCKETS.map((bucket) => fakeEntry('dashboard', bucket, 'ltr', [bucket, 200])),
-    };
+    });
     const css = buildSsrCssBundle(manifest, { defaultRadius: 4 });
     const mediaBlockCount = (css.match(/@media/g) ?? []).length;
     expect(mediaBlockCount).toBe(WIDTH_BUCKETS.length);
   });
 
   it('emits one [dir] selector variant per captured direction within a bucket', () => {
-    const manifest: AutoSkeletonSSRManifest = {
+    const manifest: AutoSkeletonSSRManifest = withIntegrity({
       v: SSR_MANIFEST_VERSION,
+      integrity: '',
       widthBuckets: WIDTH_BUCKETS,
       capturedKeys: ['dashboard'],
       entries: [
         fakeEntry('dashboard', 768, 'ltr', [768, 200]),
         fakeEntry('dashboard', 768, 'rtl', [768, 200]),
       ],
-    };
+    });
     const css = buildSsrCssBundle(manifest, { defaultRadius: 4 });
     expect(css).toContain('[data-askl-ssr-dir="ltr"]');
     expect(css).toContain('[data-askl-ssr-dir="rtl"]');
@@ -90,15 +99,16 @@ describe('buildSsrCssBundle — one @media block per captured width bucket (RISK
 
 describe('buildSsrCssBundle — single server payload correct at MULTIPLE widths (load-bearing SSR assertion)', () => {
   it('produces DIFFERENT clip-path/dimensions for the same skeletonKey at two different width buckets', () => {
-    const manifest: AutoSkeletonSSRManifest = {
+    const manifest: AutoSkeletonSSRManifest = withIntegrity({
       v: SSR_MANIFEST_VERSION,
+      integrity: '',
       widthBuckets: WIDTH_BUCKETS,
       capturedKeys: ['dashboard'],
       entries: [
         fakeEntry('dashboard', 375, 'ltr', [375, 120]),
         fakeEntry('dashboard', 1280, 'ltr', [1280, 480]),
       ],
-    };
+    });
     const css = buildSsrCssBundle(manifest, { defaultRadius: 4 });
 
     // Both bucket blocks must be present in the SAME single bundle string —
@@ -124,12 +134,13 @@ describe('buildSsrCssBundle — single server payload correct at MULTIPLE widths
   });
 
   it('includes the base shimmer stylesheet (reused from css-renderer.ts, never duplicated) exactly once', () => {
-    const manifest: AutoSkeletonSSRManifest = {
+    const manifest: AutoSkeletonSSRManifest = withIntegrity({
       v: SSR_MANIFEST_VERSION,
+      integrity: '',
       widthBuckets: WIDTH_BUCKETS,
       capturedKeys: ['dashboard'],
       entries: [fakeEntry('dashboard', 768, 'ltr', [768, 200])],
-    };
+    });
     const css = buildSsrCssBundle(manifest, { defaultRadius: 4 });
     // The base stylesheet's own top-level overlay rule must appear exactly
     // once — proves `buildShimmerStylesheet()` was reused, not re-emitted
@@ -142,14 +153,80 @@ describe('buildSsrCssBundle — single server payload correct at MULTIPLE widths
 
 describe('buildSsrCssBundle — no captured entries for a bucket omits its @media block', () => {
   it('a bucket with zero entries contributes no @media block at all', () => {
-    const manifest: AutoSkeletonSSRManifest = {
+    const manifest: AutoSkeletonSSRManifest = withIntegrity({
       v: SSR_MANIFEST_VERSION,
+      integrity: '',
       widthBuckets: WIDTH_BUCKETS,
       capturedKeys: ['dashboard'],
       entries: [fakeEntry('dashboard', 768, 'ltr', [768, 200])],
-    };
+    });
     const css = buildSsrCssBundle(manifest, { defaultRadius: 4 });
     expect(css).not.toContain('max-width: 320px');
     expect(css).not.toContain('max-width: 375px');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// manifest <-> CSS binding (2026-08-28)
+// ---------------------------------------------------------------------------
+//
+// Before this, NOTHING bound the two generated artifacts together. Regenerate
+// `bundle.css` without `manifest.json` (or the reverse — the established
+// practice of reverting this repo's timestamp churn in `manifest.json` is
+// exactly a hand-edit that keeps one and not the other) and the page happily
+// replayed geometry that no longer corresponded to the CSS it shipped with,
+// with no signal anywhere. The binding is structural: every geometry rule is
+// qualified by a build token derived from the manifest's own geometry, so a
+// mismatched pair simply does not select — it degrades to the ADR-12 neutral
+// block instead of painting subtly wrong shapes.
+
+describe('buildSsrCssBundle — geometry rules are bound to the manifest that generated them', () => {
+  function manifestWith(frame: readonly [number, number]): AutoSkeletonSSRManifest {
+    return withIntegrity({
+      v: SSR_MANIFEST_VERSION,
+      integrity: '',
+      widthBuckets: [375],
+      capturedKeys: ['dashboard'],
+      entries: [fakeEntry('dashboard', 375, 'ltr', frame)],
+    });
+  }
+
+  function buildTokens(css: string): string[] {
+    return Array.from(css.matchAll(/\[data-askl-ssr-build="([^"]+)"\]/g)).map((m) => m[1]!);
+  }
+
+  it('qualifies every captured-geometry rule with a build token', () => {
+    const css = buildSsrCssBundle(manifestWith([375, 200]), { defaultRadius: 4 });
+    expect(buildTokens(css).length).toBeGreaterThan(0);
+  });
+
+  it('changes that token when the captured geometry changes — this is what detects drift', () => {
+    const a = buildSsrCssBundle(manifestWith([375, 200]), { defaultRadius: 4 });
+    const b = buildSsrCssBundle(manifestWith([375, 201]), { defaultRadius: 4 });
+    expect(buildTokens(a)[0]).not.toBe(buildTokens(b)[0]);
+  });
+
+  it('keeps that token stable when only the capture TIMESTAMP churns (the documented revert precedent)', () => {
+    const base = manifestWith([375, 200]);
+    const later: AutoSkeletonSSRManifest = {
+      ...base,
+      entries: base.entries.map((entry) => ({
+        ...entry,
+        snapshot: { ...entry.snapshot, capturedAt: entry.snapshot.capturedAt + 999_999 },
+      })),
+    };
+    expect(buildTokens(buildSsrCssBundle(base, { defaultRadius: 4 }))[0]).toBe(
+      buildTokens(buildSsrCssBundle(later, { defaultRadius: 4 }))[0],
+    );
+  });
+
+  it('ships a drift fallback so an unmatched overlay degrades to neutral geometry, never zero height', () => {
+    const css = buildSsrCssBundle(manifestWith([375, 200]), { defaultRadius: 4 });
+    expect(css).toMatch(/\.askl-overlay\[data-askl-ssr-key\]:not\(\[data-askl-ssr-build="[^"]+"\]\)\{[^}]*height:/);
+  });
+
+  it('publishes its own token as a CSS custom property so a dev build can name the drift', () => {
+    const css = buildSsrCssBundle(manifestWith([375, 200]), { defaultRadius: 4 });
+    expect(css).toMatch(/--askl-ssr-build:/);
   });
 });

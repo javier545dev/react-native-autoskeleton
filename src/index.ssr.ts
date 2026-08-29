@@ -16,4 +16,14 @@ export type { AutoSkeletonSSRProps } from './web/ssr/AutoSkeletonSSR';
 export { AutoSkeletonSSRHydrate } from './web/ssr/hydrate';
 export type { AutoSkeletonSSRHydrateProps } from './web/ssr/hydrate';
 export type { AutoSkeletonSSRManifest, AutoSkeletonSSRManifestEntry } from './web/ssr/manifest';
-export { SSR_MANIFEST_VERSION } from './web/ssr/manifest';
+export { isReplayableManifest, SSR_MANIFEST_VERSION } from './web/ssr/manifest';
+// The manifest <-> CSS binding (2026-08-28). `assertSsrManifestIntegrity` is
+// the LOUD, opt-in half a consumer can call from their own build step or CI to
+// fail the build on drift; the structural selector binding in the generated
+// CSS is the half that protects a consumer who never wires it up.
+export {
+  assertSsrManifestIntegrity,
+  computeSsrManifestIntegrity,
+  SSR_BUILD_ATTRIBUTE,
+  SSR_BUILD_CSS_VARIABLE,
+} from './web/ssr/integrity';

@@ -2256,6 +2256,104 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       and deliberately left it for its own RED-first change — this is that change),
       `test/packaging/global-setup.ts` (the precedent followed). Complexity: S.
 
+
+- [x] **G.14** (2026-08-28, branch `feat/typed-hint-channel`, stacked on G.13) **two design
+      decisions, not defects**, both taken RED-first with the RED captured against real pre-fix
+      code. Where the earlier gap-closures had a determined right answer, these had more than one
+      defensible answer, so the failure mode to avoid was picking one silently.
+      **Decision 1 — ADR-8's shared clock has ONE period, but `speedMs` is per-theme.** Established
+      what each surface actually did, and found three different undocumented answers plus one
+      outright defect. iOS ran TWO periods at once: `setPeriod` is last-writer-wins on the shared
+      clock (`AutoskeletonOverlayViewHost.swift:172`) but the duration is baked into the
+      `CABasicAnimation` at each renderer's own mount (`AutoskeletonRendererTier1.swift:142`), so
+      already-mounted skeletons keep the old duration and drift forever — the exact outcome ADR-8
+      exists to prevent, and with no visible artifact to notice it by. Android retuned globally and
+      visibly jumped, because `AutoskeletonRendererTier1.kt:206` reads `phaseAt(now)` live against a
+      fixed `startedAt`. **Web ignored `speedMs` entirely** — `setPeriod` had ZERO production call
+      sites in `src/web/` (verified against the pre-fix tree: only the definition in
+      `css-renderer.ts:117` and one unit test), the shared clock kept `createShimmerClock()`'s
+      1400ms default, and `css-renderer.ts` wrote `--askl-speed` from `clock.periodMs`. A consumer
+      setting `theme.speedMs` was silently discarded with a SINGLE theme, not just in the
+      two-theme conflict case. Resolved with `src/core/shimmer-period.ts`: first period to reach a
+      mounted skeleton wins, `__DEV__` warn-once per distinct refused value. Arbitration lives in
+      shared TS core UPSTREAM of all three renderers — that placement is the mechanism, not a
+      detail: it is what makes the answer identical rather than three near-misses, and it means the
+      native `speedMs` prop already carries the arbitrated value so the Swift/Kotlin clocks never
+      see a conflict. `ios/**` and `android/**`: zero files changed. Native `setPeriod` stays
+      last-writer-wins DELIBERATELY — after a Fast Refresh the JS arbiter resets while the native
+      clock singleton survives, so a permissive native setter is what lets the new period take
+      effect; a first-wins one would strand dev builds on a stale period.
+      **NOT DONE, deliberately**: tier-2 `src/native/tier2/SkiaRenderer.tsx` has no shared clock at
+      all (`:157` drives a per-instance `withRepeat` with no absolute origin), so tier-2 skeletons
+      are never in phase with tier-1 ones — a separate structural ADR-8 divergence, flagged rather
+      than absorbed. **TRADE-OFF LEFT TO THE MAINTAINER**: one clock per distinct period would
+      honour every `speedMs` at the cost of cross-theme phase alignment, contradicting ADR-8's "one
+      clock" wording. Recorded in `shimmer-period.ts`'s header; switching is a change to one
+      function.
+      **NFR-6 finding worth keeping**: the first implementation measured **9025/9216**, eating 234
+      of 425 remaining bytes. Cause: gating with `typeof process !== 'undefined' && process.env...`
+      (the shape `web/ssr/uncaptured-warning.ts` uses) DEFEATS esbuild's constant fold, because
+      `typeof process` is not statically known, so the ~380-char warning string ships to every
+      production consumer. Rewritten as a bare `process.env['NODE_ENV'] !== 'production'` placed
+      FIRST in the `&&` chain, which the bundler `define` folds to `false`. Orchestrator-verified in
+      both directions on a real minified production/development esbuild bundle: the warning string
+      is absent from the production build and present in the development one. Net cost **+35 B**.
+      **Decision 2 — SSR manifest ↔ CSS drift, folded with the known "manifest version not
+      validated on read" finding**, because a version check and an integrity check are the same
+      concern. Nothing bound the two generated artifacts: `cli/media-bundle.ts` qualified selectors
+      only by `skeletonKey` and `direction`, both of which survive any regeneration, so a
+      `bundle.css` from ANY capture run matched an element rendered from ANY manifest and the page
+      painted whatever geometry the stale CSS carried — silently, at every viewport. Confirmed the
+      folded finding: `SSR_MANIFEST_VERSION` was written at `cli/capture.ts:236` and read by
+      nothing; `snapshot.v` IS validated via `decodeWire`, which is what made the manifest-level gap
+      easy to miss. The realistic drift trigger is this repo's own documented practice of
+      hand-reverting `manifest.json`'s timestamp churn — exactly an edit that keeps one file and not
+      the other. `SSR_MANIFEST_VERSION` 1→2 with a required `integrity` token
+      (`src/web/ssr/integrity.ts`). **Failure mode: structural fail-closed, degrading to the
+      existing ADR-12 neutral block.** The token is baked into the CSS SELECTOR and stamped as
+      `data-askl-ssr-build`, so a mismatched pair CANNOT SELECT and can never paint stale shapes; a
+      `:not()` fallback rule then supplies the neutral block's dimensions (specificity `(0,4,0)` vs
+      `(0,3,0)`, safe without ordering rules). Structural was chosen as the PRIMARY mechanism
+      because a build check only protects consumers who remember to wire it — but all three tiers
+      shipped: structural (everyone, no wiring), read-time `v` gate + warn-once (everyone, no
+      wiring), and `assertSsrManifestIntegrity()` exported from `autoskeleton/cli` for those who
+      want the build to fail. `AutoSkeletonSSRHydrate` also refuses to import a wrong-version
+      manifest's snapshots into the runtime `ShapeStore`, or the exact geometry `<AutoSkeleton.SSR>`
+      just declined to render would re-enter through the cache on the next client navigation.
+      The digest EXCLUDES `capturedAt`, `snapshot.key` and the dev-only `sources`/`radiusSources`
+      sidecars, and sorts entries, so a timestamp revert or a reordering is not drift —
+      orchestrator-verified by reverting the four `capturedAt` values on the real artifacts and
+      confirming the token stayed `askl1-7c6a2a2bf2b97211` and still matched both the CSS selector
+      and `:root{--askl-ssr-build}`. The committed manifest diff is exactly `"v": 1→2` plus the
+      `integrity` line.
+      **NOT DONE, deliberately**: `defaultRadius` is a `buildSsrCssBundle` OPTION, not manifest
+      content, so it is outside the digest — changing it changes the CSS without changing the
+      token. A real but narrow gap; closing it means putting render options into the manifest, a
+      schema decision left to the maintainer. **BREAKING**: v1→v2 requires consumers to re-run the
+      capture CLI; a v1 manifest carries no token and auto-migrating one would be inventing an
+      integrity claim. `plan.md`/`spec.md` NOT amended — ADR-8's text and the REQ-SSR scenarios now
+      under-describe shipped behaviour, but both are maintainer-owned design records.
+      **GOTCHA**: `@playwright/test` applies its own JSX transform to any `.tsx` a spec imports,
+      producing `__pw_type` objects that `renderToStaticMarkup` rejects, so a Playwright spec cannot
+      render this library's components. `test/web/ssr-drift.spec.ts` builds markup from the exported
+      `SSR_BUILD_ATTRIBUTE` constant instead, with the component's own stamping proven in vitest and
+      the end-to-end token match proven in the Next.js suite.
+      **Tests**: vitest **482/482** (was 433, +49), Playwright **68/68** (was 62, +6, including a
+      real-cascade proof that a drifted pair renders `height === 80` / `clip-path: none` where it
+      previously painted the stale 312px), typecheck clean, NFR-6 **8826/9216** (390 B headroom;
+      budget NOT raised), Android unit 117/117, iOS unit 82/82, both re-run after `pack:tarball` +
+      reinstall. `examples/next` tsc and `examples/vite typecheck:cli-consumer` both 0 errors.
+      **Observability**: two new `__DEV__` warn-once channels following the `core/metrics.ts`
+      format+emit split. **Performance**: +35 B gzip, no runtime cost. Deps: ADR-8, ADR-12, Phase 8
+      (built the SSR capture CLI these bind), G.12 (established the `Hint.tsx` warn-once-per-
+      distinct-pair precedent reused here). Complexity: L.
+      **ENVIRONMENT NOTE**: the bare `xcodebuild test -workspace AutoskeletonBareRn.xcworkspace
+      -scheme Autoskeleton-Unit-Tests` recorded at tasks.md:2235 fails on this machine with
+      "Signing ... requires selecting either a development team or a provisioning profile"; it
+      passes with `-destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGNING_ALLOWED=NO
+      CODE_SIGNING_REQUIRED=NO`. Environment, not code, but the documented command as written is not
+      reproducible here.
+
 ## Phase 8: SSR — build-time snapshot capture CLI + `@media`-bucketed CSS bundle
 
 > **Session status (2026-08-28, branch `feat/phase-8-ssr-capture`)**: 8.1–8.4 all complete and
