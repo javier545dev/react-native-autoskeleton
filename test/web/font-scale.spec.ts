@@ -15,7 +15,9 @@
 // failing. They exist so a future change that "fixes" the constant by
 // fabricating a reading has to delete an explicit, evidenced claim first.
 
+import path from 'node:path';
 import { expect, test } from '@playwright/test';
+import { loadHarness } from './helpers/page';
 
 const PAGE = `<!doctype html><html><body style="margin:0">
   <div id="root" style="width:200px">
@@ -46,7 +48,7 @@ async function read(page: import('@playwright/test').Page): Promise<Reading> {
   });
 }
 
-test.describe('web DOES have a `PixelRatio.getFontScale()` analogue, and it is unread', () => {
+test.describe('the web `PixelRatio.getFontScale()` analogue, and why the probe is the right one', () => {
   // ORCHESTRATOR CORRECTION (G.18). The original version of this test called
   // `Page.setFontSizes` with `{ standardFontSize, fixedFontSize }`, which are
   // not the CDP parameter names — the real shape is `{ standard, fixed }`
@@ -128,5 +130,82 @@ test.describe('web DOES have a `PixelRatio.getFontScale()` analogue, and it is u
 
     expect(after.flowHeight).toBe(before.flowHeight);
     expect(after.rootFontSize).toBe(before.rootFontSize);
+  });
+});
+
+
+const COMPONENT_ENTRY = path.join(__dirname, 'helpers/component-entry.ts');
+
+/** Renders a real `<AutoSkeleton>` and returns the `cacheKey` its own
+ *  `onMetrics` reports. The key's shape is
+ *  `v1|skeletonKey|itemType|viewportWidth|fontScale|direction|platform`, so
+ *  asserting on it proves the reading reached the thing it exists to affect —
+ *  cache identity — rather than that a helper returns a number. */
+async function renderAndReadCacheKey(page: import('@playwright/test').Page): Promise<string> {
+  await loadHarness(page, COMPONENT_ENTRY, `<div id="root"></div>`);
+  await page.evaluate(() => {
+    const w = window as unknown as { __metrics: unknown[]; __render: (loading: boolean) => void };
+    w.__metrics = [];
+    const { React, createRoot, AutoSkeleton, SkeletonProvider, MemoryShapeStore, __resetFontScaleForTests } =
+      window.AutoskeletonComponent;
+    __resetFontScaleForTests();
+    const store = new MemoryShapeStore();
+    const root = createRoot(document.getElementById('root')!);
+    w.__render = (isLoading: boolean) => {
+      root.render(
+        React.createElement(
+          SkeletonProvider,
+          { store },
+          React.createElement(
+            AutoSkeleton,
+            {
+              isLoading,
+              skeletonKey: 'font-scale-screen',
+              onMetrics: (m: unknown) => w.__metrics.push(m),
+            },
+            React.createElement('p', { style: { margin: 0 } }, 'Hello world'),
+          ),
+        ),
+      );
+    };
+    w.__render(true);
+  });
+  // `onMetrics` fires on the HANDOFF, once per loading cycle — not on the cold
+  // measurement — so the cycle has to actually complete.
+  await page.evaluate(
+    () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+  );
+  await page.evaluate(() => {
+    (window as unknown as { __render: (l: boolean) => void }).__render(false);
+  });
+  await page.waitForFunction(
+    () => (window as unknown as { __metrics: unknown[] }).__metrics.length > 0,
+    undefined,
+    { timeout: 5000 },
+  );
+  return page.evaluate(
+    () => ((window as unknown as { __metrics: { cacheKey: string }[] }).__metrics[0]?.cacheKey ?? ''),
+  );
+}
+
+test.describe('the reading reaches the cache key (G.19)', () => {
+  test('a default preference composes a key with fontScale 1', async ({ page }) => {
+    const key = await renderAndReadCacheKey(page);
+    expect(key).toContain('|1|');
+  });
+
+  test("a reader's enlarged default font composes a DIFFERENT key", async ({ page }) => {
+    // Set the preference BEFORE anything renders: the reading is taken once
+    // and cached, which is the whole point of the probe being cheap.
+    const client = await page.context().newCDPSession(page);
+    await client.send('Page.setFontSizes', { fontSizes: { standard: 24, fixed: 24 } });
+
+    const key = await renderAndReadCacheKey(page);
+    await client.detach();
+
+    // 24 / 16 = 1.5, quantized to 2 decimals by the SHARED `quantizeFontScale`
+    // that native uses, so both platforms bucket the same way.
+    expect(key).toContain('|1.5|');
+    expect(key).not.toContain('|1|');
   });
 });

@@ -21,7 +21,7 @@
 
 import type { ReactNode } from 'react';
 import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { bucketWidth, composeCacheKey } from '../core/cache-key';
+import { bucketWidth, composeCacheKey, quantizeFontScale } from '../core/cache-key';
 import type { RendererHandle, SkeletonTheme } from '../core/contracts';
 import { createHandoffController } from '../core/handoff';
 import type { HandoffController, SkeletonPipelinePhase } from '../core/handoff';
@@ -192,6 +192,59 @@ function currentDirection(): 'ltr' | 'rtl' {
     return 'ltr';
   }
   return document.documentElement.getAttribute('dir') === 'rtl' ? 'rtl' : 'ltr';
+}
+
+/** The web counterpart of native's `PixelRatio.getFontScale()`, and it is a
+ *  real reading rather than a constant (G.19).
+ *
+ *  A `font-size: medium` probe is the right signal and the document root is
+ *  NOT. `medium` is an absolute keyword that resolves to the browser's own
+ *  default-font-size preference, so it reports what the READER chose; the root
+ *  reports whatever the author's stylesheet did to it, and the
+ *  `html { font-size: 62.5% }` reset is common enough that the root is
+ *  actively misleading. Measured through CDP's real preference surface
+ *  (`test/web/font-scale.spec.ts`):
+ *
+ *    default                     root 16px   probe 16px   text height  54
+ *    preference 24               root 24px   probe 24px   text height 112
+ *    preference 24, page resets
+ *      its own root to 62.5%     root 15px   probe 24px   text height  34
+ *
+ *  The text a skeleton has to match genuinely doubles, so this belongs in the
+ *  cache key: without it, a reader who enlarges their default font gets
+ *  geometry measured for somebody else's.
+ *
+ *  MEASURED ONCE and cached. Attaching a probe costs a style recalc, and this
+ *  is called during render on every `<AutoSkeleton>`. A mid-session preference
+ *  change is therefore not picked up — the browser exposes no event for one,
+ *  and nothing else in the web sensor invalidates on it either (see the
+ *  `Sensor.observe()` gap in tasks.md).
+ *
+ *  Returns 1 with no `document` — SSR, where the preference is unknowable, and
+ *  the same neutral value `cli/browser-runtime.ts` documents for capture. */
+const DEFAULT_FONT_SIZE_PX = 16;
+let measuredFontScale: number | undefined;
+
+function currentFontScale(): number {
+  if (measuredFontScale !== undefined) {
+    return measuredFontScale;
+  }
+  if (typeof document === 'undefined' || document.body === null) {
+    return 1;
+  }
+  const probe = document.createElement('span');
+  probe.style.cssText = 'position:absolute;visibility:hidden;font-size:medium';
+  document.body.appendChild(probe);
+  const px = Number.parseFloat(getComputedStyle(probe).fontSize);
+  probe.remove();
+  measuredFontScale = quantizeFontScale(px > 0 ? px / DEFAULT_FONT_SIZE_PX : 1);
+  return measuredFontScale;
+}
+
+/** Test-only: drops the cached reading so a spec can measure a changed
+ *  preference. Never called by product code. */
+export function __resetFontScaleForTests(): void {
+  measuredFontScale = undefined;
 }
 
 /** `useSyncExternalStore` over `window`'s `resize` event (no-use-effect
@@ -644,9 +697,7 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
     skeletonKey: props.skeletonKey,
     itemType: props.itemType,
     viewportWidth: widthBucket,
-    // Constant, not a reading: web has no `PixelRatio.getFontScale()`
-    // analogue. Proven in test/web/font-scale.spec.ts.
-    fontScale: 1,
+    fontScale: currentFontScale(),
     direction,
     platform: 'web',
   });

@@ -8,7 +8,7 @@
 
 import * as React from 'react';
 import { createRoot } from 'react-dom/client';
-import { AutoSkeleton, SkeletonProvider } from '../../../src/web/AutoSkeleton';
+import { AutoSkeleton, SkeletonProvider, __resetFontScaleForTests } from '../../../src/web/AutoSkeleton';
 import { MemoryShapeStore } from '../../../src/core/snapshot';
 
 declare global {
@@ -19,6 +19,7 @@ declare global {
       AutoSkeleton: typeof AutoSkeleton;
       SkeletonProvider: typeof SkeletonProvider;
       MemoryShapeStore: typeof MemoryShapeStore;
+      __resetFontScaleForTests: typeof __resetFontScaleForTests;
     };
   }
 }
@@ -29,4 +30,5 @@ window.AutoskeletonComponent = {
   AutoSkeleton,
   SkeletonProvider,
   MemoryShapeStore,
+  __resetFontScaleForTests,
 };
