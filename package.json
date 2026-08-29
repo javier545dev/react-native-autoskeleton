@@ -6,13 +6,13 @@
   "types": "./lib/typescript/module/src/index.d.ts",
   "exports": {
     ".": {
-      "react-native": {
-        "types": "./lib/typescript/module/src/index.native.d.ts",
-        "default": "./lib/module/index.native.js"
-      },
       "browser": {
         "types": "./lib/typescript/module/src/index.web.d.ts",
         "default": "./lib/module/index.web.js"
+      },
+      "react-native": {
+        "types": "./lib/typescript/module/src/index.native.d.ts",
+        "default": "./lib/module/index.native.js"
       },
       "default": {
         "types": "./lib/typescript/module/src/index.d.ts",
@@ -191,7 +191,7 @@
   "create-react-native-library": {
     "type": "turbo-module",
     "languages": "kotlin-objc",
-    "note": "kotlin-swift is only offered by create-react-native-library 0.63.0 for the type:nitro-module/nitro-view templates, which pull in react-native-nitro-modules — rejected by plan.md ADR-1's zero-dependency requirement. Scaffolded with the turbo-module/kotlin-objc template instead; ios/AutoskeletonSensor.swift (task 3.1) will be authored directly as Swift conforming to the codegen'd Objective-C protocol, which RN turbo modules support natively.",
+    "note": "kotlin-swift is only offered by create-react-native-library 0.63.0 for the type:nitro-module/nitro-view templates, which pull in react-native-nitro-modules \u2014 rejected by plan.md ADR-1's zero-dependency requirement. Scaffolded with the turbo-module/kotlin-objc template instead; ios/AutoskeletonSensor.swift (task 3.1) will be authored directly as Swift conforming to the codegen'd Objective-C protocol, which RN turbo modules support natively.",
     "version": "0.63.0"
   }
 }

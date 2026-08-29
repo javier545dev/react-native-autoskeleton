@@ -146,6 +146,33 @@ describe('RISK-5 packaging detector (entries.test.ts) — RED until 5.6', () => 
         expect(native).not.toEqual(web);
       });
 
+      // React Native for Web on a BARE RN app asserts BOTH conditions at once:
+      // `@react-native/metro-config` sets `unstable_conditionNames: ['react-native']`
+      // as a BASE list (asserted on every platform, web included — verified in
+      // `@react-native/metro-config/dist/index.js:49`), and Metro's own
+      // `unstable_conditionsByPlatform: { web: ['browser'] }` ADDS `browser` on
+      // top for the web platform. Node's algorithm takes the FIRST key in the
+      // exports object whose condition is active, so with `react-native` listed
+      // first this resolved the NATIVE entry on web and pulled the Fabric
+      // component into a browser bundle.
+      //
+      // React Native's own package-exports guidance names this exact ordering
+      // requirement: "To target React Native for Web, 'browser' should be
+      // specified before this condition."
+      //
+      // Expo Web did NOT expose this, which is why it went unnoticed: Expo scopes
+      // `react-native` to the native platforms only
+      // (`@expo/metro-config`: `{ ios: ['react-native'], android: ['react-native'],
+      // tvos: [...], macos: [...], web: ['browser'] }`), so only `browser` is ever
+      // active there. Ordering is what makes BOTH bundler setups correct.
+      it('with react-native AND browser both active (React Native for Web on bare RN), resolution reaches the WEB entry, not the native one', () => {
+        const bothActive = resolveExportsTarget(conditions, ['react-native', 'browser']);
+        const web = resolveExportsTarget(conditions, ['browser']);
+        const native = resolveExportsTarget(conditions, ['react-native']);
+        expect(bothActive).toBe(web);
+        expect(bothActive).not.toBe(native);
+      });
+
       it('JS runtime resolution is unaffected by nesting types under each condition: react-native/browser/default still resolve to existing JS files', () => {
         for (const condition of ['react-native', 'browser', 'default'] as const) {
           const resolved = resolveExportsTarget(conditions, [condition]);
