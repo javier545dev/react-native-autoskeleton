@@ -1773,6 +1773,76 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       before/after sandbox numbers above; no runtime (bundle-size/CLI-latency) impact. Deps: 9.5
       (introduced the defect), Phase 9 (final regression baseline this builds on). Complexity: M.
 
+- [x] **G.9** (2026-08-28, branch `feat/typed-hint-channel`, stacked on G.8) three adversarial-review
+      defect fixes in the web sensor + shared geometry code, one commit each, strict TDD RED-first
+      throughout.
+      1. **Unbounded recursion crashed the renderer** — `dom-sensor.ts`'s `traverse()` recursed once
+         per DOM level with only a TIME-based `overBudget()` guard, evaluated after each stack frame
+         already committed; a ~3000-level singly-nested tree crashed Chromium outright (real trees
+         get this deep: comment threads, recursive tree/list components). Fix: `MAX_TRAVERSAL_DEPTH`
+         (300 — generous over any realistic UI tree, far below any stack-overflow risk) checked at
+         the top of `traverse()`, mirroring `overBudget()`'s exact truncate-and-flag contract (same
+         `ctx.truncated`, same `ctx.degraded` set, never throws). New `'depth-cap-reached'`
+         `DegradationFlag` (9th flag; `types.test.ts` drift guard updated 8 -> 9). RED: Playwright
+         test built a real 3000-level nested tree, asserted `degraded` empty before the fix (no
+         crash occurred in this Chromium build, but the guard's absence was cleanly provable via the
+         missing flag). GREEN after. Commit `2550c82`.
+      2. **Clip-path corner radius never clamped** — `src/core/clip-path.ts`'s `rectPathData`/
+         `buildClipPath` never clamped a shape's `r` against its own `w`/`h`. A 40x20 badge with
+         `border-radius:999px` resolves (correctly, via `getComputedStyle`) to `r=30`; the unclamped
+         path drew arcs of radius 30 into a 20-tall box, producing out-of-bounds coordinates
+         (`V-10`) and rendering square corners instead of a pill. **Audited every site a radius
+         reaches geometry** (grep across `src/`, `ios/`, `android/`): `src/native/tier2/
+         SkiaRenderer.tsx`, `ios/AutoskeletonRendererTier1.swift`, `ios/AutoskeletonDebugOverlay
+         .swift`, `android/.../AutoskeletonRendererTier1.kt`, `android/.../AutoskeletonDebugOverlay
+         .kt` ALL already clamp at their own draw site (`min(shape.r, min(shape.w, shape.h) / 2)`)
+         — pre-existing, no defect there. `src/web/dom-sensor.ts`'s `parseRadius` and `src/web/
+         Hint.tsx`'s typed radius hint both correctly report/accept the RAW value (consistent with
+         iOS/Android sensors doing the same) and flow through the exact same `ShapeInfo.r` -> wire
+         -> `ClipPathRect.r` pipeline into `buildClipPath` — confirmed via grep that neither
+         `DebugOverlay.tsx` (web) nor any other web consumer reads `.r` directly. `clip-path.ts` was
+         the ONE renderer/geometry-builder in the codebase that had never adopted the established
+         clamp — an inconsistency, not a new pattern. Fix placed in ONE place: new `clampRadius()`
+         in `buildClipPath`, which is reused verbatim by BOTH the live web CSS renderer
+         (`src/web/css-renderer.ts`) and the SSR capture CLI (`cli/media-bundle.ts`) per ADR-7 — the
+         single shared choke point that covers web + SSR + the Hint channel in one fix. RED: Vitest
+         reproduced the exact `V-10` self-intersecting output pre-fix; a supplementary real-browser
+         Playwright test confirmed the browser's CSSOM accepts the malformed path syntactically but
+         draws it with no `r=10` arc present (square, not rounded) pre-fix, and a real `r=10` arc
+         post-fix. GREEN after. Commit `2dfdef0`.
+      3. **`overflow:hidden` + `text-overflow:ellipsis` leaked the full untruncated text width** —
+         `Range.getClientRects()` reports a text node's LAID-OUT box, never its visually clipped
+         box; the sensor never consulted `overflow` anywhere. An 80px-wide `nowrap`+`overflow:
+         hidden`+`ellipsis` title reported ~600px of text width instead of 80px — the single most
+         common text-skeleton pattern in real UI (card titles, list rows, chat previews). Fix: new
+         `computeClipBox()` walks from the text leaf element (inclusive — `overflow:hidden` can sit
+         directly on the leaf, no wrapper needed) up through every ancestor, INTERSECTING every
+         clipping ancestor's box found (`overflow-x`/`-y` anything but `visible`, so `auto`/`scroll`
+         clip identically to `hidden`), stopping at and including the traversal root (nothing
+         outside the measured subtree is this sensor's concern). Intersecting every clipping
+         ancestor, not just the nearest, because nested scrollable regions compound in real UI.
+         Every frame `textLeafShapes()` pushes (both the `Range` line-box path and the
+         `clientrects-empty` synthesized-line fallback) is intersected against this clip box.
+         Scoped deliberately to TEXT leaves only (per the defect's own framing and repro) — non-text
+         leaves (image/input/background/container) already report their own accurate border box via
+         `getBoundingClientRect`, which is not subject to this ancestor-overflow laid-out-vs-visual
+         discrepancy the same way. RED: 4 Playwright cases (ancestor-level clip, clip on the leaf
+         itself, `overflow:auto`, and a nested-intersection case with a narrower inner box) all
+         failed at ~602px pre-fix; a 5th no-overflow negative control already passed (regression
+         safety net). GREEN after. Commit `2784ed1`.
+      **Full regression sweep, run for real after each commit and finally**: `npm run typecheck`
+      clean throughout. `npx vitest run`: **384/384** (was 381, +3 — the 3 `clip-path.test.ts`
+      radius-clamp cases; defects 1 and 3 are Playwright-only, no Vitest count change from them).
+      `npx playwright test`: **62/62** (was 54, +8 — 2 depth-guard cases, 1 radius-clamp real-browser
+      CSSOM case, 5 overflow-clip cases). **NFR-6: 8255 B -> 8512 B gzip** (budget 9216 B — 704 B
+      headroom remaining; measured incrementally per defect: depth guard +38 B, radius clamp +23 B,
+      overflow clip +196 B; well under budget, no subpath extraction needed). Android/iOS untouched
+      this session (no native source changed) — baselines stand: Android unit 114/114, iOS unit
+      78/78, Android on-device paint gate 5/5 + list gate 5/5, iOS `PaintGateUITests` visual gate
+      4/4. Not pushed, no PR opened (13 open stacked PRs, per standing instruction). Deps: Phase 2
+      (built `dom-sensor.ts`/`clip-path.ts` this fixes), G.7 (built `Hint.tsx`, audited not
+      modified). Complexity: M.
+
 ## Phase 8: SSR — build-time snapshot capture CLI + `@media`-bucketed CSS bundle
 
 > **Session status (2026-08-28, branch `feat/phase-8-ssr-capture`)**: 8.1–8.4 all complete and
