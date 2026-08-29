@@ -138,6 +138,81 @@ describe('RISK-5 packaging detector (entries.test.ts) — RED until 5.6', () => 
         expect(readFileSync(abs, 'utf8')).not.toContain('SkeletonList');
       });
 
+      // tasks.md G.17. The three assertions above make the Phase 6 list API
+      // invisible to a WEB TypeScript consumer — but only to one that
+      // actually asserts the `browser` condition, or none at all. Expo does
+      // NEITHER. `expo/tsconfig.base.json` (which every Expo app extends,
+      // including `examples/expo`) hard-sets `customConditions:
+      // ['react-native']` with no platform variation, and TypeScript has no
+      // notion of a build platform at all — one tsconfig typechecks a
+      // universal app for iOS, Android AND web at once. So in an Expo app,
+      // `import { SkeletonList } from 'autoskeleton'` resolves the NATIVE
+      // declaration file and typechecks clean, while Metro at
+      // `--platform web` resolves `index.web.js` (which does not export it)
+      // and the binding evaluates to `undefined` at runtime.
+      //
+      // Measured end to end during G.17, not inferred: `tsc --noEmit` in
+      // `examples/expo` reports zero errors for that import, `expo export
+      // --platform web` bundles successfully, and the served page reports
+      // `AutoSkeleton=function SkeletonList=undefined` with no page error.
+      //
+      // This test exists so that stops being folklore. It pins BOTH halves
+      // of the asymmetry, so a future change that alters either one (adding
+      // a web list export, or Expo dropping the unconditional
+      // `react-native` condition) fails here instead of silently changing
+      // what an Expo Web consumer experiences. spec.md §4's Expo Web row
+      // documents the consequence and the `.native.tsx` split that avoids it.
+      it('an Expo consumer gets NO compile-time signal for the native-only list API: Expo asserts react-native unconditionally, so TypeScript resolves the native declarations even for a web build', () => {
+        const expoTsconfigBase = path.join(
+          repoRoot,
+          'examples/expo/node_modules/expo/tsconfig.base.json'
+        );
+        expect(
+          existsSync(expoTsconfigBase),
+          'examples/expo has no installed expo/tsconfig.base.json to read'
+        ).toBe(true);
+        const base = JSON.parse(readFileSync(expoTsconfigBase, 'utf8')) as {
+          compilerOptions?: { customConditions?: string[] };
+        };
+        const customConditions = base.compilerOptions?.customConditions ?? [];
+        expect(
+          customConditions,
+          'Expo no longer asserts the react-native condition unconditionally — re-check spec.md §4 Expo Web'
+        ).toContain('react-native');
+        expect(
+          customConditions,
+          'Expo now asserts browser too, which would give a web consumer a real compile-time signal'
+        ).not.toContain('browser');
+
+        // Under exactly those conditions, TypeScript reaches the NATIVE
+        // declarations, which do declare the list API.
+        const asExpoTypechecks = resolveExportsTarget(conditions, [
+          ...customConditions,
+          'types',
+        ]);
+        expect(asExpoTypechecks).not.toBeNull();
+        expect(
+          readFileSync(tarballPath(asExpoTypechecks!.replace(/^\.\//, '')), 'utf8')
+        ).toContain('SkeletonList');
+
+        // ...while the JS Metro actually bundles for web does not export it,
+        // so the binding is `undefined` at runtime. Read from the packed
+        // tarball, never from `src/`.
+        const webRuntime = resolveExportsTarget(conditions, ['browser']);
+        expect(webRuntime).not.toBeNull();
+        const webSource = readFileSync(
+          tarballPath(webRuntime!.replace(/^\.\//, '')),
+          'utf8'
+        );
+        expect(webSource).not.toContain('SkeletonList');
+        // Anti-vacuity: the same read against the native runtime entry finds
+        // it, so this is not passing because the file was empty or unread.
+        const nativeRuntime = resolveExportsTarget(conditions, ['react-native']);
+        expect(
+          readFileSync(tarballPath(nativeRuntime!.replace(/^\.\//, '')), 'utf8')
+        ).toContain('SkeletonList');
+      });
+
       it('react-native and browser resolve to genuinely different declaration files', () => {
         const native = resolveExportsTarget(conditions, ['react-native', 'types']);
         const web = resolveExportsTarget(conditions, ['browser', 'types']);
