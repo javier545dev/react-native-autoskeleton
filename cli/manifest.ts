@@ -10,7 +10,13 @@ export type {
   AutoSkeletonSSRManifest,
   AutoSkeletonSSRManifestEntry,
 } from '../src/web/ssr/manifest';
-export { SSR_MANIFEST_VERSION } from '../src/web/ssr/manifest';
+export { isReplayableManifest, SSR_MANIFEST_VERSION } from '../src/web/ssr/manifest';
+export {
+  assertSsrManifestIntegrity,
+  computeSsrManifestIntegrity,
+  SSR_BUILD_ATTRIBUTE,
+  SSR_BUILD_CSS_VARIABLE,
+} from '../src/web/ssr/integrity';
 
 /** RISK-4's `--report` detection signal (task 8.1's Observability line):
  *  which `skeletonKey`s were captured vs. which failed this run. */

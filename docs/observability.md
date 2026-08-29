@@ -91,6 +91,41 @@ add a typed `radius` hint to the affected views, since Android has no
 reliable public API to recover an arbitrary view's corner radius (see
 `docs/product-brief.md` §9c for the full, measured limitation).
 
+### Shared-shimmer-period warning (all platforms)
+
+ADR-8 gives every skeleton on screen ONE shared clock so they shimmer in
+phase. `speedMs` — that clock's period — is a per-`SkeletonTheme` value, so
+two `<AutoSkeleton>` trees under two different `SkeletonProvider` themes can
+ask for two different periods. Only one can be honoured.
+
+The rule is **the first period to reach a mounted skeleton wins**, identically
+on iOS, Android and web. A later request for a different `speedMs` is refused
+and a dev-build `console.warn` fires **once per distinct refused value**,
+naming the value that was ignored, the value actually in effect, and the two
+ways out (use one `speedMs` everywhere, or drop it). Nothing is ever silently
+discarded.
+
+Before this rule, all three platforms behaved differently and none of them
+said anything: iOS ended up running two periods at once (already-mounted
+skeletons keep the animation duration baked in at their own mount, so they
+drifted permanently out of phase with newer ones), Android retuned the live
+clock and visibly jumped the phase of every skeleton on screen, and on web
+`speedMs` reached nothing at all — even a single theme's value was discarded.
+
+### SSR manifest warnings (web)
+
+Two more dev-build warnings cover the SSR replay path, both from
+`src/web/ssr/manifest-warning.ts` and both latched once:
+
+- **Schema version** — a `manifest.json` this build cannot replay renders the
+  neutral generic block instead, naming both versions.
+- **Manifest/CSS drift** — `manifest.json` and `bundle.css` came from
+  different capture runs, so skeletons fell back to the neutral block rather
+  than replaying geometry the CSS no longer matches. Names both build tokens
+  so you can tell which artifact is stale.
+
+See `docs/ssr-capture-cli.md` for the mechanism behind both.
+
 ## Typed hints: `<AutoSkeleton.Hint>` — one API, one known asymmetry
 
 `<AutoSkeleton.Hint>` exists on **both** native (`src/native/Hint.tsx`) and

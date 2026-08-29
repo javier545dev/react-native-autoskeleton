@@ -10,9 +10,13 @@
 // diverge on.
 
 import type { ReactElement } from 'react';
+import { NEUTRAL_SKELETON_HEIGHT_PX, NEUTRAL_SKELETON_RADIUS_PX } from './neutral-geometry';
 import { SR_ONLY_STYLE } from './sr-only-style';
 
-export const NEUTRAL_SKELETON_HEIGHT_PX = 80;
+// Re-exported for backwards compatibility: the constant moved to
+// `neutral-geometry.ts` so `cli/media-bundle.ts` can emit the SAME dimensions
+// for its drift-fallback rule without pulling React into the CLI bundle.
+export { NEUTRAL_SKELETON_HEIGHT_PX, NEUTRAL_SKELETON_RADIUS_PX };
 
 /** The ADR-12 neutral generic block. Deliberately NOT shape-replay geometry
  *  (no captured frame exists for an uncaptured key) — a single full-width
@@ -29,7 +33,12 @@ export function NeutralSkeletonBlock(): ReactElement {
       data-autoskeleton-ignore="true"
       data-askl-ssr-neutral="true"
       className="askl-overlay askl-anim-shimmer"
-      style={{ position: 'relative', height: NEUTRAL_SKELETON_HEIGHT_PX, borderRadius: 8, overflow: 'hidden' }}
+      style={{
+        position: 'relative',
+        height: NEUTRAL_SKELETON_HEIGHT_PX,
+        borderRadius: NEUTRAL_SKELETON_RADIUS_PX,
+        overflow: 'hidden',
+      }}
     >
       <div className="askl-overlay-base" style={{ position: 'absolute', inset: 0 }} />
       <div className="askl-shimmer-layer" />

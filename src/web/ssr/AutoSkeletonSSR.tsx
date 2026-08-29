@@ -23,10 +23,13 @@
 
 import type { ReactElement } from 'react';
 import type { Direction } from '../../core/types';
+import { SSR_BUILD_ATTRIBUTE } from './integrity';
+import { emitManifestVersionWarning } from './manifest-warning';
 import { NeutralSkeletonBlock } from './neutral-block';
 import { SR_ONLY_STYLE } from './sr-only-style';
 import { emitUncapturedSkeletonKeyWarning } from './uncaptured-warning';
 import type { AutoSkeletonSSRManifest } from './manifest';
+import { isReplayableManifest } from './manifest';
 
 export interface AutoSkeletonSSRProps {
   readonly skeletonKey: string;
@@ -53,6 +56,18 @@ export interface AutoSkeletonSSRProps {
  *  renders for the identical (uncaptured) key, so there is nothing to
  *  mismatch on. */
 export function AutoSkeletonSSR(props: AutoSkeletonSSRProps): ReactElement {
+  // Schema gate FIRST. `manifest.v` has been written by the capture CLI since
+  // task 8.1 and read by nothing — a manifest captured by a different library
+  // version replayed as if it were current. The correct failure mode is the
+  // block that renders NOTHING WRONG, not a best-effort replay: subtly wrong
+  // geometry is worse than none, because the wrong one ships. Pure and
+  // prop-derived, so the client reaches the same verdict from the same data
+  // and there is nothing to mismatch on.
+  if (!isReplayableManifest(props.manifest)) {
+    emitManifestVersionWarning(props.manifest.v);
+    return <NeutralSkeletonBlock />;
+  }
+
   const captured = props.manifest.capturedKeys.includes(props.skeletonKey);
   if (!captured) {
     // RISK-4's runtime detection signal (dev-only): a console.warn side
@@ -72,6 +87,13 @@ export function AutoSkeletonSSR(props: AutoSkeletonSSRProps): ReactElement {
       data-autoskeleton-ignore="true"
       data-askl-ssr-key={props.skeletonKey}
       data-askl-ssr-dir={direction}
+      // The manifest<->CSS binding (see `integrity.ts`). The generated
+      // bundle's geometry rules are qualified by this exact token, so a
+      // `bundle.css` from a DIFFERENT capture run simply does not select this
+      // element and its drift-fallback rule paints the neutral block's
+      // geometry instead. Structural, not advisory: there is no code path in
+      // which a stale pair can paint stale shapes.
+      {...{ [SSR_BUILD_ATTRIBUTE]: props.manifest.integrity }}
       className="askl-overlay askl-anim-shimmer"
       style={{ position: 'relative', overflow: 'hidden' }}
     >

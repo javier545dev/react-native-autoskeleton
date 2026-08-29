@@ -25,7 +25,10 @@ import { useEffect, useRef } from 'react';
 import { importIntoShapeStore } from '../../core/snapshot-io';
 import type { ShapeStore } from '../../core/contracts';
 import { defaultStore } from '../AutoSkeleton';
+import { SSR_BUILD_CSS_VARIABLE } from './integrity';
+import { emitManifestCssDriftWarning, emitManifestVersionWarning } from './manifest-warning';
 import type { AutoSkeletonSSRManifest } from './manifest';
+import { isReplayableManifest } from './manifest';
 
 export interface AutoSkeletonSSRHydrateProps {
   readonly manifest: AutoSkeletonSSRManifest;
@@ -48,10 +51,46 @@ export function AutoSkeletonSSRHydrate(props: AutoSkeletonSSRHydrateProps): null
   storeRef.current = props.store;
 
   useEffect(() => {
+    const manifest = manifestRef.current;
+    // A manifest this build cannot replay must NOT be imported into the live
+    // runtime cache. `<AutoSkeleton.SSR>` already refuses to render its
+    // geometry; importing the same entries here would smuggle exactly that
+    // geometry into the store a later client-side `<AutoSkeleton>` reads as a
+    // "hot path" cache hit — the wrong-geometry failure re-entering through
+    // the back door.
+    if (!isReplayableManifest(manifest)) {
+      emitManifestVersionWarning(manifest.v);
+      return;
+    }
     const target = storeRef.current ?? defaultStore;
-    importIntoShapeStore(target, manifestRef.current.entries.map((entry) => entry.snapshot));
+    importIntoShapeStore(target, manifest.entries.map((entry) => entry.snapshot));
+    warnOnManifestCssDrift(manifest);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return null;
+}
+
+/** Dev-only drift report. The structural binding in `integrity.ts` has ALREADY
+ *  prevented a stale `bundle.css` from painting stale geometry by the time
+ *  this runs — this exists so the developer learns WHY their skeleton turned
+ *  into a neutral rectangle instead of bisecting it.
+ *
+ *  Client-only by construction (`getComputedStyle`), which is exactly right:
+ *  it runs in an effect, never during render, so it cannot influence markup
+ *  and therefore cannot introduce a hydration mismatch. */
+function warnOnManifestCssDrift(manifest: AutoSkeletonSSRManifest): void {
+  if (process.env['NODE_ENV'] === 'production' || typeof document === 'undefined') {
+    return;
+  }
+  const cssToken = getComputedStyle(document.documentElement)
+    .getPropertyValue(SSR_BUILD_CSS_VARIABLE)
+    .trim()
+    .replace(/^["']|["']$/g, '');
+  // An empty value means the generated bundle is not loaded at all — a
+  // different, already-documented setup mistake (the consumer must import
+  // `bundle.css` globally), not drift. Reporting it as drift would be a lie.
+  if (cssToken !== '' && cssToken !== manifest.integrity) {
+    emitManifestCssDriftWarning(manifest.integrity, cssToken);
+  }
 }
