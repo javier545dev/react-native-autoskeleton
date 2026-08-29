@@ -2493,6 +2493,136 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       real device gates).
       Two commits plus this docs commit, on `feat/typed-hint-channel`. Not pushed, no PR opened.
 
+- [x] **G.16** (2026-08-29, branch `feat/typed-hint-channel`, stacked on G.15) **The web
+      counterpart of G.15: `aria-hidden` was gated on the wrong predicate, and it hid VISIBLE
+      content from screen readers permanently.** `src/web/AutoSkeleton.tsx` used
+      `aria-hidden={phase === 'skeleton'}`. `phase` is initialised to `'skeleton'`
+      (`core/handoff.ts:88`) and only ever leaves it inside the handoff cycle, which
+      `shouldRunHandoffCycle` suppresses whenever `skeletonSuppressed` is true. Replaced with
+      `overlayVisible = showSkeleton && snapshot !== null` — the web reduction of native's
+      `showSkeleton && snapshot !== null && OverlayComponent !== null` (web resolves no overlay
+      component; the DOM renderer is imported statically), and the same pair `useOverlayRenderer`
+      is already fed as `showSkeleton ? snapshot : null`. Accessibility state and visual state now
+      come from one expression on both platforms.
+      **The reported diagnosis was right, and INCOMPLETE in both directions.** Confirmed as
+      reported: (1) after a component has shown content once and re-enters loading on the DEFAULT
+      stale-while-revalidate path, `requestHandoff()` is never called, so `phase` stays
+      `'skeleton'` and the children stay `aria-hidden` for the rest of the page's life while fully
+      visible; (2) content is hidden throughout the `delay` window with no overlay on screen. Two
+      further cases the report did not name, both found by writing the gate rather than by
+      reasoning about it:
+      (3) **A component that simply MOUNTS with `isLoading={false}` is affected too** — not only
+      one that has re-entered loading. `everShownContent` is initialised to `!props.isLoading`, so
+      cycle 0 is created with `skeletonSuppressed: true`, the handoff cycle never runs, and `phase`
+      is `'skeleton'` from the first render onward. The very first RED test written — meant to be
+      the trivially-passing control — failed. Every `<AutoSkeleton>` in a tree that renders with
+      already-resolved data was hiding its children from assistive technology, permanently, with no
+      loading state involved at all. That is a strictly larger blast radius than the reported one.
+      (4) **The INVERSE defect, exactly the one G.15 fixed on native, was also present.** During the
+      ADR-16 handoff tail `phase` is `'placeholder'`, so `phase === 'skeleton'` is false — yet
+      `showSkeleton` is still true and the overlay is still fully painted (nothing in the web JSX
+      fades it; the "cross-fade" is a window during which both are mounted). Assistive technology
+      could read content the sighted user could not see, for the whole `handoffFadeMs` /
+      `handoffTimeoutMs` tail. `overlayVisible` closes this one in the same expression.
+      **`aria-busy` during a suppressed refresh: kept as a signal, and MOVED so it can exist.**
+      REQ-PTR-1 keeps stale content readable on purpose, which means the one cue a sighted user
+      gets that data is refreshing — the skeleton — is deliberately absent. Before this change
+      there was NO busy signal on that path at all (`aria-busy` lived only on the overlay, and the
+      overlay is not rendered when the skeleton is suppressed), so a screen-reader user had stale
+      content and no way to know it was stale. `aria-busy` is now on the OUTER wrapper, driven by
+      `props.isLoading || overlayVisible`: true during a suppressed refresh, true during the
+      `delay` window, and true through the handoff tail after `isLoading` has already flipped
+      false. The overlay's own `aria-busy="true"` + `role="status"` is untouched (spec REQ-A11Y-1
+      names it literally, and the existing handoff suite selects on
+      `[aria-busy="true"][role="status"]`).
+      **Two placement facts, both measured against Chromium's own accessibility tree, not assumed.**
+      (a) `aria-hidden` stays on the INNER `display: contents` wrapper and still works: the
+      descendant is reported `ignored` with `ignoredReasons: ['ariaHiddenSubtree']`, because
+      `aria-hidden` prunes the subtree independently of the collapsed box. It must stay there rather
+      than move to the outer wrapper as native does, because web's `role="status"` element lives
+      INSIDE the outer wrapper (native's is a sibling of it) — hiding the outer wrapper would hide
+      the only thing the user has left to read. (b) `aria-busy` could NOT ride along on that same
+      element: a `display: contents` box produces no accessibility node for the property to live
+      on (verified — the element is absent from the AX ancestor chain entirely, while the
+      `aria-hidden` pruning still applies). That asymmetry is why the two attributes sit on
+      different elements, and it is the kind of thing an attribute-level test cannot see.
+      **Everywhere else checked, and clean.** Every remaining `phase` predicate in
+      `src/web/AutoSkeleton.tsx`: `showSkeleton` (`phase !== 'content'`, short-circuited by
+      `skeletonSuppressed` and `delayElapsed`, so it is never the sole gate) and
+      `usePaintDetectionHeuristic` (`phase !== 'placeholder'`, a lifecycle guard, not an
+      accessibility gate). The overlay's `aria-busy`/`role="status"`/visually-hidden `Loading` span
+      are gated on `showSkeleton`, never on `phase` alone. `css-renderer.ts:210` sets
+      `aria-hidden` unconditionally on the decorative shimmer overlay it creates — correct, that
+      node is never content. SSR: `AutoSkeletonSSR.tsx` and `neutral-block.tsx` are hook-free
+      `<Suspense>` fallbacks that render INSTEAD of children — they have no children to hide, no
+      `phase`, and no handoff controller; `hydrate.tsx` renders `null`. Nothing to fix on any of
+      them.
+      **The proof bar: Chromium's accessibility tree over CDP, never jsdom and never an attribute
+      query.** New `test/web/accessibility.spec.ts` (8 tests) + `test/web/helpers/ax.ts`. jsdom is
+      banned project-wide for layout-adjacent work and would be doubly wrong here — the question is
+      what an accessibility tree CONTAINS, and jsdom computes none. `page.accessibility.snapshot()`
+      is gone from `@playwright/test` at the pinned 1.62.1 (absent from
+      `playwright-core/types/types.d.ts`), so the helper drives
+      `Accessibility.getPartialAXTree` over a CDP session and reads `ignored` +
+      `ignoredReasons` + the computed name, identifying the target by BACKEND node id (with
+      `fetchRelatives: true` the response also carries children, siblings and the whole ancestor
+      chain, in no contractual order — indexing into it would be a latent flake). Two shape
+      details found by probing rather than by reading docs: Chromium reports boolean AX values as
+      `1`, not `true`, for `busy`; and `busy` is attached ONLY to the element that declares it,
+      never propagated to descendants, so the helper walks the AX ancestor chain — which lets a
+      test ask "is the region containing this content busy?" instead of asserting our own markup
+      shape back at ourselves. Content nodes are `<h2>` because a `<p>` computes an empty
+      accessible name (name-from-contents is role-dependent), so `name === 'Real content'` is a
+      real assertion rather than a vacuous `''`. The G.14 trap applies and is handled by the
+      existing precedent: no `.tsx` is imported by the spec — the real production module graph is
+      bundled by esbuild (`helpers/bundle.ts`) and injected, and every element is built with
+      `React.createElement` inside `page.evaluate`.
+      **Anti-vacuity, the same discipline as the native gates.** Every absence assertion carries
+      two controls: an `#outside-control` heading rendered OUTSIDE `<AutoSkeleton>` (a dead CDP
+      session or broken harness can never make an absence pass) and a live `.askl-overlay` count
+      (positive proof of whether the skeleton is actually painted at the instant exposure is read).
+      Three of the eight tests assert the POSITIVE state — content excluded, for the reason
+      `ariaHiddenSubtree`, while the overlay is genuinely on screen — so the fix cannot be
+      satisfied by deleting `aria-hidden` altogether. The delay-window and handoff-tail tests each
+      assert BOTH states in one run.
+      **RED (against the unfixed code at 6d6ae4f): 5 failed, 3 passed.** Failing: `control: real
+      content is exposed to assistive technology when nothing is loading`; `REQ-PTR-1 default
+      refresh: content stays in the accessibility tree during AND after a suppressed refresh`
+      ("content is fully visible with no skeleton over it, so it must stay readable by a screen
+      reader" — expected false, received true); `delay window: content stays in the accessibility
+      tree before the skeleton is allowed to appear`; `handoff tail: content stays excluded while
+      the overlay is still painted after isLoading flips false` (the inverse defect); `busy is
+      announced on the content region during a suppressed refresh`. Passing throughout: the covered
+      case, busy-while-covered, and the outside control — the guards proving the RED was the
+      predicate's fault and not the harness's. **GREEN: 8/8.**
+      **Tests**: vitest **482/482** unchanged, Playwright **76/76** (68 unchanged + 8 new),
+      typecheck clean, `npm run bench` **8/8**. NFR-6 **8850 B / 9216 B** gzip (was 8826 B;
+      **+24 B**, 366 B of headroom left — budget NOT raised). Native numbers deliberately NOT
+      re-measured and structurally cannot move: the diff is one file, `src/web/AutoSkeleton.tsx`,
+      reachable only from `src/index.web.ts`; `src/index.native.ts` imports exclusively
+      `./native/**` and `./core/**`, and no native artifact was touched — Android unit 108/108,
+      iOS unit 76/76, Android on-device 14/14, iOS `PaintGate-UITests` 7/7 all stand from G.15.
+      A typecheck-only snag worth recording: naming the Playwright fixtures `mount`/`render`
+      collides with `@playwright/test`'s own component-testing fixture types and fails `tsc -p
+      tsconfig.tests.json` even though the tests run green — they are `mountHarness`/`renderTree`.
+      `examples/next/generated/autoskeleton-ssr/manifest.json` `capturedAt` churn reverted before
+      committing, as in G.15.
+      **NOT DONE, deliberately**: the older `test/web/auto-skeleton.spec.ts` REQ-A11Y-1 test still
+      checks `closest('[aria-hidden="true"]')` and is kept as the cheap markup-level regression for
+      the covered case; a comment now records that it was satisfied by the WRONG predicate too and
+      points at the new gate. The overlay's own `aria-busy="true"` on its `role="status"` element
+      is left exactly as-is: `aria-busy` on a live region defers its announcements, which is
+      arguably the wrong semantics for an element that is inserted complete and removed rather than
+      updated — but spec REQ-A11Y-1 names that exact pair, the readable-element mechanism G.15
+      settled on does not depend on the announcement, and changing it is a spec question, not a
+      defect fix. G.15's open list/status-parity gap is untouched.
+      **Observability**: none added. **Performance**: two attributes and one boolean expression;
+      no new node, no measurement, no effect. Deps: G.15 (the predicate this mirrors), ADR-16 (the
+      reveal-before-hide guarantee that makes hiding necessary and makes the handoff tail a real
+      window), task 6.5 / `core/refresh-gate.ts` (the suppression that made the defect permanent).
+      Complexity: S. Surface: web only.
+      One commit plus this docs commit, on `feat/typed-hint-channel`. Not pushed, no PR opened.
+
 ## Phase 8: SSR — build-time snapshot capture CLI + `@media`-bucketed CSS bundle
 
 > **Session status (2026-08-28, branch `feat/phase-8-ssr-capture`)**: 8.1–8.4 all complete and
