@@ -29,7 +29,7 @@
     },
     "./cli": {
       "default": {
-        "types": "./cli/index.ts",
+        "types": "./lib/typescript/module/cli/index.d.ts",
         "default": "./dist-cli/index.js"
       }
     },
@@ -41,7 +41,6 @@
   "files": [
     "src",
     "lib",
-    "cli",
     "dist-cli",
     "android",
     "ios",
