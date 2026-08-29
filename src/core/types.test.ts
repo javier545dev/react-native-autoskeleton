@@ -10,7 +10,7 @@ import type { SerializedShapeSnapshot } from './types';
 // below.
 
 describe('DegradationFlag — drift guard', () => {
-  it('enumerates exactly the 8 documented flags (plan.md §3.1)', () => {
+  it('enumerates exactly the 9 documented flags (plan.md §3.1)', () => {
     expectTypeOf<DegradationFlag>().toEqualTypeOf<
       | 'radius-unavailable'
       | 'radius-probe-failed'
@@ -20,6 +20,7 @@ describe('DegradationFlag — drift guard', () => {
       | 'clientrects-empty'
       | 'snapshot-version-mismatch'
       | 'native-module-unavailable'
+      | 'depth-cap-reached'
     >();
   });
 
@@ -33,9 +34,10 @@ describe('DegradationFlag — drift guard', () => {
       'clientrects-empty',
       'snapshot-version-mismatch',
       'native-module-unavailable',
+      'depth-cap-reached',
     ];
-    expect(flags).toHaveLength(8);
-    expect(new Set(flags).size).toBe(8);
+    expect(flags).toHaveLength(9);
+    expect(new Set(flags).size).toBe(9);
   });
 });
 

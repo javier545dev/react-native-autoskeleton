@@ -123,6 +123,60 @@ test.describe('CSS renderer — geometry (clip-path, ADR-7)', () => {
   });
 });
 
+test.describe('CSS renderer — radius clamp (defect fix, real browser CSSOM)', () => {
+  test('a badge shape (40x20, r=30 — border-radius:999px resolved) renders a real, non-empty, browser-accepted clip-path with rounded corners, not square', async ({
+    page,
+  }) => {
+    await loadHarness(page, ENTRY, `<div id="surface" style="position:relative;width:40px;height:20px;"></div>`);
+    const clipPath = await page.evaluate(() => {
+      const { createCssRenderer, createShimmerClock, encodeWire, WIRE_VERSION, composeCacheKey } =
+        window.Autoskeleton;
+      const renderer = createCssRenderer!();
+      const clock = createShimmerClock!(400);
+      const surface = document.getElementById('surface')!;
+      const key = composeCacheKey!({
+        skeletonKey: 'badge',
+        viewportWidth: 375,
+        fontScale: 1,
+        direction: 'ltr',
+        platform: 'web',
+      });
+      const snapshot = {
+        key,
+        version: WIRE_VERSION!,
+        capturedAt: Date.now(),
+        frameWidth: 40,
+        frameHeight: 20,
+        // r=30 on a 40x20 box — exactly what a badge with
+        // `border-radius: 999px` resolves to via getComputedStyle (defect
+        // repro).
+        data: encodeWire!([{ x: 0, y: 0, w: 40, h: 20, r: 30 }]),
+        degraded: [],
+      };
+      renderer.mount(surface, {
+        snapshot,
+        theme: { baseColor: '#e2e2e2', highlightColor: '#f5f5f5', defaultRadius: 4, speedMs: 400 },
+        animation: 'none',
+        clock,
+        reducedMotion: false,
+        debugOverlay: false,
+      });
+      const overlay = document.querySelector('.askl-overlay') as HTMLElement;
+      return getComputedStyle(overlay).clipPath;
+    });
+    // The browser's CSSOM still accepts the raw self-intersecting/
+    // out-of-bounds path syntactically (verified: it normalizes spacing but
+    // keeps it as a real path(), never falling back to 'none') — the defect
+    // is in the GEOMETRY it draws (out-of-bounds arc radii of 30 on a
+    // 20-tall box), which the "no arc of radius 10" check below catches.
+    expect(clipPath).not.toBe('none');
+    expect(clipPath).toContain('path(');
+    // Real arc commands with radius 10 (clamped from 30 to h/2) must be
+    // present — proves actual rounding, not a degenerate square fallback.
+    expect(clipPath).toMatch(/A\s*10\s+10/);
+  });
+});
+
 test.describe('CSS renderer — ADR-6: transform-only shimmer, no background-position', () => {
   test('the shimmer layer only animates transform (real getAnimations() inspection)', async ({ page, setup }) => {
     await setup({ animation: 'shimmer' });

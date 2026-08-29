@@ -223,6 +223,116 @@ test.describe('DOM sensor — Ignore subtree', () => {
   });
 });
 
+test.describe('DOM sensor — depth guard (unbounded recursion crash fix)', () => {
+  test('a ~3000-level singly-nested tree truncates gracefully and reports depth-cap-reached, instead of crashing the renderer', async ({
+    measure,
+  }) => {
+    const DEPTH = 3000;
+    let html = '<div style="background:#333333;width:100%;height:4px;"></div>';
+    for (let i = 0; i < DEPTH; i++) {
+      html = `<div style="background:#333333;">${html}</div>`;
+    }
+    const { shapes, degraded } = await measure(`<div id="root" style="position:relative;width:100px;">${html}</div>`);
+    // Graceful truncation, not a crash and not an uncaught RangeError: the
+    // call resolves, degraded is non-empty, and the shape list is bounded
+    // far below what a full 3000-level traversal would otherwise produce.
+    expect(degraded).toContain('depth-cap-reached');
+    expect(shapes).not.toBeNull();
+    expect(shapes!.length).toBeLessThan(50);
+  });
+
+  test('a shallow, realistically-deep tree (40 levels) is unaffected by the depth guard', async ({ measure }) => {
+    let html = '<p style="margin:0;font-size:16px;">Leaf text</p>';
+    for (let i = 0; i < 40; i++) {
+      html = `<div>${html}</div>`;
+    }
+    const { shapes, degraded } = await measure(`<div id="root" style="position:relative;width:300px;">${html}</div>`);
+    expect(shapes).toHaveLength(1);
+    expect(degraded).not.toContain('depth-cap-reached');
+  });
+});
+
+test.describe('DOM sensor — overflow clipping (text-overflow ellipsis leak fix)', () => {
+  const LONG_TITLE =
+    'A very long card title that will definitely overflow eighty pixels of available width easily';
+
+  test('an ancestor with overflow:hidden;white-space:nowrap;text-overflow:ellipsis clips the measured text shape to its own box, not the full laid-out text width', async ({
+    measure,
+  }) => {
+    const { shapes } = await measure(
+      `<div id="root" style="position:relative;width:300px;">
+         <div style="width:80px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+           <p style="margin:0;font-size:16px;">${LONG_TITLE}</p>
+         </div>
+       </div>`,
+    );
+    expect(shapes!.length).toBeGreaterThan(0);
+    for (const shape of shapes!) {
+      // Real (unclamped) laid-out text at this font size is many times wider
+      // than the 80px clipping ancestor — reproduces the reported "w:465px
+      // against 80px of visible text" defect.
+      expect(shape.w).toBeLessThanOrEqual(80);
+    }
+  });
+
+  test('overflow:hidden set directly ON the text leaf itself (no separate wrapper) also clips', async ({
+    measure,
+  }) => {
+    const { shapes } = await measure(
+      `<div id="root" style="position:relative;width:300px;">
+         <p style="margin:0;font-size:16px;width:80px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${LONG_TITLE}</p>
+       </div>`,
+    );
+    expect(shapes!.length).toBeGreaterThan(0);
+    for (const shape of shapes!) {
+      expect(shape.w).toBeLessThanOrEqual(80);
+    }
+  });
+
+  test('an overflow:auto scroll container clips the same way as overflow:hidden', async ({ measure }) => {
+    const { shapes } = await measure(
+      `<div id="root" style="position:relative;width:300px;">
+         <div style="width:80px;height:20px;white-space:nowrap;overflow:auto;">
+           <p style="margin:0;font-size:16px;">${LONG_TITLE}</p>
+         </div>
+       </div>`,
+    );
+    expect(shapes!.length).toBeGreaterThan(0);
+    for (const shape of shapes!) {
+      expect(shape.w).toBeLessThanOrEqual(80);
+    }
+  });
+
+  test('a nested overflow:hidden inside a wider overflow:auto ancestor clips to the INNER (narrower) box — intersection, not just the nearest', async ({
+    measure,
+  }) => {
+    const { shapes } = await measure(
+      `<div id="root" style="position:relative;width:300px;">
+         <div style="width:200px;overflow:auto;">
+           <div style="width:60px;overflow:hidden;white-space:nowrap;">
+             <p style="margin:0;font-size:16px;">${LONG_TITLE}</p>
+           </div>
+         </div>
+       </div>`,
+    );
+    expect(shapes!.length).toBeGreaterThan(0);
+    for (const shape of shapes!) {
+      expect(shape.w).toBeLessThanOrEqual(60);
+    }
+  });
+
+  test('no overflow ancestor: the full multi-line wrapped text is still measured, unaffected (no regression)', async ({
+    measure,
+  }) => {
+    const { shapes } = await measure(
+      `<div id="root" style="position:relative;width:300px;">
+         <p style="margin:0;font-size:14px;line-height:18px;">${LONG_TITLE}</p>
+       </div>`,
+    );
+    expect(shapes!.length).toBeGreaterThan(0);
+  });
+});
+
 test.describe('DOM sensor — budgets and observability', () => {
   test('maxShapes truncates and reports shape-cap-reached', async ({ measure }) => {
     const boxes = Array.from(

@@ -162,7 +162,63 @@ function frameOf(rect: DOMRect, rootRect: DOMRect): RelativeFrame {
   };
 }
 
+/** `true` when `el` establishes a CSS clipping context for its own content
+ *  (`overflow-x`/`overflow-y` anything other than `'visible'` — covers
+ *  `hidden`, `clip`, `auto` and `scroll` alike, so a scroll container clips
+ *  exactly the same way as `overflow:hidden`). */
+function clipsOverflow(el: Element): boolean {
+  const style = getComputedStyle(el);
+  return style.overflowX !== 'visible' || style.overflowY !== 'visible';
+}
+
+function intersectFrames(a: RelativeFrame, b: RelativeFrame): RelativeFrame {
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.w, b.x + b.w);
+  const bottom = Math.min(a.y + a.h, b.y + b.h);
+  return { x, y, w: Math.max(0, right - x), h: Math.max(0, bottom - y) };
+}
+
+/** Walks from `el` (inclusive — a leaf can carry `overflow:hidden` directly,
+ *  with no separate wrapper) up through every ancestor, INTERSECTING the box
+ *  of every clipping ancestor found, stopping at (and including) the
+ *  traversal root. Returns `undefined` when nothing on the path clips, the
+ *  overwhelmingly common case, so the fast path stays a no-op.
+ *
+ *  Why intersect every clipping ancestor rather than stop at the nearest
+ *  one: nested scrollable regions compound in real UI (a horizontally
+ *  scrollable row inside a vertically scrollable panel), so a narrower OUTER
+ *  clip must still win over a wider inner box, and vice versa — only the
+ *  intersection of all of them is the actual visible box.
+ *
+ *  Why stop at the traversal root (inclusive, not beyond): nothing outside
+ *  the measured subtree is this sensor's concern — the root's own frame is
+ *  already the coordinate origin every shape is relative to, so walking
+ *  further up the real page's DOM would clip against boxes the caller never
+ *  asked this sensor to reason about. The root itself is still checked
+ *  (`overflow:hidden` on the root legitimately clips its own descendants). */
+function computeClipBox(el: Element, ctx: TraversalContext): RelativeFrame | undefined {
+  let clip: RelativeFrame | undefined;
+  let node: Element | null = el;
+  while (node) {
+    if (clipsOverflow(node)) {
+      const rect = frameOf(node.getBoundingClientRect(), ctx.rootRect);
+      clip = clip ? intersectFrames(clip, rect) : rect;
+    }
+    if (node === ctx.root) {
+      break;
+    }
+    node = node.parentElement;
+  }
+  return clip;
+}
+
+function applyClip(frame: RelativeFrame, clip: RelativeFrame | undefined): RelativeFrame {
+  return clip ? intersectFrames(frame, clip) : frame;
+}
+
 interface TraversalContext {
+  readonly root: Element;
   readonly rootRect: DOMRect;
   readonly hints: HintRegistry;
   readonly maxShapes: number;
@@ -186,6 +242,38 @@ function overBudget(ctx: TraversalContext): boolean {
   if (performance.now() - ctx.startedAt > ctx.budgetMs) {
     ctx.truncated = true;
     ctx.degraded.add('budget-exceeded');
+    return true;
+  }
+  return false;
+}
+
+/** Hard depth bound (defect fix: unbounded recursion crashed the renderer on
+ *  a ~3000-level singly-nested tree — real trees get this deep: nested
+ *  comment threads, recursive tree/list components). `overBudget()` alone
+ *  cannot prevent this: it is TIME-based and only stops FUTURE recursive
+ *  calls, so a tree that blows the call stack (or overwhelms the renderer)
+ *  in well under `budgetMs` of wall-clock time is never caught by it. 300 is
+ *  generous headroom over any realistically deep real-world UI tree (deeply
+ *  nested comment threads and recursive components rarely exceed a few dozen
+ *  levels) while staying far below any stack-overflow/renderer-crash risk. A
+ *  fixed internal constant, not a `SensorOptions` field, since this is a
+ *  safety bound rather than a per-consumer tunable, and keeps the fix
+ *  scoped to the web sensor (native sensors are a separate traversal). */
+const MAX_TRAVERSAL_DEPTH = 300;
+
+/** Depth guard, checked at the very top of `traverse()` — mirrors
+ *  `overBudget()`'s placement and truncation contract exactly (same
+ *  `ctx.truncated` flag, same `ctx.degraded` set, same "stop everything"
+ *  semantics the caller's `if (ctx.truncated) break;` loops already handle),
+ *  so a runaway subtree degrades the same way every other limit in this
+ *  sensor does: truncate and raise a flag the caller can see, never throw. */
+function overDepth(ctx: TraversalContext, depth: number): boolean {
+  if (ctx.truncated) {
+    return true;
+  }
+  if (depth > MAX_TRAVERSAL_DEPTH) {
+    ctx.truncated = true;
+    ctx.degraded.add('depth-cap-reached');
     return true;
   }
   return false;
@@ -239,6 +327,13 @@ function leafShape(el: Element, ctx: TraversalContext, source: ShapeSource, styl
  *  regardless of the leaf element's own `display`. This is real DOM geometry
  *  jsdom cannot produce at all (jsdom #653, #3729), on either API. */
 function textLeafShapes(el: Element, ctx: TraversalContext): boolean {
+  // Computed once per leaf (invariant across every line box below), not
+  // per-line: `Range.getClientRects()` reports the text's LAID-OUT box, not
+  // its visually clipped box — an `overflow:hidden` + `text-overflow:
+  // ellipsis` container reports its full untruncated text width even though
+  // only a fraction is visible. Every pushed frame below is intersected
+  // against this clip box before becoming a shape.
+  const clip = computeClipBox(el, ctx);
   const range = document.createRange();
   range.selectNodeContents(el);
   const rects = range.getClientRects();
@@ -260,7 +355,7 @@ function textLeafShapes(el: Element, ctx: TraversalContext): boolean {
       if (overBudget(ctx)) break;
       // synthesizeLines never produces a degenerate frame, so any `false`
       // here is unambiguously the maxShapes cap.
-      if (!pushShape(ctx, line, 0, 'synthetic-line', 'measured')) break;
+      if (!pushShape(ctx, applyClip(line, clip), 0, 'synthetic-line', 'measured')) break;
       pushedAny = true;
     }
     return pushedAny;
@@ -268,7 +363,7 @@ function textLeafShapes(el: Element, ctx: TraversalContext): boolean {
 
   for (let i = 0; i < rects.length; i++) {
     if (overBudget(ctx)) break;
-    const frame = frameOf(rects[i]!, ctx.rootRect);
+    const frame = applyClip(frameOf(rects[i]!, ctx.rootRect), clip);
     const pushed = pushShape(ctx, frame, 0, 'text', 'measured');
     if (pushed) {
       pushedAny = true;
@@ -276,8 +371,9 @@ function textLeafShapes(el: Element, ctx: TraversalContext): boolean {
       // maxShapes cap reached — stop entirely.
       break;
     }
-    // else: a degenerate rect (e.g. the zero-width filler `Range` emits at a
-    // `\n`) — skip it and keep scanning the remaining line rects.
+    // else: a degenerate rect — either the zero-width filler `Range` emits
+    // at a `\n`, or (now) a line box fully clipped away by an ancestor's
+    // overflow — skip it and keep scanning the remaining line rects.
   }
   return pushedAny;
 }
@@ -287,8 +383,8 @@ function textLeafShapes(el: Element, ctx: TraversalContext): boolean {
  *  resolution rule (spec §1.1) needs: a non-transparent container with
  *  detected leaves omits its own shape; with none, it renders its own frame
  *  instead. */
-function traverse(el: Element, ctx: TraversalContext): boolean {
-  if (overBudget(ctx)) {
+function traverse(el: Element, ctx: TraversalContext, depth: number = 0): boolean {
+  if (overBudget(ctx) || overDepth(ctx, depth)) {
     return false;
   }
   if (isIgnored(el, ctx.hints)) {
@@ -308,7 +404,7 @@ function traverse(el: Element, ctx: TraversalContext): boolean {
 
   let childContributed = false;
   for (const child of Array.from(el.children)) {
-    if (traverse(child, ctx)) {
+    if (traverse(child, ctx, depth + 1)) {
       childContributed = true;
     }
     if (ctx.truncated) {
@@ -369,6 +465,7 @@ export function createDomSensor(): Sensor<HTMLElement> {
       performance.mark('autoskeleton-traversal-start');
       const startedAt = performance.now();
       const ctx: TraversalContext = {
+        root: target,
         rootRect,
         hints: options.hints,
         maxShapes: options.maxShapes,

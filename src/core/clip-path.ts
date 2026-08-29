@@ -33,6 +33,41 @@ function resolveRadius(r: number, defaultRadius: number): number {
   return r === -1 ? defaultRadius : r;
 }
 
+/** Clamps a resolved radius to at most half the shorter side. Defect fix:
+ *  CSS `border-radius` legitimately reports a raw value larger than the box
+ *  — `border-radius: 999px` on a 40x20 badge resolves to `r=30` via
+ *  `getComputedStyle`, UNCLAMPED, because the browser only clamps radii
+ *  visually at paint time, never in the computed-style value it returns.
+ *  This is not a measurement bug (the raw value is faithfully reported, and
+ *  every sensor across the codebase — web, iOS, Android — reports its raw
+ *  measured radius the same way), so the fix belongs here, at the single
+ *  point that actually turns `(w, h, r)` into path geometry, exactly
+ *  mirroring the pattern every OTHER renderer in this codebase already
+ *  applies at its own draw call site: `ios/AutoskeletonRendererTier1.swift`,
+ *  `ios/AutoskeletonDebugOverlay.swift`, `android/.../
+ *  AutoskeletonRendererTier1.kt`, `android/.../AutoskeletonDebugOverlay.kt`,
+ *  and `src/native/tier2/SkiaRenderer.tsx` all already compute exactly
+ *  `min(shape.r, min(shape.w, shape.h) / 2)` before drawing. This module was
+ *  the one renderer/geometry-builder in the codebase that had never adopted
+ *  that established clamp — an inconsistency, not a new pattern.
+ *
+ *  This is also the single correct home to fix the web + SSR rendering
+ *  defect in ONE place: `buildClipPath` (and therefore this function) is
+ *  reused verbatim by BOTH the live web CSS renderer
+ *  (`src/web/css-renderer.ts`'s `applyGeometry`) AND the build-time SSR
+ *  capture CLI (`cli/media-bundle.ts`), per ADR-7 — so clamping here, and
+ *  only here, covers every web/SSR consumer of a shape's radius, including
+ *  radii that originated from the typed `<AutoSkeleton.Hint radius={...}>`
+ *  channel (`src/web/Hint.tsx`), since a hint radius flows through the exact
+ *  same `ShapeInfo.r` -> wire -> `ClipPathRect.r` pipeline as a
+ *  measured/CSS radius. `src/web/dom-sensor.ts`'s `parseRadius` deliberately
+ *  keeps reporting the raw, unclamped value — clamping there too would
+ *  duplicate this clamp for no benefit and would break from the
+ *  measure-raw/clamp-at-draw convention every other sensor already follows. */
+function clampRadius(radius: number, w: number, h: number): number {
+  return Math.min(radius, Math.min(w, h) / 2);
+}
+
 function mirrorForDirection(x: number, w: number, direction: Direction, containerWidth: number): number {
   return direction === 'rtl' ? containerWidth - (x + w) : x;
 }
@@ -60,7 +95,7 @@ function rectPathData(x: number, y: number, w: number, h: number, r: number): st
  *  for RTL and substituting `options.defaultRadius` for any `r === -1`. */
 export function buildClipPath(rects: readonly ClipPathRect[], options: ClipPathOptions): string {
   const subpaths = rects.map((rect) => {
-    const radius = resolveRadius(rect.r, options.defaultRadius);
+    const radius = clampRadius(resolveRadius(rect.r, options.defaultRadius), rect.w, rect.h);
     const x = mirrorForDirection(rect.x, rect.w, options.direction, options.containerWidth);
     return rectPathData(x, rect.y, rect.w, rect.h, radius);
   });
