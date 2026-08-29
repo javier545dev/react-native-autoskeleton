@@ -139,6 +139,9 @@
     },
     "uniwind": {
       "optional": true
+    },
+    "react-native": {
+      "optional": true
     }
   },
   "engines": {

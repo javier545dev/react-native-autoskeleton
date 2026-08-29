@@ -256,6 +256,40 @@ describe('RISK-5 packaging detector (entries.test.ts) — RED until 5.6', () => 
     });
   });
 
+  describe('no non-optional peer outside the allowlist (RISK-5, orchestrator-found defect)', () => {
+    // Sibling of the runtime-`dependencies` guard below, one level up.
+    // npm 7+ AUTO-INSTALLS any peerDependency not marked optional, so a
+    // required peer is a forced download, not merely a declared expectation.
+    //
+    // `react-native` was REQUIRED, which meant a web-only consumer (Vite,
+    // Next.js) downloaded React Native, the Hermes compiler, react-devtools
+    // and Babel to render skeletons in a browser. Measured: 226 packages /
+    // 166 MB, against 1 package / 3.3 MB for the package alone.
+    //
+    // Only `react` genuinely belongs here: it is the one dependency every
+    // consumer of this library has on every platform. Everything else —
+    // react-native, Skia, Reanimated, uniwind, the capture CLI's playwright —
+    // is platform- or feature-specific and must be `optional`, so npm leaves
+    // the choice to the consumer. The web entry's import graph is already
+    // asserted above to contain no native specifier, so a web consumer
+    // genuinely never needs react-native present.
+    const ALLOWED_REQUIRED_PEERS = ['react'];
+
+    it('every peerDependency outside the allowlist is marked optional', () => {
+      const peers = Object.keys(packageJson.peerDependencies ?? {});
+      const meta = (packageJson as { peerDependenciesMeta?: Record<string, { optional?: boolean }> })
+        .peerDependenciesMeta ?? {};
+      const requiredPeers = peers.filter(
+        (name) => meta[name]?.optional !== true && !ALLOWED_REQUIRED_PEERS.includes(name),
+      );
+      expect(
+        requiredPeers,
+        `these peers are not marked optional, so npm 7+ force-installs them for every consumer ` +
+          `regardless of platform: ${requiredPeers.join(', ')}`,
+      ).toEqual([]);
+    });
+  });
+
   describe('no runtime `dependencies` footprint (RISK-5, orchestrator-found defect)', () => {
     // Root cause: `@playwright/test` and `esbuild` — real runtime needs of
     // ONLY the capture CLI (`cli/`), never of the library's own web/native
