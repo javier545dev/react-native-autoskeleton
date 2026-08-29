@@ -76,4 +76,55 @@ class AutoskeletonUiThreadDispatcherTest {
         assertNull(result)
         assertTrue("waited far longer than the requested timeout: ${elapsedMs}ms", elapsedMs < 1000)
     }
+
+    // Adversarial-review defect (2026-08-28): the test above only ever
+    // asserted what the CALLER observes (a prompt `null`). It never idled
+    // the looper afterward to let the ABANDONED posted block actually run
+    // -- so nothing in this suite ever caught that `latch.await`'s return
+    // value was discarded, the posted Runnable was never told the caller
+    // gave up, and `result` was read across threads with no visibility
+    // guarantee (a plain, non-`@Volatile` `var`). This is that missing
+    // coverage: it proves the block DOES still run (Android's
+    // `UiThreadUtil.runOnUiThread` gives no handle to cancel an
+    // already-posted Runnable), but now gets told it was abandoned via a
+    // cooperative `isCancelled` check it can consult before doing anything
+    // observable (e.g. a cache write) -- see `AutoskeletonModule
+    // .computeWireArray`'s own guard for the production consequence.
+    @Test
+    fun runAndWaitLetsAnAbandonedBlockObserveCancellationOnceItFinallyRuns() {
+        val observedCancelledDuringBlock = AtomicReference<Boolean?>(null)
+        val thread = Thread {
+            AutoskeletonSystemUiThreadDispatcher.runAndWait(50L) { isCancelled ->
+                // Only reachable once the main looper is later idled --
+                // well after the caller below already timed out.
+                observedCancelledDuringBlock.set(isCancelled())
+            }
+        }
+        thread.start()
+        thread.join(1000) // the caller must already have given up (50ms timeout)
+
+        assertNull("the abandoned block must not have run yet", observedCancelledDuringBlock.get())
+
+        shadowOf(Looper.getMainLooper()).idle() // let the abandoned block actually run
+
+        assertEquals(
+            "the abandoned block must observe that its caller already timed out",
+            true,
+            observedCancelledDuringBlock.get(),
+        )
+    }
+
+    @Test
+    fun runAndWaitReportsIsCancelledFalseWhenTheBlockCompletesWithinTheTimeout() {
+        // Negative control for the test above: the happy path must never
+        // report a false-positive cancellation.
+        val observedCancelledDuringBlock = AtomicReference<Boolean?>(null)
+        val result = AutoskeletonSystemUiThreadDispatcher.runAndWait(200L) { isCancelled ->
+            observedCancelledDuringBlock.set(isCancelled())
+            "value"
+        }
+
+        assertEquals("value", result)
+        assertEquals(false, observedCancelledDuringBlock.get())
+    }
 }

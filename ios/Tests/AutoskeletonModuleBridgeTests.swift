@@ -206,6 +206,45 @@ final class AutoskeletonModuleBridgeTests: XCTestCase {
         XCTAssertEqual(result[5], 12, "no matching hint -> real layer.cornerRadius stands")
     }
 
+    // MARK: - Adversarial-review defect (2026-08-28): a timed-out `getShapes`
+    // used to abandon its main-thread work rather than cancel it, and that
+    // abandoned work went on to write into the SHARED native shape cache
+    // after the caller had already given up -- on a recycled list, that
+    // `cacheKey` may by then belong to a different row.
+
+    func testComputeWireArrayDoesNotWriteToTheCacheWhenIsCancelledReturnsTrue() throws {
+        let fixture = try SyntheticHierarchyBuilder.loadFixture(named: "nested-offsets")
+        let (_, root) = SyntheticHierarchyBuilder.build(fixture)
+        let cache = freshCache()
+        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor(), shapeCache: cache)
+
+        // The traversal itself still runs (it cannot be stopped mid-flight
+        // either -- see `AutoskeletonSystemUiThreadDispatcher`'s own doc
+        // comment), but the observable side effect -- the cache write --
+        // must be skipped once the caller has already given up.
+        let result = bridge.computeWireArray(
+            view: root, cacheKey: "recycled-cache-key", config: defaultConfig, isCancelled: { true }
+        )
+
+        XCTAssertNil(result, "a cancelled computation must not hand back a result to write anywhere else either")
+        XCTAssertNil(cache.get("recycled-cache-key"), "abandoned work must not poison the shared cache")
+    }
+
+    func testComputeWireArrayStillWritesToTheCacheWhenIsCancelledReturnsFalse() throws {
+        // Negative control / default-argument regression guard: omitting
+        // `isCancelled` (every pre-existing call site in this file) must
+        // keep writing to the cache exactly as before.
+        let fixture = try SyntheticHierarchyBuilder.loadFixture(named: "nested-offsets")
+        let (_, root) = SyntheticHierarchyBuilder.build(fixture)
+        let cache = freshCache()
+        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor(), shapeCache: cache)
+
+        let result = bridge.computeWireArray(view: root, cacheKey: "normal-cache-key", config: defaultConfig)
+
+        XCTAssertNotNil(result)
+        XCTAssertEqual(cache.get("normal-cache-key"), result)
+    }
+
     // MARK: - AutoskeletonNativeShapeCache
 
     func testCacheGetReturnsNilForAnUnknownKey() {
