@@ -9,13 +9,21 @@
 
 import type { BenchmarkResults, CompareVerdict, RegressionViolation } from './types';
 
-const METRICS: readonly (keyof BenchmarkResults)[] = [
+// Narrowed to the literal numeric metric keys (`as const satisfies`) rather
+// than the wider `readonly (keyof BenchmarkResults)[]` this used to be —
+// `BenchmarkResults` gained a boolean `droppedFramesMeasured` field
+// (adversarial-review fix, `check-budgets.ts`'s frame-drop gate), and a
+// widened `metric` type would let `baseline[metric]`/`candidate[metric]`
+// below silently infer `number | boolean`, breaking the ratio arithmetic.
+// `droppedFramesMeasured` is deliberately excluded from ratio comparison —
+// it is a measured/unmeasured flag, not a metric with a budget of its own.
+const METRICS = [
   'traversalP95Ms',
   'cacheLookupP95Ms',
   'serializationP95Ms',
   'droppedFrames',
   'webEntryGzipBytes',
-];
+] as const satisfies readonly (keyof BenchmarkResults)[];
 
 export function compareResults(
   baseline: BenchmarkResults,

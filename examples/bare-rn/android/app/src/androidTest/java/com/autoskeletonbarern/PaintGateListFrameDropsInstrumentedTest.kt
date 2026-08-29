@@ -21,8 +21,22 @@ import org.junit.runner.RunWith
  * Task 9.1 (tasks.md Phase 9) — REQ-OBS-CI-1's "shimmer frame drops while
  * scrolling a 50-cell list", promoted from `PaintGateListInstrumentedTest`'s
  * (task 6.4) purely visual/correctness assertions into a dedicated timing
- * benchmark against `benchmarks/budgets.json`'s `droppedFramesPerScroll`
- * budget (0).
+ * benchmark.
+ *
+ * CORRECTED CLAIM (adversarial-review finding): this test does NOT read
+ * `benchmarks/budgets.json`'s `droppedFramesPerScroll` budget, and no
+ * earlier version of it ever did — the assertion below is a SELF-CONTAINED
+ * on-device ratio: dropped frames must stay at or under 5% of this run's own
+ * sampled frames, relative to the MEDIAN sampled frame duration (NOT an
+ * assumed fixed Hz — see `DROPPED_FRAME_MULTIPLIER`'s own comment). This
+ * runs in a separate Android-emulator CI job
+ * (`bench-android-frame-drops-and-memory` in
+ * `.github/workflows/benchmarks.yml`) from the Node/Playwright benchmark
+ * pipeline that reads `budgets.json`, and its result does not currently
+ * feed back into that pipeline's JSON (`benchmarks/run.ts` reports
+ * `droppedFramesMeasured: false` for that reason — see its own doc
+ * comment). This test is nonetheless a genuine, independently-failing gate
+ * on its own terms.
  *
  * Targets the SAME `examples/bare-rn/App.tsx` `PaintGateListScreen` fixture
  * (a real `@shopify/flash-list` `FlashList`, ~26 concurrently-loading
@@ -96,9 +110,11 @@ class PaintGateListFrameDropsInstrumentedTest {
      * frame durations (via `Choreographer.FrameCallback`, the SAME
      * scheduling primitive `AutoskeletonRendererTier1`'s shimmer runs on)
      * across a sustained scroll of the 50-cell reference list, and asserts
-     * the dropped-frame count stays within `benchmarks/budgets.json`'s
-     * `droppedFramesPerScroll` budget (0 — "fails if measured fps drops
-     * below target for more than 5% of sampled frames").
+     * the dropped-frame ratio stays at or under 5% of this run's own
+     * sampled frames (NFR-1: "fails if measured fps drops below target for
+     * more than 5% of sampled frames") — a self-contained on-device
+     * assertion, NOT a read of `benchmarks/budgets.json` (see this class's
+     * own doc comment for the corrected claim and why).
      */
     @Test
     fun droppedFramesDuringFiftyCellScrollStaysWithinBudget() {

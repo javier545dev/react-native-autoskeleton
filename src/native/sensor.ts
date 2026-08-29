@@ -23,7 +23,9 @@
 
 import type { HintEntry } from '../core/hint-registry';
 import type { HintRegistry, Sensor, SensorOptions, SensorResult } from '../core/contracts';
+import { WIRE_HEADER_SLOTS, WIRE_STRIDE } from '../core/types';
 import type { ShapeInfo, ShapeSnapshot } from '../core/types';
+import { WireMalformedLengthError } from '../core/wire';
 import type { AutoskeletonHintEntry } from './NativeAutoskeleton';
 import type { Spec } from './NativeAutoskeleton';
 import { fetchShapesOnce, type WireBridgeTracing } from './wire-bridge';
@@ -115,10 +117,25 @@ export function createNativeSensor(options: CreateNativeSensorOptions): Sensor<N
         return null;
       }
 
-      const n = (fetched.data.length - 1) / 5;
+      // Adversarial-review defect: this computed `n` with no assertion that
+      // `(fetched.data.length - WIRE_HEADER_SLOTS) % WIRE_STRIDE === 0` — a
+      // truncated native payload (e.g. a header plus a partial shape)
+      // yielded a FRACTIONAL `n`, and the loop below then read past the end
+      // of the array, propagating `NaN` geometry silently. The `!`
+      // non-null assertions on `fetched.data[off]` are compile-time only
+      // and catch nothing at runtime; this congruence check is the actual
+      // runtime guard, mirroring `core/wire.ts`'s `decodeWire` (same error
+      // class, same "malformed wire buffer" contract — this is native's own
+      // hand-rolled decode of the identical wire layout, not a call through
+      // `decodeWire` itself, since native's payload has no version slot to
+      // negotiate the way a persisted/SSR snapshot does).
+      const n = (fetched.data.length - WIRE_HEADER_SLOTS) / WIRE_STRIDE;
+      if (!Number.isInteger(n) || n < 0) {
+        throw new WireMalformedLengthError(fetched.data.length, fetched.data.byteOffset);
+      }
       const shapesRaw: { x: number; y: number; w: number; h: number; r: number }[] = [];
       for (let i = 0; i < n; i++) {
-        const off = 1 + i * 5;
+        const off = WIRE_HEADER_SLOTS + i * WIRE_STRIDE;
         shapesRaw.push({
           x: fetched.data[off]!,
           y: fetched.data[off + 1]!,

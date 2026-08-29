@@ -24,11 +24,32 @@ import { benchmarkWebSensorTraversal, measureWebEntryGzip } from './support/web-
 const REFERENCE_SHAPE_COUNT = 60; // spec.md NFR-3/NFR-4: budgets are stated at <=60 shapes.
 const ITERATIONS = 500;
 
-export async function runAllBenchmarks(): Promise<BenchmarkResults> {
+export interface RunAllBenchmarksOptions {
+  /** Adversarial-review fix (droppedFrames "0 > 0, can never fail" gate):
+   *  this Node/Playwright-only script has no live device to measure real
+   *  dropped frames against (see the honest scope note below), so by
+   *  default `droppedFrames`/`droppedFramesMeasured` stay an explicit
+   *  UNMEASURED placeholder that `check-budgets.ts` refuses to compare
+   *  against budget at all — never a silent `0` that happens to equal the
+   *  budget. This option is a dependency-injection seam, not a production
+   *  CI input path: it exists so a test can exercise the REAL
+   *  `runAllBenchmarks()` -> `checkAbsoluteBudgets()` pipeline with a
+   *  genuine measurement and prove the gate can fail, without fabricating
+   *  an on-device measurement inside a Node script. Wiring a real
+   *  cross-job CI handoff from `PaintGateListFrameDropsInstrumentedTest.kt`
+   *  into this field remains open (see this file's own header note) —
+   *  deliberately not built this session (no live CI runner available to
+   *  verify cross-job artifact plumbing against).
+   */
+  readonly measuredDroppedFrames?: number;
+}
+
+export async function runAllBenchmarks(options: RunAllBenchmarksOptions = {}): Promise<BenchmarkResults> {
   const cacheLookup = benchmarkCacheLookup({ shapeCount: REFERENCE_SHAPE_COUNT, iterations: ITERATIONS });
   const serialization = benchmarkSerialization({ shapeCount: REFERENCE_SHAPE_COUNT, iterations: ITERATIONS });
   const webTraversal = await benchmarkWebSensorTraversal({ shapeCount: REFERENCE_SHAPE_COUNT, iterations: 100 });
   const gzip = await measureWebEntryGzip();
+  const droppedFramesMeasured = options.measuredDroppedFrames !== undefined;
 
   return {
     // Honest scope note (tasks.md 9.1 DoD / apply-progress report): this
@@ -41,11 +62,21 @@ export async function runAllBenchmarks(): Promise<BenchmarkResults> {
     traversalP95Ms: webTraversal.p95Ms,
     cacheLookupP95Ms: cacheLookup.p95Ms,
     serializationP95Ms: serialization.p95Ms,
-    // Honest scope note: no dropped-frame measurement runs in this script —
-    // see the Android instrumented frame-drop test (task 9.1's native line
-    // item) for the one genuinely on-device measurement this session took,
-    // run separately (androidTest, not Node/Playwright).
-    droppedFrames: 0,
+    // Honest scope note, REVISED (adversarial-review fix): no dropped-frame
+    // measurement runs in THIS script by default — see the Android
+    // instrumented frame-drop test (task 9.1's native line item,
+    // `PaintGateListFrameDropsInstrumentedTest.kt`) for the one genuinely
+    // on-device measurement this session took, run separately (androidTest,
+    // not Node/Playwright), gated independently by its own hard assertion.
+    // Previously this `0` was compared directly against
+    // `budgets.json`'s `droppedFramesPerScroll` (also `0`) by
+    // `check-budgets.ts`, making that comparison STRUCTURALLY `0 > 0` —
+    // always false, a gate that could never fail. `droppedFramesMeasured`
+    // now makes the "not measured" state explicit and loud:
+    // `check-budgets.ts` refuses to evaluate `droppedFrames` against budget
+    // unless this is `true`.
+    droppedFrames: options.measuredDroppedFrames ?? 0,
+    droppedFramesMeasured,
     webEntryGzipBytes: gzip.gzipBytes,
   };
 }

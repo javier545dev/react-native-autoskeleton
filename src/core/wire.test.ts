@@ -87,3 +87,41 @@ describe('version negotiation', () => {
     expect(decoded.degraded).not.toContain('snapshot-version-mismatch');
   });
 });
+
+// Adversarial-review defect: `foundVersion > WIRE_VERSION` and
+// `foundVersion < WIRE_VERSION` are BOTH false for NaN under IEEE-754, so a
+// corrupted version slot previously fell through every branch untouched —
+// `decodeWire(new Float32Array([NaN, 1, 2, 3, 4, 5]))` returned
+// `{ version: NaN, shapes: [...], degraded: [] }` with no throw and no
+// `snapshot-version-mismatch` flag, exactly the "buffer that decodes to
+// silent garbage rather than an error" the versioned schema exists to
+// prevent. `Number.isInteger(NaN)` and `Number.isInteger(Infinity)` are both
+// `false`, so `!Number.isInteger(foundVersion) || foundVersion < 0` rejects
+// NaN, +/-Infinity, negative and fractional slots in one check, without a
+// separate `Number.isFinite` call.
+describe('corrupted version slot rejection', () => {
+  it('rejects a NaN version slot instead of silently returning version:NaN with an empty degraded array', () => {
+    const data = new Float32Array([NaN, 1, 2, 3, 4, 5]);
+    expect(() => decodeWire(data)).toThrow(WireMalformedLengthError);
+  });
+
+  it('rejects a negative version slot', () => {
+    const data = new Float32Array([-1, 1, 2, 3, 4, 5]);
+    expect(() => decodeWire(data)).toThrow(WireMalformedLengthError);
+  });
+
+  it('rejects a fractional (non-integer) version slot', () => {
+    const data = new Float32Array([1.5, 1, 2, 3, 4, 5]);
+    expect(() => decodeWire(data)).toThrow(WireMalformedLengthError);
+  });
+
+  it('rejects a +Infinity version slot', () => {
+    const data = new Float32Array([Infinity, 1, 2, 3, 4, 5]);
+    expect(() => decodeWire(data)).toThrow(WireMalformedLengthError);
+  });
+
+  it('still accepts version 0 (a valid non-negative integer, not to be confused with "corrupted")', () => {
+    const data = encodeWire([shape(0)], 0);
+    expect(() => decodeWire(data)).not.toThrow();
+  });
+});

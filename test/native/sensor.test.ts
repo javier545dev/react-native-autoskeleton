@@ -6,6 +6,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { ShapeCacheKey } from '../../src/core/cache-key';
+import { WireMalformedLengthError } from '../../src/core/wire';
 import { createEmptyHintRegistry, createNativeSensor } from '../../src/native/sensor';
 
 function wireArrayFor(shapes: readonly [number, number, number, number, number][]): number[] {
@@ -144,6 +145,37 @@ describe('createNativeSensor (task 5.1)', () => {
     expect(result!.snapshot.frameHeight).toBe(812);
     expect(result!.snapshot.data).toBeInstanceOf(Float32Array);
     expect(Array.from(result!.snapshot.data)).toEqual([1, 1, 2, 3, 4, 5, 10, 20, 30, 40, 0]);
+  });
+
+  // Adversarial-review defect: `const n = (fetched.data.length - 1) / 5` had
+  // no assertion that `(fetched.data.length - 1) % 5 === 0` — a truncated
+  // native payload (e.g. a header plus a partial shape) yielded a
+  // FRACTIONAL `n`, and the loop below it then read past the shapes the
+  // buffer actually holds, propagating `NaN` geometry silently. The
+  // non-null assertions (`fetched.data[off]!`) are compile-time only and
+  // catch nothing at runtime.
+  it('throws WireMalformedLengthError instead of computing a fractional shape count from a truncated wire array', () => {
+    // 4 elements total: 1 version slot + 3 stray values — not a whole
+    // 5-wide shape. (4 - 1) / 5 = 0.6.
+    const getShapes = vi.fn().mockReturnValue([1, 0, 0, 10]);
+    const sensor = createNativeSensor({
+      platform: 'ios',
+      getNativeModule: () => ({ getShapes, evictShapes: vi.fn() }),
+    });
+    expect(() => sensor.measure({ reactTag: 1, frameWidth: 100, frameHeight: 50 }, OPTIONS)).toThrow(
+      WireMalformedLengthError,
+    );
+  });
+
+  it('does not throw for a genuinely well-formed wire array (regression guard on the new congruence check)', () => {
+    const getShapes = vi.fn().mockReturnValue(wireArrayFor([[0, 0, 10, 10, 2], [5, 5, 8, 8, 1]]));
+    const sensor = createNativeSensor({
+      platform: 'ios',
+      getNativeModule: () => ({ getShapes, evictShapes: vi.fn() }),
+    });
+    expect(() =>
+      sensor.measure({ reactTag: 1, frameWidth: 100, frameHeight: 50 }, OPTIONS),
+    ).not.toThrow();
   });
 
   it('returns null when the traversal target was not laid out yet (native reports an empty array)', () => {

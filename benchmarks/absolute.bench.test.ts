@@ -50,4 +50,51 @@ describe('CI benchmark suite — pinned-image absolute assertion (REQ-OBS-CI-1)'
     },
     60_000,
   );
+
+  // Adversarial-review defect: `run.ts` hardcoded `droppedFrames: 0` and
+  // `budgets.json`'s `droppedFramesPerScroll` is `0`, so
+  // `checkAbsoluteBudgets`'s `results.droppedFrames > budgets
+  // .droppedFramesPerScroll` was STRUCTURALLY `0 > 0` — always false. The
+  // ONLY prior test coverage of this comparison (`check-budgets.test.ts`'s
+  // "flags droppedFrames > 0") exercised `checkAbsoluteBudgets` in
+  // isolation against a hand-built object, never the REAL
+  // `run.ts` -> `check-budgets.ts` pipeline — so it gave false confidence
+  // that the gate itself could fail. These two tests exercise the real
+  // pipeline: `runAllBenchmarks()` for real (real Node/Playwright
+  // measurements for every other metric), with a genuine droppedFrames
+  // measurement injected through the same seam a real CI job would use.
+  describe('frame-drop gate — proven capable of failing through the REAL run.ts -> check-budgets.ts pipeline', () => {
+    it(
+      'flags droppedFrames when this run genuinely measured a value over budget',
+      async () => {
+        const budgets = loadBudgets();
+        const overBudget = budgets.droppedFramesPerScroll + 1;
+
+        const results = await runAllBenchmarks({ measuredDroppedFrames: overBudget });
+        expect(results.droppedFramesMeasured).toBe(true);
+        expect(results.droppedFrames).toBe(overBudget);
+
+        const violations = checkAbsoluteBudgets(results);
+        const droppedFramesViolation = violations.find((v) => v.metric === 'droppedFrames');
+        expect(
+          droppedFramesViolation,
+          'the frame-drop gate did not fire for a genuine over-budget measurement — it is still incapable of failing',
+        ).toBeDefined();
+        expect(droppedFramesViolation).toMatchObject({ measured: overBudget, budget: budgets.droppedFramesPerScroll });
+      },
+      60_000,
+    );
+
+    it(
+      'does NOT evaluate droppedFrames against budget when this run never measured it (honest skip, not a silent placeholder pass)',
+      async () => {
+        const results = await runAllBenchmarks();
+        expect(results.droppedFramesMeasured).toBe(false);
+
+        const violations = checkAbsoluteBudgets(results);
+        expect(violations.some((v) => v.metric === 'droppedFrames')).toBe(false);
+      },
+      60_000,
+    );
+  });
 });

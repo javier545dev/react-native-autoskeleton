@@ -16,6 +16,7 @@ function passingResults(): BenchmarkResults {
     cacheLookupP95Ms: 0.1,
     serializationP95Ms: 0.1,
     droppedFrames: 0,
+    droppedFramesMeasured: true,
     webEntryGzipBytes: 7950,
   };
 }
@@ -50,9 +51,25 @@ describe('checkAbsoluteBudgets', () => {
     expect(violations.some((v) => v.metric === 'webEntryGzipBytes')).toBe(false);
   });
 
-  it('flags droppedFrames > 0 (NFR-1 zero-tolerance)', () => {
-    const violations = checkAbsoluteBudgets({ ...passingResults(), droppedFrames: 1 });
+  it('flags droppedFrames > 0 when this run genuinely measured it (NFR-1 zero-tolerance)', () => {
+    const violations = checkAbsoluteBudgets({ ...passingResults(), droppedFrames: 1, droppedFramesMeasured: true });
     expect(violations.some((v) => v.metric === 'droppedFrames')).toBe(true);
+  });
+
+  // Adversarial-review defect: `run.ts` hardcoded `droppedFrames: 0` and
+  // `budgets.json`'s `droppedFramesPerScroll` is `0`, so
+  // `results.droppedFrames > budgets.droppedFramesPerScroll` was
+  // STRUCTURALLY `0 > 0` — always false, a gate that could never fail. This
+  // test proves the fix does not merely relocate that defect: an unmeasured
+  // placeholder must never be compared against budget at all, even if the
+  // placeholder value itself would (accidentally) exceed it.
+  it('does NOT flag droppedFrames when this run never measured it, even if the placeholder value would exceed budget on its own', () => {
+    const violations = checkAbsoluteBudgets({
+      ...passingResults(),
+      droppedFrames: 5,
+      droppedFramesMeasured: false,
+    });
+    expect(violations.some((v) => v.metric === 'droppedFrames')).toBe(false);
   });
 
   it('flags serialization exceeding 25% of the traversal budget even if under its own absolute ms figure (ADR-1 exit criterion)', () => {
