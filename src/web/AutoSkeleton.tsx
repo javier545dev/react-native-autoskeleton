@@ -21,7 +21,7 @@
 
 import type { ReactNode } from 'react';
 import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { bucketWidth, composeCacheKey, quantizeFontScale } from '../core/cache-key';
+import { bucketWidth, composeCacheKey } from '../core/cache-key';
 import type { RendererHandle, SkeletonTheme } from '../core/contracts';
 import { createHandoffController } from '../core/handoff';
 import type { HandoffController, SkeletonPipelinePhase } from '../core/handoff';
@@ -644,7 +644,9 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
     skeletonKey: props.skeletonKey,
     itemType: props.itemType,
     viewportWidth: widthBucket,
-    fontScale: quantizeFontScale(1),
+    // Constant, not a reading: web has no `PixelRatio.getFontScale()`
+    // analogue. Proven in test/web/font-scale.spec.ts.
+    fontScale: 1,
     direction,
     platform: 'web',
   });

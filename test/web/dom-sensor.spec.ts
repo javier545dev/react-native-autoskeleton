@@ -11,7 +11,7 @@
 
 import path from 'node:path';
 import { expect, test as base } from '@playwright/test';
-import { loadHarness } from './helpers/page';
+import { expectCloseTo, loadHarness } from './helpers/page';
 
 const ENTRY = path.join(__dirname, 'helpers/dom-sensor-entry.ts');
 
@@ -41,7 +41,7 @@ const test = base.extend<{ measure: (bodyHtml: string, opts?: MeasureOpts) => Pr
           collectDebugSidecars: options.collectDebugSidecars ?? true,
         });
         if (result === null) {
-          return { shapes: null, degraded: [], traversalMs: 0, hasProfileMarks: false };
+          return { shapes: null, frame: null, degraded: [], traversalMs: 0, hasProfileMarks: false };
         }
         const decoded = decodeWire!(result.snapshot.data);
         const marks = performance.getEntriesByName('autoskeleton-traversal', 'measure');
@@ -50,6 +50,7 @@ const test = base.extend<{ measure: (bodyHtml: string, opts?: MeasureOpts) => Pr
           : undefined;
         return {
           shapes: decoded.shapes.map((s) => ({ x: s.x, y: s.y, w: s.w, h: s.h, r: s.r })),
+          frame: { w: result.snapshot.frameWidth, h: result.snapshot.frameHeight },
           degraded: result.degraded,
           traversalMs: result.traversalMs,
           hasProfileMarks: marks.length > 0,
@@ -70,6 +71,7 @@ interface MeasureOpts {
 
 interface MeasureResult {
   readonly shapes: { x: number; y: number; w: number; h: number; r: number }[] | null;
+  readonly frame: { w: number; h: number } | null;
   readonly degraded: readonly string[];
   readonly traversalMs: number;
   readonly hasProfileMarks: boolean;
@@ -365,5 +367,91 @@ test.describe('DOM sensor — budgets and observability', () => {
   test('returns null for a zero-size target', async ({ measure }) => {
     const { shapes } = await measure(`<div id="root" style="width:0;height:0;overflow:hidden;"></div>`);
     expect(shapes).toBeNull();
+  });
+});
+
+// The sensor's output is consumed as the root's OWN coordinate space:
+// `ShapeInfo` is documented as "in the root/wrapper coordinate space, in CSS
+// px", the snapshot is cached and replayed under that assumption, and
+// `css-renderer.ts` writes `frameWidth`/`frameHeight` straight onto an
+// overlay that lives INSIDE the measured subtree. `getBoundingClientRect()`
+// does not return that space — it returns fully composed viewport
+// coordinates. Under a scaling ancestor the two differ, the scale is applied
+// once by the measurement and again by the ancestor's own transform when the
+// overlay paints, and the skeleton renders at scale**2 of the layout it is
+// supposed to cover.
+//
+// Three separate CSS mechanisms produce the same composition, which is why
+// all three are pinned here rather than only the one that was reported:
+// `transform: scale()`, the independent `scale` property (for which computed
+// `transform` is the string `'none'`, so any guard written against
+// `transform` alone silently misses it), and `zoom` (whose computed value
+// appears on the ANCESTOR, never on the measured root).
+const SCALED_CHILDREN = `<div id="a" style="width:100px;height:20px;background:#f00;"></div>
+   <div id="b" style="width:60px;height:30px;background:#00f;"></div>`;
+
+function scaledTree(wrapperStyle: string): string {
+  return `<div style="${wrapperStyle}"><div id="root" style="position:relative;width:200px;">${SCALED_CHILDREN}</div></div>`;
+}
+
+/** The untransformed layout truth of `scaledTree`: a 200x50 root holding a
+ *  100x20 box above a 60x30 one. Every scaling case must reproduce exactly
+ *  this, because that is the space the overlay is drawn in. */
+const LOCAL_SHAPES = [
+  { x: 0, y: 0, w: 100, h: 20 },
+  { x: 0, y: 20, w: 60, h: 30 },
+];
+const LOCAL_FRAME = { w: 200, h: 50 };
+
+function expectLocalGeometry(result: MeasureResult): void {
+  expect(result.shapes).not.toBeNull();
+  expect(result.shapes!.length).toBe(LOCAL_SHAPES.length);
+  LOCAL_SHAPES.forEach((expected, i) => {
+    const actual = result.shapes![i]!;
+    expectCloseTo(actual.x, expected.x, `shape ${i} x`);
+    expectCloseTo(actual.y, expected.y, `shape ${i} y`);
+    expectCloseTo(actual.w, expected.w, `shape ${i} w`);
+    expectCloseTo(actual.h, expected.h, `shape ${i} h`);
+  });
+  expectCloseTo(result.frame!.w, LOCAL_FRAME.w, 'frame width');
+  expectCloseTo(result.frame!.h, LOCAL_FRAME.h, 'frame height');
+}
+
+test.describe('DOM sensor — scaled ancestor (coordinate-space double-application)', () => {
+  test('no scaling ancestor: the baseline this whole group is measured against', async ({ measure }) => {
+    expectLocalGeometry(await measure(scaledTree('')));
+  });
+
+  test('transform: scale(2) ancestor', async ({ measure }) => {
+    expectLocalGeometry(await measure(scaledTree('transform:scale(2);transform-origin:0 0;')));
+  });
+
+  test('the independent `scale` property (computed `transform` is "none")', async ({ measure }) => {
+    expectLocalGeometry(await measure(scaledTree('scale:2;transform-origin:0 0;')));
+  });
+
+  test('zoom (computed only on the ancestor, never on the measured root)', async ({ measure }) => {
+    expectLocalGeometry(await measure(scaledTree('zoom:2;')));
+  });
+
+  test('a non-uniform scale is normalised per axis, not by one shared factor', async ({ measure }) => {
+    expectLocalGeometry(await measure(scaledTree('transform:scale(2,3);transform-origin:0 0;')));
+  });
+
+  test('a scale BELOW the measured root is real visual geometry and must survive untouched', async ({
+    measure,
+  }) => {
+    // The transform is INSIDE the traversal root, so the overlay — a sibling
+    // of the measured content, outside that transform — genuinely has to draw
+    // the child at its scaled size. Normalising here would be the same bug
+    // pointing the other way.
+    const result = await measure(
+      `<div id="root" style="position:relative;width:200px;">
+         <div style="transform:scale(2);transform-origin:0 0;width:100px;height:20px;background:#f00;"></div>
+       </div>`,
+    );
+    expect(result.shapes!.length).toBe(1);
+    expectCloseTo(result.shapes![0]!.w, 200, 'inner-transform width stays scaled');
+    expectCloseTo(result.shapes![0]!.h, 40, 'inner-transform height stays scaled');
   });
 });

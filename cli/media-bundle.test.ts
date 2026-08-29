@@ -76,8 +76,28 @@ describe('buildSsrCssBundle — one @media block per captured width bucket (RISK
       entries: WIDTH_BUCKETS.map((bucket) => fakeEntry('dashboard', bucket, 'ltr', [bucket, 200])),
     });
     const css = buildSsrCssBundle(manifest, { defaultRadius: 4 });
-    const mediaBlockCount = (css.match(/@media/g) ?? []).length;
-    expect(mediaBlockCount).toBe(WIDTH_BUCKETS.length);
+    // Counts WIDTH blocks specifically, not every `@media` in the bundle. The
+    // guard's subject is "one bucket in, one bucket block out"; the bundle
+    // also carries a `prefers-reduced-motion` block (REQ-A11Y-3 on the
+    // pre-hydration path), and counting that as a bucket made this assert
+    // fail for a reason that has nothing to do with bucket drift.
+    const widthBlockCount = (css.match(/@media \((?:min|max)-width:/g) ?? []).length;
+    expect(widthBlockCount).toBe(WIDTH_BUCKETS.length);
+  });
+
+  it('the reduced-motion block is NOT width-bucketed — it must apply at every viewport', () => {
+    const manifest: AutoSkeletonSSRManifest = withIntegrity({
+      v: SSR_MANIFEST_VERSION,
+      integrity: '',
+      widthBuckets: WIDTH_BUCKETS,
+      capturedKeys: ['dashboard'],
+      entries: WIDTH_BUCKETS.map((bucket) => fakeEntry('dashboard', bucket, 'ltr', [bucket, 200])),
+    });
+    const css = buildSsrCssBundle(manifest, { defaultRadius: 4 });
+    expect(css.match(/@media \(prefers-reduced-motion: reduce\)/g)?.length).toBe(1);
+    // Nesting it inside a width block would silently restrict an
+    // accessibility guarantee to one viewport range.
+    expect(css).not.toMatch(/@media \((?:min|max)-width:[^{]*\)\{[^@]*prefers-reduced-motion/);
   });
 
   it('emits one [dir] selector variant per captured direction within a bucket', () => {

@@ -923,3 +923,44 @@ test.describe('AutoSkeleton — delay prop (session gap closure: declared but ne
     expect(await page.locator('.askl-overlay').count()).toBe(0);
   });
 });
+
+test.describe('AutoSkeleton — scaled ancestor (the user-visible half of the sensor fix)', () => {
+  test('the painted overlay covers exactly the wrapper it is drawn into, not a scaled-up copy of it', async ({
+    page,
+  }) => {
+    // `test/web/dom-sensor.spec.ts` proves the sensor now reports the root's
+    // OWN coordinate space. This proves what that was for: the overlay lives
+    // INSIDE the scaling ancestor, so viewport-space geometry got scaled a
+    // second time when it painted and the skeleton covered four times the
+    // area it was measured from.
+    await loadHarness(
+      page,
+      ENTRY,
+      `<div style="transform:scale(2);transform-origin:0 0;width:200px;"><div id="root"></div></div>`,
+    );
+    await page.evaluate(() => {
+      const { React, createRoot, AutoSkeleton } = window.AutoskeletonComponent;
+      createRoot(document.getElementById('root')!).render(
+        React.createElement(
+          AutoSkeleton,
+          { isLoading: true, skeletonKey: 'scaled' },
+          React.createElement('div', { style: { width: 100, height: 20, background: '#f00' } }),
+          React.createElement('div', { style: { width: 60, height: 30, background: '#00f' } }),
+        ),
+      );
+    });
+    await settle(page);
+
+    const boxes = await page.evaluate(() => {
+      const wrapper = document.getElementById('root')!.firstElementChild!.getBoundingClientRect();
+      const overlay = document.querySelector('.askl-overlay')!.getBoundingClientRect();
+      return { wrapper: { w: wrapper.width, h: wrapper.height }, overlay: { w: overlay.width, h: overlay.height } };
+    });
+    expect(boxes.overlay.w).toBeCloseTo(boxes.wrapper.w, 1);
+    expect(boxes.overlay.h).toBeCloseTo(boxes.wrapper.h, 1);
+    // Rendered at scale 2, so the wrapper really is twice its layout box —
+    // proving the ancestor transform was in effect and the assertion above is
+    // not passing because nothing was scaled at all.
+    expect(boxes.wrapper.w).toBeCloseTo(400, 1);
+  });
+});

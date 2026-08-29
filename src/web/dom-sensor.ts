@@ -153,13 +153,22 @@ interface RelativeFrame {
   readonly h: number;
 }
 
-function frameOf(rect: DOMRect, rootRect: DOMRect): RelativeFrame {
+function frameOf(rect: DOMRect, ctx: TraversalContext): RelativeFrame {
   return {
-    x: rect.left - rootRect.left,
-    y: rect.top - rootRect.top,
-    w: rect.width,
-    h: rect.height,
+    x: (rect.left - ctx.rootRect.left) / ctx.sx,
+    y: (rect.top - ctx.rootRect.top) / ctx.sy,
+    w: rect.width / ctx.sx,
+    h: rect.height / ctx.sy,
   };
+}
+
+/** Accumulated scale between the root's own layout box and its composed
+ *  viewport rect, so `frameOf` reports the space the overlay is drawn in.
+ *  Ratio-based, so `transform`, the `scale` property and `zoom` are all
+ *  covered by one rule. `offsetWidth` is integer-rounded, so a difference of
+ *  at most 1px is that rounding, never a transform. */
+function axisScale(extent: number, box: number): number {
+  return box > 0 && Math.abs(extent - box) > 1 ? extent / box : 1;
 }
 
 /** `true` when `el` establishes a CSS clipping context for its own content
@@ -202,7 +211,7 @@ function computeClipBox(el: Element, ctx: TraversalContext): RelativeFrame | und
   let node: Element | null = el;
   while (node) {
     if (clipsOverflow(node)) {
-      const rect = frameOf(node.getBoundingClientRect(), ctx.rootRect);
+      const rect = frameOf(node.getBoundingClientRect(), ctx);
       clip = clip ? intersectFrames(clip, rect) : rect;
     }
     if (node === ctx.root) {
@@ -220,6 +229,8 @@ function applyClip(frame: RelativeFrame, clip: RelativeFrame | undefined): Relat
 interface TraversalContext {
   readonly root: Element;
   readonly rootRect: DOMRect;
+  readonly sx: number;
+  readonly sy: number;
   readonly hints: HintRegistry;
   readonly maxShapes: number;
   readonly budgetMs: number;
@@ -334,7 +345,7 @@ function leafShape(el: Element, ctx: TraversalContext, source: ShapeSource, styl
   if (style.opacity === '0') {
     return false;
   }
-  const frame = frameOf(el.getBoundingClientRect(), ctx.rootRect);
+  const frame = frameOf(el.getBoundingClientRect(), ctx);
   const hintRadius = hintRadiusAttr(el);
   const r = hintRadius ?? parseRadius(style);
   const radiusSource: RadiusSource = hintRadius !== undefined ? 'hint' : 'measured';
@@ -362,15 +373,9 @@ function textLeafShapes(el: Element, ctx: TraversalContext): boolean {
 
   if (rects.length === 0) {
     ctx.degraded.add('clientrects-empty');
-    const rect = el.getBoundingClientRect();
-    const style = getComputedStyle(el);
-    const lineHeight = parseLineHeight(style);
     const lines = synthesizeLines({
-      x: rect.left - ctx.rootRect.left,
-      y: rect.top - ctx.rootRect.top,
-      w: rect.width,
-      h: rect.height,
-      lineHeight,
+      ...frameOf(el.getBoundingClientRect(), ctx),
+      lineHeight: parseLineHeight(getComputedStyle(el)) / ctx.sy,
     });
     for (const line of lines) {
       if (overBudget(ctx)) break;
@@ -384,7 +389,7 @@ function textLeafShapes(el: Element, ctx: TraversalContext): boolean {
 
   for (let i = 0; i < rects.length; i++) {
     if (overBudget(ctx)) break;
-    const frame = applyClip(frameOf(rects[i]!, ctx.rootRect), clip);
+    const frame = applyClip(frameOf(rects[i]!, ctx), clip);
     const pushed = pushShape(ctx, frame, 0, 'text', 'measured');
     if (pushed) {
       pushedAny = true;
@@ -424,7 +429,11 @@ function traverse(el: Element, ctx: TraversalContext, depth: number = 0): boolea
   }
 
   let childContributed = false;
-  for (const child of Array.from(el.children)) {
+  // An open shadow root is laid out but invisible to `el.children`. Slotted
+  // light children are reached through `el.children` only, so still shaped
+  // once. Closed roots report `null`, indistinguishable from having none.
+  const shadow = el.shadowRoot;
+  for (const child of shadow ? [...shadow.children, ...el.children] : Array.from(el.children)) {
     if (traverse(child, ctx, depth + 1)) {
       childContributed = true;
     }
@@ -488,6 +497,8 @@ export function createDomSensor(): Sensor<HTMLElement> {
       const ctx: TraversalContext = {
         root: target,
         rootRect,
+        sx: axisScale(rootRect.width, target.offsetWidth),
+        sy: axisScale(rootRect.height, target.offsetHeight),
         hints: options.hints,
         maxShapes: options.maxShapes,
         budgetMs: options.budgetMs,
@@ -510,8 +521,8 @@ export function createDomSensor(): Sensor<HTMLElement> {
       const snapshot = buildSnapshot(
         ctx,
         options.key,
-        rootRect.width,
-        rootRect.height,
+        rootRect.width / ctx.sx,
+        rootRect.height / ctx.sy,
         options.collectDebugSidecars,
       );
       return { snapshot, traversalMs, degraded: Array.from(ctx.degraded) };

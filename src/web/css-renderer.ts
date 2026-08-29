@@ -148,10 +148,9 @@ function applyGeometry(overlay: HTMLDivElement, props: RenderProps): void {
     {
       defaultRadius: props.theme.defaultRadius,
       // Live web measurement already reflects the page's actual direction
-      // (getBoundingClientRect returns final visual coordinates), so no
-      // additional RTL mirroring is applied here — see dom-sensor.ts's
-      // module doc. `buildClipPath`'s mirroring exists for platforms/replays
-      // where shapes are captured in a canonical space.
+      // (real laid-out geometry, mirrored by the browser), so no additional
+      // RTL mirroring is applied here. `buildClipPath`'s mirroring exists
+      // for platforms/replays captured in a canonical space.
       direction: 'ltr',
       containerWidth: props.snapshot.frameWidth,
     },

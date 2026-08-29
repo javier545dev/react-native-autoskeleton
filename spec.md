@@ -339,6 +339,24 @@ shimmer animation to a pulse or static presentation.
 - THEN the rendered animation is a pulse or static presentation instead of the traveling shimmer
 - AND no `transform`-based shimmer sweep is applied
 
+#### Scenario: Reduce-motion is honoured BEFORE hydration on the SSR path
+- GIVEN the platform reduce-motion setting is enabled
+- AND a server-rendered `<AutoSkeleton.SSR>` skeleton (captured key or ADR-12 neutral block) has
+  painted, with no client JavaScript having run yet
+- WHEN the first frame is presented
+- THEN no `transform`-based shimmer sweep is applied
+- AND the degraded presentation is the same opacity pulse the runtime renderer degrades to
+
+The runtime web path satisfies REQ-A11Y-3 in JavaScript (`reducedMotionPreferred()` +
+`effectiveAnimation()`), which by construction cannot run pre-hydration: `<AutoSkeleton.SSR>` and
+`NeutralSkeletonBlock` are hook-free, DOM-read-free pure functions BECAUSE that purity is
+REQ-SSR-4's zero-hydration-mismatch mechanism. The generated SSR CSS bundle
+(`cli/media-bundle.ts`) therefore carries a `@media (prefers-reduced-motion: reduce)` block scoped
+to the SSR marker attributes — the only mechanism that can express the preference with zero
+JavaScript, which is the entire point when nothing has hydrated. It is scoped by specificity
+(0,3,0) rather than source order, because a live `<AutoSkeleton>` injects the runtime stylesheet
+into `<head>` later and would otherwise win.
+
 ---
 
 ## 2. Observability Stories
@@ -499,6 +517,9 @@ into something the developer can see and act on.
 | Uniwind | **v1.11.0** (corrected 2026-08-28 from ~1.2.6). From `uni-stack/uniwind` — a COMPETING project by the Unistyles team, NOT NativeWind's engine (NativeWind's own engine is `react-native-css`). `withUniwind` manual-mapping API confirmed real and matching our assumptions. Pairs with Tailwind v4. | Verified from package source |
 | NativeWind | **v4.2.6. INCOMPATIBLE WITH TAILWIND v4** — verified from the published package: `dist/metro/tailwind/index.js` throws `"NativeWind only supports Tailwind CSS v3"` at two call sites, gated on an `isV3` check. A NativeWind consumer is therefore a Tailwind **v3** consumer, and this project's theming story is Tailwind v4. **EXCLUDED (maintainer decision, 2026-08-28) — see §1.9 NON-GOAL / §5 Out of Scope / `plan.md` ADR-17.** The `autoskeleton/nativewind` subpath export and `src/interop/nativewind.ts` have been removed; `uniwind` is the sole theming interop. | Verified from package source |
 | Browsers (web renderer) | `clip-path: path()` — Chrome 88+, Edge 88+, Firefox 71+, Safari 15.4+. `shape()` reached Baseline Feb 2026 but is NOT relied upon alone (shorter support tail). `ResizeObserver` — Chrome 64+, Firefox 69+, Edge 79+, Safari 13.1+. `MutationObserver` — near-universal. | Brief §2; explore §C |
+| Shadow DOM (web sensor) | **OPEN roots are SUPPORTED** — traversed alongside the light DOM, so a custom-element design system produces shapes instead of a hole. A slotted light child is still shaped exactly once (it is reached through `host.children`; the shadow `<slot>` itself paints nothing). **CLOSED roots are NOT supported and CANNOT be reported.** They are not merely untraversable: they are undetectable. `host.shadowRoot` is `null` for a closed host and for an ordinary element alike, `children.length` and `textContent` agree too, and the only observation that distinguishes them (`attachShadow` throwing) requires mutating the consumer's DOM, which a read-only sensor must never do. There is therefore no honest `DegradationFlag` to raise — a flag would have to be either unraisable or a guess. | Measured 2026-08-29, `test/web/shadow-dom.spec.ts` |
+| Scaled ancestors (web sensor) | **SUPPORTED for uniform and non-uniform scaling**, by all three CSS mechanisms that produce it: `transform: scale()`, the independent `scale` property (for which computed `transform` is the string `'none'`), and `zoom` (whose computed value appears on the ancestor, never on the measured root). The sensor reports the traversal root's OWN coordinate space, which is what `ShapeInfo` documents and what the overlay — mounted inside that same scaled subtree — is drawn in. The accumulated factor is derived per axis from the root's composed rect against its layout box, and a difference of at most 1 px is treated as `offsetWidth` integer rounding rather than a transform, so an unscaled tree measures bit-identically to before. A scale applied BELOW the traversal root is real visual geometry and is deliberately left untouched. **ROTATION is NOT supported** — `getBoundingClientRect()` returns an axis-aligned bounding box under rotation, so a rotated leaf already reported a box larger than itself before this and still does; it is out of scope for v1, not silently handled. | Measured 2026-08-29, `test/web/dom-sensor.spec.ts`, `test/web/auto-skeleton.spec.ts` |
+| Text scale / `fontScale` (web) | **No web analogue exists, and none is invented.** `CacheKeyParts.fontScale` is a shared key segment that native fills from `PixelRatio.getFontScale()`; web writes the neutral constant `1`, as does the SSR capture CLI, so captured entries hydrate real runtime cache hits. Measured: the browser's own default-font-size preference is not observable from page script (a `font-size: medium` probe reports 16 px regardless of the document's actual root size), and driving Chromium's real preference over CDP `Page.setFontSizes` changes neither computed style nor layout. Page zoom, the closest thing a web user reaches for, does not change CSS-pixel geometry, so it has nothing to invalidate. | Measured 2026-08-29, `test/web/font-scale.spec.ts` |
 | Test tooling | Vitest (core, unit); Playwright (layout-sensitive tests and the SSR capture CLI) — jsdom cannot perform real layout (jsdom #653, #3729) | Brief §2, §15 |
 | Build tooling | `create-react-native-library` + `react-native-builder-bob` 0.43.0. **S4 is RESOLVED: a distinct web entry IS supported, no custom tooling needed** — builder-bob's `compile.js` is a filename-preserving per-file Babel transpile (globs `**/*`, writes `path.join(output, path.relative(source, filepath))`), so `src/index.web.ts` emits `index.web.js` automatically. Two caveats: `exports` conditions must be hand-authored (`init.js:182-223` generates a default without them and PROMPTS TO REPLACE an existing one — decline it), and the NFR-6 gzip budget must be measured on a consumer bundle, never on builder-bob output. | Brief §14 |
 
