@@ -83,6 +83,18 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
 
     // MARK: - mountOrUpdate
 
+    /// G.18 restructured the renderer's mounted tree: `surface.layer`'s single
+    /// sublayer is now the STATIONARY container that owns the mask and the
+    /// opaque base fill, and the `CAGradientLayer` the sweep animates is that
+    /// container's sublayer. These host tests care about the shimmer animation,
+    /// so they look the gradient up by role rather than by position.
+    private func shimmerGradient(in surface: UIView) -> CAGradientLayer {
+        let container = try! XCTUnwrap(surface.layer.sublayers?.first, "the renderer must mount exactly one root layer")
+        let gradients = (container.sublayers ?? []).compactMap { $0 as? CAGradientLayer }
+        XCTAssertEqual(gradients.count, 1, "exactly one gradient band must be mounted")
+        return try! XCTUnwrap(gradients.first)
+    }
+
     func testMountsTheTier1RendererOnceCacheKeyIsSetAndTheSurfaceIsSized() {
         let cache = freshCache()
         cache.set("k1", wireFor([[0, 0, 50, 50, 4]]))
@@ -96,7 +108,12 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
         )
 
         XCTAssertEqual(surface.layer.sublayers?.count, 1)
-        XCTAssertTrue(surface.layer.sublayers?.first is CAGradientLayer)
+        // G.18: the root sublayer is the stationary masked container, and the
+        // animated gradient band lives inside it — never the other way round.
+        let container = try! XCTUnwrap(surface.layer.sublayers?.first)
+        XCTAssertFalse(container is CAGradientLayer, "the mask's owner must not be the layer the sweep animates")
+        XCTAssertNotNil(container.mask, "the container must own the mask")
+        XCTAssertTrue(shimmerGradient(in: surface).superlayer === container)
     }
 
     func testNeverMountsWhenTheCacheHasNoEntryForTheGivenKey() {
@@ -138,7 +155,7 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
             defaultRadius: 4, speedMs: 1400, animation: "shimmer",
             reducedMotion: false, debugOverlay: false, surface: surface
         )
-        let gradientLayer = try! XCTUnwrap(surface.layer.sublayers?.first as? CAGradientLayer)
+        let gradientLayer = shimmerGradient(in: surface)
         let beginTimeBefore = try! XCTUnwrap(
             gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey)
         ).beginTime
@@ -154,7 +171,7 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
         )
 
         XCTAssertEqual(surface.layer.sublayers?.count, 1)
-        XCTAssertTrue(surface.layer.sublayers?.first === gradientLayer)
+        XCTAssertTrue(shimmerGradient(in: surface) === gradientLayer)
         let beginTimeAfter = try! XCTUnwrap(
             gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey)
         ).beginTime
@@ -210,7 +227,7 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
             reducedMotion: true, debugOverlay: false, surface: surface
         )
 
-        let gradientLayer = try! XCTUnwrap(surface.layer.sublayers?.first as? CAGradientLayer)
+        let gradientLayer = shimmerGradient(in: surface)
         XCTAssertNil(gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey))
         XCTAssertNotNil(gradientLayer.animation(forKey: "autoskeleton.pulse"))
     }
@@ -227,7 +244,7 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
             reducedMotion: false, debugOverlay: false, surface: surface
         )
 
-        let gradientLayer = try! XCTUnwrap(surface.layer.sublayers?.first as? CAGradientLayer)
+        let gradientLayer = shimmerGradient(in: surface)
         XCTAssertNil(gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey))
         XCTAssertNotNil(gradientLayer.animation(forKey: "autoskeleton.pulse"))
     }
@@ -244,7 +261,7 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
             reducedMotion: false, debugOverlay: false, surface: surface
         )
 
-        let gradientLayer = try! XCTUnwrap(surface.layer.sublayers?.first as? CAGradientLayer)
+        let gradientLayer = shimmerGradient(in: surface)
         let shimmer = try! XCTUnwrap(
             gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey) as? CABasicAnimation
         )

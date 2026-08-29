@@ -33,6 +33,14 @@ render shimmer placeholders matching the detected frames before the first paint 
 - AND the renderer draws shimmer placeholders at those exact frames (position, size, radius)
 - AND the derived snapshot is persisted to the `ShapeStore` under the composite key
 
+#### Scenario: The shimmer moves the HIGHLIGHT, never the placeholders (G.18)
+- GIVEN a painted skeleton whose placeholders sit at the detected frames
+- WHEN the shimmer animation runs through a complete period
+- THEN the region the skeleton covers is identical at every phase of that period
+- AND every point inside a placeholder is opaquely painted at every phase, including
+  both extremes of the sweep, so the real content is never exposed mid-cycle
+- AND only the highlight band's position within that stationary region changes
+
 #### Scenario: Container-vs-leaf resolution
 - GIVEN a container view with a non-transparent background that contains one or more detectable
   leaf nodes (text, image, input) in its subtree

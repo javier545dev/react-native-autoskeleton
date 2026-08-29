@@ -93,6 +93,22 @@ final class PaintGateUITests: XCTestCase {
     // post-toggle pixels is real production timing, not an arbitrary sleep.
     private static let handoffSettleSeconds: TimeInterval = 0.6
 
+    /// `src/native/AutoSkeleton.tsx`'s `DEFAULT_THEME.speedMs` — the shimmer
+    /// clock's PERIOD. Hardcoded here for the same reason the colours above are:
+    /// a drift in the production default must fail this gate loudly.
+    private static let shimmerPeriodSeconds: TimeInterval = 1.4
+    /// Sampling window for the across-the-cycle gate: one and a half full
+    /// periods, so the sweep is guaranteed to pass through BOTH of its extremes
+    /// (`-width` and `+width`) inside the window regardless of the phase the
+    /// first sample happens to land on.
+    private static let cycleSampleSpanSeconds: TimeInterval = shimmerPeriodSeconds * 1.5
+    /// Sampled as fast as `XCUIScreen.main.screenshot()` allows; the small sleep
+    /// only keeps the loop from spinning the CPU flat out.
+    private static let cycleSampleInterval: TimeInterval = 0.05
+    /// A one-shot sample can never see this defect, so a run that collected too
+    /// few samples is a FIXTURE FAILURE, not a pass.
+    private static let minCycleSamples = 12
+
     private static let labelToggle = "paint-gate-toggle"
     private static let labelContent = "paint-gate-content"
     private static let labelImage = "paint-gate-image"
@@ -648,5 +664,118 @@ final class PaintGateUITests: XCTestCase {
                 "hierarchy after \(Int(Self.accessibilitySettleTimeout))s — a permanent 'Loading' " +
                 "announcement on loaded content is worse than none."
         )
+    }
+
+    // MARK: - G.18: the covered region must be STATIONARY across the cycle
+
+    /// Every other assertion in this file samples a SINGLE frame — `pollUntilPixel`
+    /// returns as soon as ONE sample satisfies its predicate — and the colour
+    /// check is a RAMP check, deliberately built to tolerate the sweep. That
+    /// combination is blind to the class of defect where the shimmer translates
+    /// the SKELETON instead of translating a highlight THROUGH it: at some
+    /// instant in every cycle the skeleton does sit over the probe, so a
+    /// poll-until-satisfied gate always finds its frame and passes, while for
+    /// most of the cycle the real content is exposed.
+    ///
+    /// This gate samples ACROSS one and a half full 1400 ms periods instead and
+    /// requires EVERY sample to be covered, at two different probe points. It is
+    /// the on-device sibling of
+    /// `AutoskeletonRendererTier1Tests.testAPointOverContentStaysCoveredAndOpaque
+    /// AcrossTheWholeShimmerCycle`, which asserts the same invariant against the
+    /// layer tree directly.
+    func testSkeletonCoverageStaysStationaryAcrossAWholeShimmerCycle() {
+        let frames = contentFrames([Self.labelImage, Self.labelCard])
+        let imageFrame = frame(frames, Self.labelImage)
+        let cardFrame = frame(frames, Self.labelCard)
+
+        // Same settle discipline as every other assertion here: wait for the
+        // real overlay to exist before judging it, never a guessed sleep.
+        guard pollUntilPixel(frame: imageFrame, satisfying: { pixel in
+            self.colorInRamp(pixel, from: Self.skeletonBaseColor, to: Self.skeletonHighlightColor)
+        }) != nil else {
+            XCTFail("FIXTURE FAILURE: could not sample a pixel from the screenshot at \(imageFrame)")
+            return
+        }
+
+        var imageSamples: [RGB] = []
+        var cardSamples: [RGB] = []
+        let start = Date()
+        let deadline = start.addingTimeInterval(Self.cycleSampleSpanSeconds)
+        repeat {
+            let image = screenshotImage()
+            guard let imagePixel = centerPixelColor(image, frame: imageFrame),
+                  let cardPixel = centerPixelColor(image, frame: cardFrame)
+            else {
+                XCTFail("FIXTURE FAILURE: could not sample the screenshot mid-cycle")
+                return
+            }
+            imageSamples.append(imagePixel)
+            cardSamples.append(cardPixel)
+            Thread.sleep(forTimeInterval: Self.cycleSampleInterval)
+        } while Date() < deadline
+        let span = Date().timeIntervalSince(start)
+
+        XCTAssertGreaterThanOrEqual(
+            imageSamples.count, Self.minCycleSamples,
+            "FIXTURE FAILURE: only \(imageSamples.count) samples in \(span)s — too few to " +
+                "observe a \(Self.shimmerPeriodSeconds)s cycle, so this gate proved nothing."
+        )
+        XCTAssertGreaterThanOrEqual(
+            span, Self.shimmerPeriodSeconds,
+            "FIXTURE FAILURE: sampled for only \(span)s, less than one full shimmer period."
+        )
+
+        assertCoveredAtEverySample(
+            imageSamples,
+            probe: "paint-gate-image",
+            contentColor: Self.contentImageColor,
+            frame: imageFrame
+        )
+        assertCoveredAtEverySample(
+            cardSamples,
+            probe: "paint-gate-rounded-card",
+            contentColor: Self.contentCardColor,
+            frame: cardFrame
+        )
+
+        // Anti-vacuity: a completely frozen screen would satisfy every
+        // assertion above. The shimmer must still be MOVING — the highlight
+        // sweeps through the probe once per period, so the sampled colour
+        // cannot be byte-identical across a full cycle.
+        XCTAssertGreaterThan(
+            Set(imageSamples.map { "\($0.r),\($0.g),\($0.b)" }).count, 1,
+            "Every one of the \(imageSamples.count) samples over \(span)s was the exact same " +
+                "colour — the shimmer is not animating at all, so \"the covered region never " +
+                "moved\" is vacuously true rather than earned."
+        )
+    }
+
+    /// Fails on the FIRST uncovered sample with its index, so the report names
+    /// the phase at which the skeleton stopped covering the content.
+    private func assertCoveredAtEverySample(
+        _ samples: [RGB],
+        probe: String,
+        contentColor: RGB,
+        frame: CGRect
+    ) {
+        for (index, pixel) in samples.enumerated() {
+            let inRamp = colorInRamp(pixel, from: Self.skeletonBaseColor, to: Self.skeletonHighlightColor)
+            let isContent = colorsClose(pixel, contentColor)
+            XCTAssertFalse(
+                isContent,
+                "At sample \(index + 1)/\(samples.count) of one shimmer cycle, the real content " +
+                    "(\(hex(contentColor))) was DIRECTLY VISIBLE at \(probe) " +
+                    "(\(frame.midX), \(frame.midY)). The skeleton is only covering it at part " +
+                    "of the cycle — the covered region is travelling with the sweep instead of " +
+                    "staying put while a highlight sweeps through it."
+            )
+            XCTAssertTrue(
+                inRamp,
+                "At sample \(index + 1)/\(samples.count) of one shimmer cycle, \(probe) was " +
+                    "\(hex(pixel)) — outside the shimmer ramp " +
+                    "(\(hex(Self.skeletonBaseColor))..\(hex(Self.skeletonHighlightColor))). The " +
+                    "skeleton must cover this point at EVERY phase, not merely at some of them."
+            )
+        }
     }
 }

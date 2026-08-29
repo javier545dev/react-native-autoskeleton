@@ -3123,6 +3123,105 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       9.4. Complexity: S. Example app: all four (bare-rn/expo/vite/next unaffected by this task's
       changes; the throwaway sandbox install is the actual final cross-check).
 
+- [x] **G.18** (2026-08-29, branch `feat/expo-web-support`, stacked on `5748351`) **The iOS
+      tier-1 shimmer slid the whole SKELETON across the screen instead of sweeping a highlight
+      through it, and every existing gate was structurally blind to it.**
+
+      **The defect, confirmed with quantitative evidence rather than taken on report.** `mount`
+      attached the mask to the very layer `applyShimmer` animated:
+      `gradientLayer.mask = maskLayer` plus a `CABasicAnimation` on
+      `transform.translation.x` running `-width … +width` on that same `gradientLayer`. A
+      `CALayer`'s `mask` is positioned in THAT layer's own coordinate space, so transforming the
+      masked layer transforms its mask with it. The new RED unit test printed the displacement
+      exactly: with a shape at `x = 20 … 140`, freezing the sweep at translation `-300` put the
+      covered region at `-280 … -160` instead of `20 … 140` — a shift equal to the sweep
+      translation, at every one of 16 sampled phases. The second half of the same defect is that
+      the gradient was only `width` wide, so even a stationary mask would have had nothing
+      painted under it at the extremes: RED also reported "nothing opaque is painted over
+      (80, 40)" at translations `-300 … -187.5` and `112.5 … 262.5`.
+
+      **PRE-EXISTING, not a regression — verified.** `git log -S "gradientLayer.mask = maskLayer"`
+      points at `d6b6cc6` (task 3.2, Phase 3). The `syncGradientGeometry()` work only re-applied
+      the animation on a width change; it never touched which layer carried the mask.
+
+      **Android never had it, and the fix makes iOS match Android rather than invent a third
+      behaviour.** `AutoskeletonShimmerOverlayView.onDraw` does a FIXED `canvas.clipPath(maskPath)`
+      over a full-bounds `drawRect` and translates only the SHADER
+      (`Matrix.setTranslate` + `setLocalMatrix`) — the drawing surface never moves. Android is
+      also immune to the coverage half for a reason iOS cannot borrow directly: its
+      `LinearGradient` uses `Shader.TileMode.CLAMP`, whose edge colour IS `baseColor`, so the
+      paint extends opaquely forever in both directions. `CAGradientLayer` paints nothing outside
+      its own bounds, so iOS reproduces that clamp with an opaque base fill.
+
+      **The layer structure now** (`ios/AutoskeletonRendererTier1.swift`):
+      `surface.layer` → `containerLayer` (frame = `surface.bounds`, owns `mask = maskLayer` AND
+      `backgroundColor = theme.baseColor`, never animated) → `gradientLayer`
+      (frame = `(-width, 0, 2*width, height)`, the ONLY layer the sweep touches). The gradient's
+      rest span (`-width … +width`) and the sweep's range (`-width … +width`) are the same two
+      numbers Android uses for its shader stops and its `translateX`, so both platforms put the
+      highlight in the same place at the same phase. `beginTime` is still derived from
+      `AutoskeletonShimmerClock.phaseOffsetMs` (ADR-8), so instances stay in phase and a geometry
+      resync does not restart anything. `syncGradientGeometry()` keeps its WIDTH-keyed behaviour
+      with `containerLayer` as the geometry key and `gradientFrame(for:)` re-laying out the band;
+      a height-only resize still resizes without restarting. NFR-5 holds: three layers allocated
+      at mount, nothing at all per frame. `setReducedMotion` pulses the GRADIENT's opacity only —
+      the container keeps the opaque base fill, so reduced motion is a static, FULLY COVERING
+      skeleton, which the previous single-layer structure could not guarantee.
+
+      **Also fixed, same class, deliberately in scope**: `maskLayer.path` and the resync's frame
+      assignments now run inside `CATransaction.setDisableActions(true)`. `CAShapeLayer.path` and
+      `CALayer.frame` are animatable, so a bare assignment got CoreAnimation's implicit 0.25 s
+      animation and the covered region MORPHED or SLID towards its new geometry instead of being
+      it — the same "the covered region must not move" invariant, at a smaller scale.
+      `CATransaction` is a thread-local stack, so this allocates nothing.
+
+      **WHY EVERY GATE MISSED IT, which is what the new gates are shaped around.** The on-device
+      gates sample a SINGLE frame — `pollUntilPixel` returns as soon as ONE sample satisfies its
+      predicate — and the colour check is a RAMP check built to tolerate the sweep. A skeleton
+      that slides still sits over the probe at some instant in every cycle, so a
+      poll-until-satisfied gate always finds its frame. `PaintGate-UITests` was 7/7 with this
+      defect live. The fix is therefore only half the work; the other half is sampling ACROSS the
+      cycle.
+
+      **Two new gates, both proven RED against the unfixed code before the fix existed.**
+      (1) `AutoskeletonRendererTier1Tests` gained
+      `testCoveredRegionDoesNotMoveAcrossTheWholeShimmerCycle` and
+      `testAPointOverContentStaysCoveredAndOpaqueAcrossTheWholeShimmerCycle`: they walk the real
+      mounted layer tree, find "the layer carrying the shimmer animation" and "the layer carrying
+      the mask" BY ROLE rather than by sublayer index, freeze the sweep at 16 evenly spaced
+      phases by writing the exact property the `CABasicAnimation` interpolates, and assert the
+      mask's bounding box in surface coordinates is invariant and that a probe point at a shape's
+      centre stays both inside the mask and under an opaque painter at every phase. RED output
+      above; GREEN after. (2) `PaintGateUITests` gained
+      `testSkeletonCoverageStaysStationaryAcrossAWholeShimmerCycle`: on the real Simulator it
+      settles the overlay the same way every other assertion does, then samples the centre pixel
+      of BOTH `paint-gate-image` and `paint-gate-rounded-card` continuously for 2.1 s (1.5 full
+      1400 ms periods, 15 samples in practice) and requires EVERY sample to be inside the shimmer
+      ramp and never the content colour, with FIXTURE FAILURE assertions on sample count and
+      elapsed span so it cannot pass by sampling once, plus an anti-vacuity assertion that the
+      sampled colours are not all identical (a frozen screen must not pass). RED against the
+      unfixed installed pod: *"At sample 2/15 of one shimmer cycle, the real content (#0000FF)
+      was DIRECTLY VISIBLE at paint-gate-image (96.0, 318.0)."*
+
+      **Tarball discipline.** Measured only after `npm run pack:tarball` +
+      `npm install autoskeleton@file:../../.tarball/autoskeleton-0.1.0.tgz` in `examples/bare-rn`,
+      with `diff -rq ios examples/bare-rn/node_modules/autoskeleton/ios` proving the installed
+      copy carried the change before any number was recorded. `examples/bare-rn/package-lock.json`
+      carries the new integrity hash.
+      **Tests**: iOS unit **80/80** (was 78, +2), iOS `PaintGate-UITests` **8/8** (was 7, +1),
+      both re-run from the tarball install; vitest 501/501, Playwright 111/111, typecheck clean,
+      NFR-6 7613/7696, Android unit 111/111, Android on-device 14/14 — all unchanged, as expected
+      for an `ios/**`-only change. **Observability**: N/A. **Performance**: one extra `CALayer`
+      per mounted skeleton, zero per-frame cost; NFR-5 unaffected. Deps: task 3.2 (introduced the
+      structure), ADR-8 (the phase origin the fix preserves), G.17 (branch tip). Complexity: M.
+      **NOT DONE, deliberately**: no change to Android, web or SSR — Android's semantics are the
+      reference this fix was made to match, and the web renderer sweeps a CSS gradient inside a
+      `clip-path`, which is structurally the fixed shape already. No screenshot-diff/golden gate
+      was added: the union of covered pixels is asserted geometrically in the unit gate and by
+      colour at two probe points on device, and a full-frame golden would be a
+      simulator-rendering-stability liability for no extra discrimination. `spec.md` §1.1 gained
+      the scenario this invariant was missing.
+
 ---
 
 ## Open Questions carried from `spec.md` §6 — task mapping
