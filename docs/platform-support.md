@@ -206,6 +206,24 @@ container's box. iOS does neither. A wide native scroll row inside an
 `<AutoSkeleton>` can therefore contribute shapes that extend past the visible
 region.
 
+### 5e-bis. A sized but transparent container contributes no shape — on every platform
+
+Not a limitation of one platform; a deliberate rule all three implement
+identically. A container emits its own shape only when its subtree has no
+detectable leaf **and** it has a non-transparent background. A `<View>` that
+reserves layout space but paints nothing of its own contributes nothing, so a
+loading branch written as `{data !== null && <Image />}` measures zero shapes
+and paints no skeleton.
+
+Reviewed as a possible defect on 2026-08-30 and kept: a non-transparent
+background is the only observable difference between a box that is content and
+a box that is structure, and transparent sized boxes are how layouts express
+spacers, flex fillers, safe-area padding and gap shims. The consumer-side
+answer is an always-mounted opaque slot —
+[`image-pipeline.md` §3a](./image-pipeline.md) has the worked example and the
+full argument. Gated by the shared `container-rule-sized-but-transparent`
+fixture across the iOS, Android and web sensors.
+
 ### 5f. `handoffFadeMs` is a delay, not a fade
 
 Nothing on either platform's teardown path animates opacity. The overlay is

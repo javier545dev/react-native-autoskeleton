@@ -33,10 +33,29 @@
  * the traversal finds no leaves, and `onMetrics` reports `shapeCount: 0`: no
  * skeleton paints at all. (Measured on an Android emulator: `shapeCount: 0`,
  * `handoffReason: 'timeout'`.) A bare wrapper does not rescue it either — the
- * container rule only falls back to a container's own shape when that
- * container has a non-transparent background. The fix is the `imageSlot`
- * below: an explicitly sized, opaque `<View>` that is always mounted, with
- * the image swapped in inside it.
+ * container rule falls back to a container's own shape only when that
+ * container has a non-transparent background.
+ *
+ * `imageSlot` below — always mounted, explicitly sized, opaque — is therefore
+ * the PATTERN, not a workaround for a defect, and it stays here for that
+ * reason. Reviewed as a possible library defect on 2026-08-30 and deliberately
+ * kept, because the alternative is worse in both directions:
+ *
+ *   1. The sensor measures the LOADING state. It cannot know that a
+ *      currently-empty box will later hold an image, so painting a shape over
+ *      it would mean inventing geometry no measurement produced — the one
+ *      thing this library exists not to do.
+ *   2. A non-transparent background is the only observable difference between
+ *      a box that is content and a box that is structure. Transparent sized
+ *      boxes are how every RN layout expresses spacers, flex fillers,
+ *      safe-area padding and gap shims; if they contributed shapes, this
+ *      screen would paint grey blocks over its own gutters.
+ *
+ * Reserving the space is also the better UI on its own terms — the slot is
+ * what stops the layout jumping when the image lands. The rule is gated
+ * across all three sensors by the shared
+ * `container-rule-sized-but-transparent` fixture, and written up in
+ * `docs/image-pipeline.md` §3a.
  */
 
 import { useState } from 'react';
@@ -77,8 +96,10 @@ export function ImagePipelineDemo(): React.JSX.Element {
             expectsPlaceholder
             onMetrics={setMetrics}
           >
-            {/* Always mounted and opaque, so phase 1 has a real frame to
-                measure. See the second gotcha in this file's header. */}
+            {/* Always mounted, sized and opaque, so phase 1 has a real frame
+                to measure. This is the documented pattern, not boilerplate —
+                see the second gotcha in this file's header for why the rule
+                that requires it is correct. */}
             <View style={styles.imageSlot}>
               {load.isLoading ? null : (
                 <Image

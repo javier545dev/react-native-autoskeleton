@@ -167,12 +167,42 @@ does not fire for it either. See
 
 ## List skeleton rows are the wrong width (an avatar with nothing beside it)
 
-The list template is measured off-screen inside an absolutely positioned
-container with **no width of its own**, so it lays out at its intrinsic width
-and any `flex: 1` / `width: '100%'` child collapses to zero.
+Fixed on 2026-08-30. The off-screen measurement container declared only
+`left`/`top`, so it was laid out at its intrinsic width and any `flex: 1` /
+`width: '100%'` child in the template collapsed to zero. It now declares both
+horizontal insets, which makes Yoga resolve it to the width of the container
+the list is mounted in — the real row width.
 
-Thread an explicit width through the template. Full explanation and a working
-example in [`lists.md` §2](./lists.md).
+If you still see this, you are on a build from before that fix. Templates need
+no explicit width of their own: write the row component once and use it for
+both the loaded row and `renderTemplate`. Full explanation in
+[`lists.md` §2](./lists.md).
+
+## No skeleton paints at all, and `onMetrics` reports `shapeCount: 0`
+
+The subtree under `<AutoSkeleton>` had nothing detectable in it at the moment
+it was measured. Almost always this:
+
+```tsx
+<AutoSkeleton isLoading={data === null}>
+  {data !== null && <Image … />}   {/* empty while loading */}
+</AutoSkeleton>
+```
+
+The skeleton is derived from what is rendered, so an empty subtree derives an
+empty skeleton. A bare wrapper does not rescue it: a container contributes its
+own shape only when it has no detectable leaves **and** a non-transparent
+background — a transparent sized box is structure, not content, on all three
+platforms.
+
+Mount the slot unconditionally, size it, and give it a background. Full
+reasoning and a worked example in
+[`image-pipeline.md` §3a](./image-pipeline.md).
+
+This is the intended rule, not a defect, and it is gated by the shared
+`container-rule-sized-but-transparent` fixture on all three sensors.
+
+---
 
 ## A list `itemType` never stops showing the generic fallback block
 

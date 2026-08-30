@@ -33,32 +33,20 @@ holds across every entry point.
 
 ---
 
-## 2. The constraint you will hit first: give the template an explicit width
+## 2. Write the template the way you write the row
 
-**The template is measured off-screen, inside an absolutely positioned
-container that has no width of its own.** So it is laid out at its *intrinsic*
-width, and any `flex: 1` or `width: '100%'` child inside it **collapses to
-zero**.
-
-This is not theoretical. It was found on a device while writing
-`examples/bare-rn/demos/ListDemo.tsx`: the first version of `FeedRow` used
-`flex: 1` for its text column, the measured snapshot came back 92 pt wide
-instead of the row's full width, and every skeleton row rendered as a lone
-avatar square with nothing beside it.
-
-Thread a real width through your template:
+Your template needs no special authoring. Write the row component once, use it
+for both the loaded row and `renderTemplate`, and let it inherit its width the
+way any row does:
 
 ```tsx
-const rowWidth = useWindowDimensions().width;
-
-function FeedRow({ title, rowWidth }: { title: string; rowWidth: number }) {
-  const textWidth = rowWidth - 32 - 48 - 12;
+function FeedRow({ title }: { title: string }) {
   return (
-    <View style={[styles.row, { width: rowWidth }]}>
+    <View style={styles.row}>
       <View style={styles.rowAvatar} />
-      <View style={styles.rowText}>
-        <Text style={[styles.rowTitle, { width: textWidth }]}>{title}</Text>
-        <View style={[styles.rowLine, { width: textWidth * 0.7 }]} />
+      <View style={styles.rowText}>          {/* flex: 1 */}
+        <Text style={styles.rowTitle}>{title}</Text>
+        <View style={styles.rowLine} />      {/* width: '70%' */}
       </View>
     </View>
   );
@@ -67,15 +55,38 @@ function FeedRow({ title, rowWidth }: { title: string; rowWidth: number }) {
 <SkeletonList
   itemType="feed-row"
   estimatedCount={6}
-  renderTemplate={() => <FeedRow title="" rowWidth={rowWidth} />}
+  renderTemplate={() => <FeedRow title="" />}
 />
 ```
 
 The mechanism, if you want it: `TemplateMeasurementHost` renders the template
-in a `position: 'absolute'` view at `left/top: -10000`. It is off-screen rather
-than `opacity: 0` on purpose — the Android sensor skips any view with
-`alpha <= 0.01`, so an earlier `opacity: 0` version made every template measure
-as zero shapes.
+in a `position: 'absolute'` view, off-screen. Two properties of that container
+are load-bearing, and both were found on a device rather than reasoned out.
+
+**It is off-screen rather than `opacity: 0`.** The Android sensor skips any
+view with `alpha <= 0.01`, so an earlier `opacity: 0` version made every
+template measure as zero shapes.
+
+**It declares both horizontal insets (`left: -10000`, `right: 10000`), not
+just `left`.** A Yoga absolute box that declares only a leading position
+resolves its width from its own *content*, so the template used to be laid out
+at its intrinsic width and any `flex: 1` / `width: '100%'` / `alignSelf:
+'stretch'` child collapsed to zero: `ListDemo.tsx`'s first `FeedRow` cached a
+92pt snapshot for a 411pt row, and every skeleton row painted as a lone avatar
+square. Declaring both insets makes Yoga resolve the box to
+`parentWidth - left - right`, and the two cancel — so the template is laid out
+at exactly the width of the container the `SkeletonList`/`SkeletonCell` is
+mounted in, which is the width the real row gets. The list always knew its own
+width; the template just had no way to ask for it.
+
+Until 2026-08-30 this section told you to thread an explicit `rowWidth` through
+every template. That advice is gone because the reason for it is gone. Gated
+on device in both directions: `PaintGateListInstrumentedTest
+.theOffScreenTemplateIsMeasuredAtItsContainersWidthNotItsIntrinsicWidth`
+(Android) and `PaintGateUITests
+.testListTemplateIsMeasuredAtItsContainersWidthNotItsIntrinsicWidth` (iOS)
+compare the measured snapshot width against the width of the very container
+the list is mounted in.
 
 ---
 
@@ -87,7 +98,7 @@ as zero shapes.
 <SkeletonList
   itemType="feed-row"
   estimatedCount={6}
-  renderTemplate={() => <FeedRow title="" rowWidth={rowWidth} />}
+  renderTemplate={() => <FeedRow title="" />}
   rowSpacing={8}
 />
 ```
@@ -102,8 +113,8 @@ share a row shape but should not share a cache entry.
   data={feed}
   renderItem={({ item }) =>
     item.loaded
-      ? <FeedRow title={item.title} rowWidth={rowWidth} />
-      : <SkeletonCell itemType="feed-row" renderTemplate={() => <FeedRow title="" rowWidth={rowWidth} />} />
+      ? <FeedRow title={item.title} />
+      : <SkeletonCell itemType="feed-row" renderTemplate={() => <FeedRow title="" />} />
   }
 />
 ```

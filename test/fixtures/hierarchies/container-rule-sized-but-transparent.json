@@ -1,0 +1,12 @@
+{
+  "class": "container",
+  "frame": { "x": 0, "y": 0, "w": 200, "h": 100 },
+  "nativeID": "transparent-root",
+  "children": [
+    {
+      "class": "container",
+      "frame": { "x": 20, "y": 20, "w": 160, "h": 60 },
+      "nativeID": "sized-but-empty-slot"
+    }
+  ]
+}

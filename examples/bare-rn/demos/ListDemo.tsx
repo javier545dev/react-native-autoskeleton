@@ -19,22 +19,25 @@
  * The traversal counter at the top is the load-bearing readout: scroll the
  * list hard and it must NOT climb. One measurement per `itemType`, ever.
  *
- * AUTHORING CONSTRAINT, found on device while writing this demo and not
- * obvious from the API: the template is measured OFF-SCREEN, inside an
- * absolutely-positioned container that has no width of its own
- * (`TemplateMeasurementHost`). So the template is laid out at its INTRINSIC
- * width, and any `flex: 1` or `width: '100%'` child inside it collapses to
- * zero. The first version of `FeedRow` below used `flex: 1` for its text
- * column; the measured snapshot came back 92pt wide instead of the row's full
- * width, and every skeleton row rendered as a lone avatar square with nothing
- * beside it. Give a template EXPLICIT widths — that is why `rowWidth` is
- * threaded through here, and it is also why the existing paint-gate fixture's
- * template uses fixed pixel sizes.
+ * `FeedRow` inherits its width — `flex: 1` for the text column, `70%` for the
+ * sub-line — and is passed to `renderTemplate` exactly as written. That is
+ * deliberate, and it is the point.
+ *
+ * It did not always work. This demo used to thread an explicit `rowWidth` from
+ * `useWindowDimensions()` into every template, because the off-screen
+ * measurement container declared only `left`/`top` and so laid the template
+ * out at its INTRINSIC width, collapsing every width-inheriting child: the
+ * snapshot came back 92pt wide against a 411pt row, and every skeleton row
+ * painted as a lone avatar square with nothing beside it. The container now
+ * declares both horizontal insets, which makes Yoga resolve it to its
+ * parent's content width — and its parent is the list, which has always known
+ * the real width. The workaround is gone because the reason for it is gone,
+ * not because it was tidied away.
  */
 
 import { useEffect, useState } from 'react';
 import { FlashList } from '@shopify/flash-list';
-import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import {
   SkeletonCell,
   SkeletonList,
@@ -65,15 +68,17 @@ function makeFeed(seed: number): readonly FeedItem[] {
 
 /** The real, loaded row. Also the template the skeleton is measured from —
  *  one source of truth, so the placeholder can never drift from the content.
- *  Every width is explicit, for the reason in this file's header. */
-function FeedRow({ title, rowWidth }: { title: string; rowWidth: number }): React.JSX.Element {
-  const textWidth = rowWidth - 32 - 48 - 12;
+ *  Not one width in here is hand-computed: the text column takes what the row
+ *  gives it, which is what makes this the same component in both roles. */
+function FeedRow({ title }: { title: string }): React.JSX.Element {
   return (
-    <View style={[styles.row, { width: rowWidth }]}>
+    <View style={styles.row}>
       <View style={styles.rowAvatar} />
       <View style={styles.rowText}>
-        <Text style={[styles.rowTitle, { width: textWidth }]}>{title}</Text>
-        <View style={[styles.rowLine, { width: textWidth * 0.7 }]} />
+        <Text style={styles.rowTitle} numberOfLines={1}>
+          {title}
+        </Text>
+        <View style={styles.rowLine} />
       </View>
     </View>
   );
@@ -110,9 +115,6 @@ function useTraversalCount(): number {
 
 export function ListDemo(): React.JSX.Element {
   const traversals = useTraversalCount();
-  // The list's real content width. Threaded into every template so the
-  // off-screen measurement sees the same geometry the row will have.
-  const rowWidth = useWindowDimensions().width;
   const [seed, setSeed] = useState(0);
   const [showEmpty, setShowEmpty] = useState(true);
   const feed = makeFeed(seed);
@@ -145,7 +147,7 @@ export function ListDemo(): React.JSX.Element {
             skeletonKey={EMPTY_TYPE}
             estimatedCount={2}
             rowSpacing={8}
-            renderTemplate={() => <FeedRow title="template" rowWidth={rowWidth} />}
+            renderTemplate={() => <FeedRow title="template" />}
           />
         </View>
       ) : null}
@@ -157,7 +159,7 @@ export function ListDemo(): React.JSX.Element {
         keyExtractor={(item) => item.id}
         renderItem={({ item, index }) => {
           if (item.loaded) {
-            return <FeedRow title={`Item ${index}`} rowWidth={rowWidth} />;
+            return <FeedRow title={`Item ${index}`} />;
           }
           if (index === 1) {
             return <InspectedRow />;
@@ -167,7 +169,7 @@ export function ListDemo(): React.JSX.Element {
               <SkeletonCell
                 itemType={ROW_TYPE}
                 skeletonKey={ROW_TYPE}
-                renderTemplate={() => <FeedRow title="template" rowWidth={rowWidth} />}
+                renderTemplate={() => <FeedRow title="template" />}
               />
             </View>
           );
@@ -239,6 +241,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#2f6fed',
   },
   rowText: {
+    // Inherited, never computed. See this file's header.
+    flex: 1,
     gap: 8,
   },
   rowTitle: {

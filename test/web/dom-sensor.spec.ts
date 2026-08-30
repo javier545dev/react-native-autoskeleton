@@ -159,6 +159,50 @@ test.describe('DOM sensor — container-vs-leaf resolution (spec §1.1)', () => 
     }
   });
 
+  // The rule's THIRD branch, and the one a consumer is most likely to hit
+  // without knowing it exists. Gated in both directions in the same test so the
+  // ONLY difference between "nothing" and "a shape" is the background, which is
+  // exactly the claim.
+  //
+  // Stated as a decision rather than an accident (2026-08-30). It was
+  // challenged as a possible defect, because a subtree written the natural
+  // way — `{data !== null && <img />}` — is empty while loading and its sized
+  // wrapper looks like the thing a skeleton should cover. It is not a defect: a
+  // non-transparent background is the only observable difference between a box
+  // that is content and a box that is structure, and transparent sized boxes
+  // are how layouts express spacers, flex fillers and gap shims. Emitting a
+  // shape for them would paint blocks over the gaps in every loading screen.
+  // The consumer-side answer is an always-mounted opaque slot — see
+  // `docs/image-pipeline.md`. Mirrored on native by the shared
+  // `container-rule-sized-but-transparent` fixture.
+  test('a sized but transparent container with no leaves contributes nothing, and the same box with a background contributes one shape', async ({
+    measure,
+  }) => {
+    const transparent = await measure(
+      `<div id="root" style="position:relative;width:300px;height:200px;">
+         <div style="width:180px;height:180px;"></div>
+       </div>`,
+    );
+    expect(
+      transparent.shapes,
+      'a box that reserves layout space but paints nothing, holding no detectable leaf, must ' +
+        'contribute no shape — the skeleton is derived from what is rendered',
+    ).toHaveLength(0);
+
+    const opaque = await measure(
+      `<div id="root" style="position:relative;width:300px;height:200px;">
+         <div style="width:180px;height:180px;background:#00ff00;"></div>
+       </div>`,
+    );
+    expect(
+      opaque.shapes,
+      'the identical box with a non-transparent background is content, not structure, so it ' +
+        'contributes its own shape',
+    ).toHaveLength(1);
+    expect(opaque.shapes![0]!.w).toBeCloseTo(180, 0);
+    expect(opaque.shapes![0]!.h).toBeCloseTo(180, 0);
+  });
+
   test('a container with no detectable leaves renders its own shape instead', async ({ measure }) => {
     const { shapes } = await measure(
       `<div id="root" style="position:relative;width:300px;">

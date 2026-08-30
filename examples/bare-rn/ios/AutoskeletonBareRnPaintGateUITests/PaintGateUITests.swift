@@ -115,6 +115,10 @@ final class PaintGateUITests: XCTestCase {
     private static let labelCard = "paint-gate-rounded-card"
     private static let labelIgnoredContent = "paint-gate-ignored-content"
     private static let labelIgnoredSibling = "paint-gate-ignored-sibling"
+    /// `PaintGateListScreen` is one tap away from launch — the cycle length and
+    /// order are part of the fixture contract (`App.tsx`'s `onToggleScreen`).
+    private static let labelScreenToggle = "paint-gate-screen-toggle"
+    private static let labelTemplateWidth = "paint-gate-list-template-width"
 
     /// `src/native/AutoSkeleton.tsx`'s `LOADING_ACCESSIBILITY_LABEL`, and the
     /// exact string `src/web/AutoSkeleton.tsx` already renders inside its
@@ -1134,6 +1138,91 @@ final class PaintGateUITests: XCTestCase {
                 "mounted 700ms apart, and ADR-8 gives every instance ONE clock with an absolute " +
                 "origin, so they must be at the same phase. A renderer that starts its own sweep " +
                 "from zero on mount is permanently offset by however late it mounted."
+        )
+    }
+
+    // MARK: - Virtualized lists
+
+    /// iOS's FIRST on-device list assertion. Until now every virtualized-list
+    /// gate lived on Android alone, so an iOS-side regression in the list
+    /// template path had nothing to fail against — worth stating plainly
+    /// rather than leaving as an unexplained asymmetry.
+    ///
+    /// REAL, on-device-found defect (2026-08-30): `TemplateMeasurementHost`
+    /// mounts the off-screen template in a `position: 'absolute'` container.
+    /// A Yoga absolute box declaring only a leading position resolves its
+    /// width from its own CONTENT, so the template was laid out at its
+    /// INTRINSIC width and every width-inheriting child (`flex: 1`,
+    /// `width: '100%'`, `alignSelf: 'stretch'`) collapsed to zero — a 92.19pt
+    /// snapshot for a 411.43pt row, painting a lone avatar square. The fix
+    /// declares both horizontal insets so Yoga resolves the box to its
+    /// parent's content width; the parent is the list, which has always known
+    /// the real width.
+    ///
+    /// This compares the header itemType's MEASURED snapshot width against the
+    /// width of the very container its `SkeletonList` is mounted in — a direct
+    /// parent/child pair, so agreement is the right answer rather than an
+    /// approximation of it. Both numbers ride in the readout's accessibility
+    /// label (`TemplateWidthReadout` in `App.tsx`) because an explicit
+    /// `accessibilityLabel` replaces a `Text`'s content in the tree XCUITest
+    /// queries; the Android gate reads that identical encoding.
+    func testListTemplateIsMeasuredAtItsContainersWidthNotItsIntrinsicWidth() {
+        waitForMount()
+        let screenToggle = element(Self.labelScreenToggle)
+        XCTAssertTrue(
+            screenToggle.waitForExistence(timeout: Self.mountTimeout),
+            "FIXTURE FAILURE: could not locate the screen toggle"
+        )
+        screenToggle.tap()
+
+        // The deferred template measurement is scheduled off the interaction
+        // frame and retried across a bounded RAF budget, so poll for a
+        // RESOLVED readout rather than guessing a sleep — the same discipline
+        // `pollUntilPixel` uses for the overlay round-trip.
+        let readout = app.descendants(matching: .any)
+            .matching(identifier: Self.labelTemplateWidth).firstMatch
+        XCTAssertTrue(
+            readout.waitForExistence(timeout: Self.mountTimeout),
+            "FIXTURE FAILURE: PaintGateListScreen never mounted its template-width readout"
+        )
+
+        var label = ""
+        var measured = -1
+        var container = -1
+        let deadline = Date().addingTimeInterval(Self.mountTimeout)
+        repeat {
+            label = readout.label
+            let parts = label
+                .replacingOccurrences(of: "\(Self.labelTemplateWidth):", with: "")
+                .split(separator: "/")
+            if parts.count == 2, let m = Int(parts[0]), let c = Int(parts[1]) {
+                measured = m
+                container = c
+            }
+            if measured > 0 && container > 0 { break }
+            Thread.sleep(forTimeInterval: Self.pollInterval)
+        } while Date() < deadline
+
+        XCTAssertGreaterThan(
+            container, 0,
+            "FIXTURE FAILURE: the SkeletonList's container never reported a width (readout: " +
+                "'\(label)') — the screen never laid out, so there is no width to compare against."
+        )
+        XCTAssertGreaterThan(
+            measured, 0,
+            "The header itemType never resolved to a measured snapshot at all (readout: " +
+                "'\(label)') within \(Int(Self.mountTimeout))s."
+        )
+        // One point of rounding either way; anything wider is the
+        // intrinsic-width collapse, not float noise.
+        XCTAssertLessThanOrEqual(
+            abs(measured - container), 1,
+            "The off-screen template measured \(measured)pt wide, but the container its " +
+                "SkeletonList is mounted in is \(container)pt wide. The template is being laid " +
+                "out at its INTRINSIC width, so every width-inheriting child in it collapsed, " +
+                "and every skeleton row drawn from this snapshot is the wrong width. The list " +
+                "knows its own width; the template must inherit it, rather than the consumer " +
+                "threading an explicit width through renderTemplate to compensate."
         )
     }
 

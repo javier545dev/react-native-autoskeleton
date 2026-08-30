@@ -35,6 +35,7 @@ import {
   SkeletonListFooter,
   SkeletonProvider,
   templateTraversalCounter,
+  useSkeletonCell,
 } from 'autoskeleton';
 // ADR-5/RISK-8 tier-2 opt-in, spelled exactly the way a consumer spells it.
 // The optional peers are imported in the app's own module graph, never the
@@ -124,6 +125,12 @@ export const PAINT_GATE_LIST_FIXTURE = {
     // per-cell rows above — by the time the footer mounts, that itemType
     // is already cached, so the footer must resolve purely from cache.
     footerRowPrefix: 'paint-gate-list-footer-row-',
+    // 2026-08-30: the readout that makes the off-screen template's MEASURED
+    // width observable from outside the app. Reports the header itemType's
+    // cached snapshot width against the width of the very container the
+    // `SkeletonList` is mounted in — a direct parent/child pair, so the two
+    // numbers must agree.
+    templateWidth: 'paint-gate-list-template-width',
   },
   colors: {
     text: '#101010',
@@ -277,9 +284,22 @@ function ListCardContent({ accessibilityLabel }: { accessibilityLabel: string })
       accessibilityLabel={accessibilityLabel}
       style={[styles.listCard, { height: PAINT_GATE_LIST_FIXTURE.rowHeight }]}
     >
-      <View
-        style={[styles.listCardText, { backgroundColor: PAINT_GATE_LIST_FIXTURE.colors.text }]}
-      />
+      <View style={styles.listCardRow}>
+        <View
+          style={[styles.listCardAvatar, { backgroundColor: PAINT_GATE_LIST_FIXTURE.colors.accent }]}
+        />
+        {/* DELIBERATELY `flex: 1`, not a fixed pixel width (2026-08-30).
+         *  Every shape in this fixture used to carry an explicit width, which
+         *  meant the whole list paint gate was structurally blind to the ONE
+         *  authoring constraint the list API actually had: the off-screen
+         *  template container had no width of its own, so it laid out at its
+         *  INTRINSIC width and any width-inheriting child collapsed. A fixture
+         *  that never inherits a width can never observe that. This bar is the
+         *  fixture's only load-bearing width, and it is inherited. */}
+        <View
+          style={[styles.listCardText, { backgroundColor: PAINT_GATE_LIST_FIXTURE.colors.text }]}
+        />
+      </View>
       <View
         accessible
         accessibilityLabel={PAINT_GATE_LIST_FIXTURE.labels.accent}
@@ -340,8 +360,44 @@ function useTraversalCounterDisplay(): number {
   return count;
 }
 
+/** Renders the header itemType's MEASURED template width next to the width of
+ *  the container that `SkeletonList` is actually mounted in.
+ *
+ *  Why this readout exists (2026-08-30): the list paint gate could see WHAT
+ *  was painted but never at what width, and every fixture shape carried a
+ *  fixed pixel width, so a template that laid out at its intrinsic width
+ *  instead of the row's width was invisible to every assertion in the suite.
+ *  `useSkeletonCell` with no `renderTemplate` is a pure cache read — it never
+ *  claims the itemType and never schedules a traversal — so surfacing this
+ *  costs the thing under test nothing. The value is re-read on the traversal
+ *  counter's own 150ms poll, which is what re-renders this screen. */
+function TemplateWidthReadout({ containerWidth }: { containerWidth: number }) {
+  const cell = useSkeletonCell({
+    itemType: PAINT_GATE_LIST_FIXTURE.headerItemType,
+    skeletonKey: PAINT_GATE_LIST_FIXTURE.headerItemType,
+  });
+  const measured = cell.snapshot === null ? -1 : cell.snapshot.frameWidth;
+  const value = `${Math.round(measured)}/${Math.round(containerWidth)}`;
+  return (
+    <Text
+      accessible
+      // The value rides in the accessibility LABEL, exactly like
+      // `paint-gate-renderer:<kind>` above. Android could read the rendered
+      // text off the node, but iOS cannot: an explicit `accessibilityLabel`
+      // replaces the text content in the accessibility tree XCUITest queries.
+      // One encoding both gates can read beats two divergent ones.
+      accessibilityLabel={`${PAINT_GATE_LIST_FIXTURE.labels.templateWidth}:${value}`}
+      testID={PAINT_GATE_LIST_FIXTURE.labels.templateWidth}
+      style={styles.counterLabel}
+    >
+      {`templateWidth:${value}`}
+    </Text>
+  );
+}
+
 function PaintGateListScreen() {
   const traversalCount = useTraversalCounterDisplay();
+  const [headerBlockWidth, setHeaderBlockWidth] = useState(0);
 
   return (
     <View
@@ -350,18 +406,33 @@ function PaintGateListScreen() {
       testID="paint-gate-list-root"
       style={styles.screen}
     >
-      <Text
-        accessible
-        accessibilityLabel={PAINT_GATE_LIST_FIXTURE.labels.traversalCounter}
-        testID="paint-gate-list-traversal-counter"
-        style={styles.counterLabel}
-      >
-        {`traversalCount:${traversalCount}`}
-      </Text>
+      {/* Both readouts share ONE line on purpose. Every pixel assertion in
+       *  `PaintGateListInstrumentedTest` is calibrated against this screen's
+       *  vertical layout, and the dev LogBox notification bar sits over the
+       *  bottom of the viewport: adding a second full-width line pushed a
+       *  skeleton row underneath it, and the shared-clock assertion sampled
+       *  the banner's #333333 instead of the shimmer. A readout must not move
+       *  the thing it reports on. */}
+      <View style={styles.counterRow}>
+        <Text
+          accessible
+          accessibilityLabel={PAINT_GATE_LIST_FIXTURE.labels.traversalCounter}
+          testID="paint-gate-list-traversal-counter"
+          style={styles.counterLabel}
+        >
+          {`traversalCount:${traversalCount}`}
+        </Text>
+        <TemplateWidthReadout containerWidth={headerBlockWidth} />
+      </View>
       {/* task 6.1 (REQ-LIST-EMPTY-1/2): a standalone `SkeletonList`, own
        *  itemType, own first-ever template measurement — independent of
        *  the per-cell `SkeletonCell` rows in the FlashList below. */}
-      <View accessible accessibilityLabel="paint-gate-list-header-block" testID="paint-gate-list-header-block">
+      <View
+        accessible
+        accessibilityLabel="paint-gate-list-header-block"
+        testID="paint-gate-list-header-block"
+        onLayout={(event) => setHeaderBlockWidth(event.nativeEvent.layout.width)}
+      >
         <SkeletonList
           itemType={PAINT_GATE_LIST_FIXTURE.headerItemType}
           skeletonKey={PAINT_GATE_LIST_FIXTURE.headerItemType}
@@ -703,6 +774,10 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
   },
+  counterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   counterLabel: {
     color: '#000000',
     padding: 8,
@@ -711,13 +786,22 @@ const styles = StyleSheet.create({
     padding: 12,
     gap: 8,
   },
+  listCardRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  listCardAvatar: {
+    width: 40,
+    height: 40,
+  },
   listCardText: {
-    width: 200,
-    height: 24,
+    // Inherits the row's width. See `ListCardContent`'s own comment.
+    flex: 1,
+    height: 40,
   },
   listCardAccent: {
     width: 120,
-    height: 40,
+    height: 24,
   },
 });
 

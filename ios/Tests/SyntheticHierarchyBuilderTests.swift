@@ -70,6 +70,27 @@ final class SyntheticHierarchyBuilderTests: XCTestCase {
         try assertShapes(shapes, matchExpected: "container-rule-no-leaves")
     }
 
+    /// The container rule's THIRD branch, previously ungated on every platform
+    /// even though all three implement it: a container that reserves real
+    /// layout space but paints nothing of its own, and holds no detectable
+    /// leaf, contributes NOTHING.
+    ///
+    /// Stated as a decision rather than an accident (2026-08-30). It was
+    /// challenged as a possible defect, because a subtree written the natural
+    /// way — `{data !== null && <Image />}` — is empty while loading, and its
+    /// sized wrapper looks exactly like the thing a skeleton should cover. It
+    /// is not a defect: a non-transparent background is the ONLY observable
+    /// difference between a box that is content and a box that is structure,
+    /// and transparent sized boxes are how every React Native layout expresses
+    /// spacers, flex fillers, safe-area padding and gap shims. Emitting a shape
+    /// for them would paint grey blocks over the gaps in every loading screen.
+    /// The consumer-side answer is an always-mounted opaque slot, documented in
+    /// `docs/image-pipeline.md`.
+    func testASizedButTransparentContainerWithNoLeavesEmitsNothing() throws {
+        let shapes = try measure(fixtureNamed: "container-rule-sized-but-transparent")
+        try assertShapes(shapes, matchExpected: "container-rule-sized-but-transparent")
+    }
+
     // MARK: - Ignore subtree
 
     func testIgnoreSubtreeExcludesEntireSubtree() throws {
