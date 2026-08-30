@@ -7,19 +7,12 @@
         "rule": "broken-image",
         "value": "*",
         "files": [
-          "src/web/AutoSkeleton.tsx"
+          "cli/**",
+          "src/**",
+          "test/**"
         ],
-        "createdAt": "2026-08-28T23:56:53.982Z",
-        "reason": "Sole <img> occurrence in this file is inside a JSDoc comment documenting why onSuccessorPainted did not fire; no JSX img element exists. Verified three times as the comment migrated (L447 -> L471 -> L474)."
-      },
-      {
-        "rule": "broken-image",
-        "value": "*",
-        "files": [
-          "src/web/dom-sensor.ts"
-        ],
-        "createdAt": "2026-08-29T15:02:19.831Z",
-        "reason": "Sole <img> occurrence in this file is inside a code comment documenting react-native-web's DOM output (a background-image div plus a full-size opacity:0 img), which is exactly why the leafShape opacity guard exists; dom-sensor.ts renders no UI and contains no img element. Same class as the committed src/web/AutoSkeleton.tsx exception."
+        "createdAt": "2026-08-30T13:08:08.157Z",
+        "reason": "broken-image matches the literal text <img>, and in this repo that text appears almost exclusively in PROSE: doc comments and test-fixture comments explaining image behaviour, which a skeleton library writes about constantly. src/, test/ and cli/ render no UI at all - src/core and src/native contain no JSX that can produce an <img>, and the specs are DOM-fixture builders. Verified false positives so far: src/web/AutoSkeleton.tsx (JSDoc on onSuccessorPainted), src/web/dom-sensor.ts (comment documenting react-native-web's DOM output), src/core/handoff.ts:39 (hasOwnPlaceholder naming <img> as one of three consumer placeholder examples), test/web/dom-sensor.spec.ts:169 and :384 (one describes the empty-subtree antipattern, the other explains that the fixture uses a REAL src precisely so it is not a broken image). Deliberately scoped: examples/** is NOT covered, because those apps render real UI where a genuinely broken image would be a real defect and the rule keeps its value there."
       }
     ]
   }
