@@ -200,10 +200,14 @@ jobs:
           # something else and calling it NFR-1.
           disable-animations: false
           working-directory: examples/bare-rn/android
+          # ONE LINE, no `\` continuation. android-emulator-runner does not run
+          # this through a shell that joins continuations, so the backslash
+          # arrived as a literal argument and Gradle reported
+          # `Task '\' not found in root project`. The emulator had booted fine
+          # by then — this was the next failure behind it.
           script: |
             adb reverse tcp:8081 tcp:8081
-            ./gradlew :app:connectedDebugAndroidTest \
-              -Pandroid.testInstrumentationRunnerArguments.class=com.autoskeletonbarern.PaintGateListFrameDropsInstrumentedTest,com.autoskeletonbarern.PaintGateListInstrumentedTest
+            ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.autoskeletonbarern.PaintGateListFrameDropsInstrumentedTest,com.autoskeletonbarern.PaintGateListInstrumentedTest
 
   # AUTHORED ONLY — see this file's own header comment. iOS traversal timing
   # needs a dedicated XCTest perf target this session did not build.

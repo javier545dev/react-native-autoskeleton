@@ -283,3 +283,28 @@ describe('android-emulator-runner jobs can actually boot an emulator', () => {
     }
   });
 });
+
+describe('emulator scripts do not rely on shell line continuations', () => {
+  // `android-emulator-runner` does not run its `script:` through a shell that
+  // joins `\` continuations, so a wrapped command arrives with the backslash
+  // as a literal argument — Gradle reported `Task '\' not found in root
+  // project`. The emulator had booted correctly by then; this was the next
+  // failure hiding behind the boot failure.
+  it.each(workflowFiles)('%s: no backslash continuation inside an emulator script', (file) => {
+    const workflow = readWorkflow(file);
+    for (const [jobName, job] of jobsOf(workflow)) {
+      for (const step of stepsOf(job)) {
+        if (!usesAction(step, 'reactivecircus/android-emulator-runner')) {
+          continue;
+        }
+        const script = String((step.with ?? {}).script ?? '');
+        expect(
+          /\\\s*\n/.test(script),
+          `${file}: job "${jobName}" wraps an emulator script line with a backslash. The action ` +
+            `does not join continuations, so the backslash becomes a literal argument. Put the ` +
+            `command on one line.`,
+        ).toBe(false);
+      }
+    }
+  });
+});
