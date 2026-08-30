@@ -40,10 +40,23 @@ production web bundle. You do not need to strip `debugOverlay` props before
 shipping; a correctly configured bundler already removes the code that
 would use them.
 
-**Current implementation status:** the overlay itself is fully wired on
-web and Android. On iOS, the `debugOverlay` prop is accepted and stored,
-but is not yet wired to a visible rung overlay — an open item, not a
-silent gap (tracked separately from this doc).
+**Current implementation status:** the overlay draws on **web only**.
+
+On **both** native platforms the `debugOverlay` prop is accepted and stored
+and nothing reads it: Android's `AutoskeletonOverlayView` declares
+`var debugOverlay` and its ViewManager assigns it, but no code path reads the
+field, and `AutoskeletonDebugOverlayFactory.createIfDebug` has no production
+call site. iOS's `mountOrUpdate` takes a `debugOverlay: Bool` it never
+references, and `AutoskeletonDebugOverlay.swift` likewise has no caller. Both
+classes are implemented and unit-tested; neither is wired.
+
+This paragraph previously said the overlay was "fully wired on web and
+Android" and named iOS as the only gap — "an open item, not a silent gap".
+That was exactly backwards, and worse than an undocumented gap: a reader with
+a blank overlay on Android would have concluded the fault was theirs. Corrected
+2026-08-30 after a fresh-eyes review. `spec.md`'s REQ-OBS-OVERLAY-1 asks for
+the overlay to draw, so this remains an open requirement on native, not a
+resolved one.
 
 ## Dev budget warnings
 

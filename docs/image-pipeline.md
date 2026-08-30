@@ -33,8 +33,11 @@ an instant where neither the skeleton nor the successor visual is painted.
 - **Reveal-before-hide, never hide-then-reveal.** When `isLoading` becomes
   `false`, your content subtree is revealed *underneath* the still
   fully-painted skeleton overlay. The overlay is retained until told the
-  successor painted, or a timeout elapses, then cross-fades out. There is
-  no instant where nothing is painted.
+  successor painted, or a timeout elapses, and is then removed after a
+  further `handoffFadeMs`. There is no instant where nothing is painted.
+  Note that `handoffFadeMs` is a delay, not a fade — nothing animates
+  opacity on teardown, so raising it keeps a fully opaque skeleton on
+  screen for longer rather than dissolving it (corrected 2026-08-30).
 - **`onMetrics.displayDurationMs` measures phase 1 only** — stamped the
   moment `isLoading` flips `false`, never including the placeholder/decode
   tail. The tail is reported *separately* as `handoffMs` +
