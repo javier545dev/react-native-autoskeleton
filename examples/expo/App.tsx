@@ -87,10 +87,18 @@ export default function App() {
   return (
     <View style={styles.container}>
       <PaintGateStrip />
+      {/* `skeletonOnRefresh` is REQUIRED for the toggle to show anything on a
+          SECOND load. Without it, REQ-PTR-1's stale-while-revalidate default
+          suppresses the skeleton on every load AFTER the first — deliberately,
+          so a refresh does not blank out content the reader is already looking
+          at. Opting in here is what makes the loading state observable on
+          demand, which is what a fixture needs to be able to demonstrate.
+          Matches `examples/vite/src/App.tsx`. */}
       <ThemedAutoSkeleton
         isLoading={isLoading}
         skeletonKey="expo-theming-fixture"
         className="bg-slate-400 text-cyan-300 rounded-2xl"
+        skeletonOnRefresh
       >
         <View style={styles.card}>
           <Text style={styles.title}>Loaded content</Text>

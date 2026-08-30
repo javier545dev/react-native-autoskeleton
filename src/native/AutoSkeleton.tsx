@@ -61,7 +61,7 @@ import type { SkeletonTheme } from '../core/contracts';
 import { createHandoffController, type HandoffController } from '../core/handoff';
 import { assembleMetrics } from '../core/metrics';
 import { shouldRunHandoffCycle } from '../core/refresh-gate';
-import { MemoryShapeStore } from '../core/snapshot';
+import { isEmptySnapshot, MAX_EMPTY_MEASUREMENTS, MemoryShapeStore } from '../core/snapshot';
 import { createHintRegistry, snapshotHintEntries } from '../core/hint-registry';
 import { resolveSharedShimmerPeriodMs } from '../core/shimmer-period';
 import { applyThemeOverride } from '../core/theme-override';
@@ -256,6 +256,7 @@ function useSkeletonDelayGate(delayMs: number, cycleId: number): boolean {
 function useColdMeasurement(
   active: boolean,
   cacheKey: string,
+  cycleId: number,
   budgetMs: number,
   maxShapes: number,
   defaultRadius: number,
@@ -326,8 +327,12 @@ function useColdMeasurement(
 
     const frameHandle = requestAnimationFrame(measure);
     return () => cancelAnimationFrame(frameHandle);
+    // `cycleId` PACES the bounded empty-measurement retry (`layoutTick` cannot:
+    // a subtree that is laid out but not yet populated fires no new layout
+    // event when its content finally arrives). Same rationale, same bound and
+    // same shared-core budget as `web/AutoSkeleton.tsx`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, cacheKey, layoutTick, platform]);
+  }, [active, cacheKey, cycleId, layoutTick, platform]);
 
   return { viewRef, onLayout };
 }
@@ -511,11 +516,27 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   const [coldSnapshot, setColdSnapshot] = useState<{ key: string; snapshot: ShapeSnapshot } | null>(null);
   const [nativeUnavailable, setNativeUnavailable] = useState(false);
   const coldSnapshotForKey = coldSnapshot?.key === cacheKey ? coldSnapshot.snapshot : null;
-  const snapshot = cacheHit ? cacheStateRef.current.snapshot : coldSnapshotForKey;
+  // A fresh traversal this instance just took ALWAYS wins over whatever the
+  // store answered with when this `cacheKey` was first seen — see the
+  // identically-shaped comment in `web/AutoSkeleton.tsx`.
+  const snapshot = coldSnapshotForKey ?? cacheStateRef.current.snapshot;
+
+  // A zero-shape snapshot is provisional, not the truth about this subtree:
+  // it is equally the signature of a subtree the native sensor reached before
+  // it had any laid-out, mounted content to report. Re-measure on the next
+  // loading cycle while the key's bounded, inspectable budget lasts. Shared
+  // policy with web, by construction — see `core/snapshot.ts`'s
+  // `MAX_EMPTY_MEASUREMENTS`.
+  const remeasureEmpty =
+    snapshot !== null &&
+    isEmptySnapshot(snapshot) &&
+    ctx.store.emptyMeasurementsFor(cacheKey) < MAX_EMPTY_MEASUREMENTS;
+  const cacheHitForCycle = cacheHit && !remeasureEmpty;
 
   const { viewRef, onLayout } = useColdMeasurement(
-    showSkeleton && !cacheHit && snapshot === null && !nativeUnavailable,
+    showSkeleton && (snapshot === null || remeasureEmpty) && !nativeUnavailable,
     cacheKey,
+    cycleId,
     ctx.budgetMs,
     ctx.maxShapes,
     theme.defaultRadius,
@@ -558,7 +579,7 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
     skeletonSuppressed,
     {
       snapshot,
-      cacheHit,
+      cacheHit: cacheHitForCycle,
       loadStartedAt,
       platform,
       renderer: nativeUnavailable ? 'native' : rendererKind,

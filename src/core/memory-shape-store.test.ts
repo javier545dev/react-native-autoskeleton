@@ -4,7 +4,7 @@ import { composeCacheKey } from './cache-key';
 import type { ShapeSnapshot } from './types';
 import { WIRE_VERSION } from './types';
 import { encodeWire } from './wire';
-import { MemoryShapeStore } from './snapshot';
+import { isEmptySnapshot, MAX_EMPTY_MEASUREMENTS, MemoryShapeStore } from './snapshot';
 
 // Task 1.3 (tasks.md Phase 1): Observability N/A directly for this task; the
 // store underlies `onMetrics.cacheHit` correctness downstream (assembled in 1.8).
@@ -176,3 +176,96 @@ describe('MemoryShapeStore values() (bulk-iteration seam for opt-in serializatio
 // functions in `snapshot-io.ts` so a bundler can tree-shake them out of a
 // web build that never calls them. See `snapshot-io.ts`'s header comment and
 // plan.md §3.3 for the full rationale.
+
+// ---------------------------------------------------------------------------
+// Empty-measurement ceiling (defect, 2026-08-29): a measurement that produced
+// ZERO shapes was written to the store like any other, so every later cycle
+// served that empty snapshot back instead of re-measuring — the skeleton for
+// an `<img>` (or anything else) that had no layout box at first measure was
+// permanently blank, on both platforms. See `snapshot.ts`'s
+// `MAX_EMPTY_MEASUREMENTS` doc comment for why the answer is a BOUNDED,
+// INSPECTABLE re-measure budget rather than "never cache zero shapes".
+// ---------------------------------------------------------------------------
+
+function emptySnapshotFor(key: ShapeCacheKey): ShapeSnapshot {
+  return { ...snapshotFor(key), data: encodeWire([]) };
+}
+
+describe('isEmptySnapshot', () => {
+  it('is true for a snapshot carrying no shapes and false for one carrying any', () => {
+    const key = keyFor('profile');
+    expect(isEmptySnapshot(emptySnapshotFor(key))).toBe(true);
+    expect(isEmptySnapshot(snapshotFor(key))).toBe(false);
+  });
+});
+
+describe('MemoryShapeStore empty-measurement ceiling', () => {
+  it('reports zero empty measurements for a key that was never measured', () => {
+    const store = new MemoryShapeStore();
+    expect(store.emptyMeasurementsFor(keyFor('profile'))).toBe(0);
+  });
+
+  it('counts each stored EMPTY measurement per key, independently of other keys', () => {
+    const store = new MemoryShapeStore();
+    const a = keyFor('a');
+    const b = keyFor('b');
+    store.set(a, emptySnapshotFor(a));
+    store.set(a, emptySnapshotFor(a));
+    store.set(b, emptySnapshotFor(b));
+    expect(store.emptyMeasurementsFor(a)).toBe(2);
+    expect(store.emptyMeasurementsFor(b)).toBe(1);
+  });
+
+  it('does not count a measurement that produced shapes, and clears a prior empty run', () => {
+    const store = new MemoryShapeStore();
+    const key = keyFor('profile');
+    store.set(key, emptySnapshotFor(key));
+    expect(store.emptyMeasurementsFor(key)).toBe(1);
+    store.set(key, snapshotFor(key));
+    expect(store.emptyMeasurementsFor(key)).toBe(0);
+  });
+
+  it('the ceiling is a real, inspectable bound — not an infinite retry', () => {
+    const store = new MemoryShapeStore();
+    const key = keyFor('nothing-to-draw');
+    for (let i = 0; i < MAX_EMPTY_MEASUREMENTS; i++) {
+      expect(store.emptyMeasurementsFor(key)).toBeLessThan(MAX_EMPTY_MEASUREMENTS);
+      store.set(key, emptySnapshotFor(key));
+    }
+    expect(store.emptyMeasurementsFor(key)).toBe(MAX_EMPTY_MEASUREMENTS);
+  });
+
+  it('forgets the count when the entry is deleted, so a re-measured key starts fresh', () => {
+    const store = new MemoryShapeStore();
+    const key = keyFor('profile');
+    store.set(key, emptySnapshotFor(key));
+    store.delete(key);
+    expect(store.emptyMeasurementsFor(key)).toBe(0);
+  });
+
+  it('forgets the count when the entry is invalidated', () => {
+    const store = new MemoryShapeStore();
+    const key = keyFor('profile', 'ios');
+    store.set(key, emptySnapshotFor(key));
+    store.invalidate((parts) => parts.platform === 'ios');
+    expect(store.emptyMeasurementsFor(key)).toBe(0);
+  });
+
+  it('forgets the count when the store is cleared', () => {
+    const store = new MemoryShapeStore();
+    const key = keyFor('profile');
+    store.set(key, emptySnapshotFor(key));
+    store.clear();
+    expect(store.emptyMeasurementsFor(key)).toBe(0);
+  });
+
+  it('forgets the count when the entry is evicted by the LRU cap', () => {
+    const store = new MemoryShapeStore({ maxEntries: 1 });
+    const a = keyFor('a');
+    const b = keyFor('b');
+    store.set(a, emptySnapshotFor(a));
+    store.set(b, emptySnapshotFor(b)); // evicts 'a'
+    expect(store.has(a)).toBe(false);
+    expect(store.emptyMeasurementsFor(a)).toBe(0);
+  });
+});

@@ -164,7 +164,7 @@ test.describe('Expo Web export — paint (proven by Chromium hit-testing the rea
     expect(probes.outsideCard, 'nothing outside the card is covered').toBe(false);
   });
 
-  test('the skeleton is a live loading state, not a painted picture: it hands off to real content, and a second load keeps that content visible per the REQ-PTR-1 stale-while-revalidate default', async ({
+  test('the skeleton is a live loading state, not a painted picture: it hands off to real content, and REQ-PTR-1\'s documented `skeletonOnRefresh` opt-out brings it back on a second load', async ({
     page,
   }) => {
     await page.goto(server.baseURL, { waitUntil: 'load' });
@@ -183,22 +183,33 @@ test.describe('Expo Web export — paint (proven by Chromium hit-testing the rea
     expect(await readable()).toBe(true);
     await expect(page.locator('[data-testid="title"]')).toHaveText('Ada Lovelace');
 
-    // Loading a SECOND time. REQ-PTR-1's default is stale-while-revalidate:
-    // once real content has been shown, a later `isLoading=true` must NOT
-    // cover it again (`skeletonOnRefresh` is the documented opt-out). This
-    // assertion pins the DOCUMENTED behavior rather than the intuitive one —
-    // the first draft of this test expected the skeleton back, and the
-    // exported app correctly refused.
+    // Loading a SECOND time. REQ-PTR-1's DEFAULT is stale-while-revalidate —
+    // once real content has been shown, a later `isLoading=true` must not
+    // cover it again — and `skeletonOnRefresh` is its documented opt-out.
+    // `examples/expo/App.web.tsx` now sets that opt-out (2026-08-29), because
+    // a fixture that can never put a loading state back on screen on demand
+    // cannot demonstrate one, which is exactly why the empty-snapshot defect
+    // fixed this session was invisible on every non-vite example.
+    //
+    // The DEFAULT half is not lost by this change: `auto-skeleton.spec.ts`
+    // gates both halves ("default: refreshing WARM-CACHE content shows no
+    // skeleton..." and "opt-out (skeletonOnRefresh): ...") against the real
+    // production component. What only THIS file can prove is that the opt-out
+    // survives the Expo Web export pipeline end to end, in the bytes a user
+    // actually deploys — which is what it now asserts.
     await page.click('[data-testid="toggle"]');
     await expect(page.locator('[data-testid="toggle"]')).toHaveText('Stop loading');
-    await expect(page.locator('.askl-overlay')).toHaveCount(0, { timeout: 5_000 });
-    expect(await readable(), 'stale content stays readable during a refresh').toBe(true);
+    await expect(page.locator('.askl-overlay')).toHaveCount(1, { timeout: 10_000 });
 
-    // ...but the refresh IS announced, which is the half a suppressed
-    // skeleton must not silently drop (G.16).
+    // REQ-A11Y-1: while the skeleton is genuinely painted over the content
+    // again, that content is hidden from assistive technology again too.
+    expect(await readable(), 'content covered by a real skeleton is hidden from AT').toBe(false);
+
+    // ...and the refresh is announced, the half a skeleton must never drop
+    // (G.16), suppressed or not.
     const busy = await page.evaluate(
       () => document.querySelector('[data-testid="card"]')!.closest('[aria-busy="true"]') !== null,
     );
-    expect(busy, 'a suppressed refresh still announces aria-busy').toBe(true);
+    expect(busy, 'a refresh announces aria-busy').toBe(true);
   });
 });

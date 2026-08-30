@@ -329,6 +329,71 @@ test.describe('AutoSkeleton — REQ-PTR-1 pull-to-refresh', () => {
     );
     expect(metricsAfterOptOutCycle).toHaveLength(1);
   });
+
+  // Defect gate (2026-08-29), found while making the example fixtures able to
+  // demonstrate a replay. The opt-out test above only ever mounts the overlay
+  // for the FIRST time: it starts at `isLoading: false`, so the overlay host
+  // has never been torn down when it asserts. That left the entire SECOND
+  // opted-in cycle ungated, and it was broken — `useOverlayRenderer` destroyed
+  // its `RendererHandle` only on component UNMOUNT, so once a completed
+  // handoff removed the overlay host, the stale handle pointed at a detached
+  // node while the effect's deps sat unchanged. Every later cycle rendered a
+  // host with `aria-busy`, `role="status"` and `aria-hidden` content, and
+  // painted absolutely nothing. Observed first in the real exported Expo Web
+  // app (`expo-web-export.spec.ts`), reproduced here against the component.
+  test('opt-out, SECOND cycle: an opted-in refresh AFTER a completed handoff re-mounts the overlay, not just its aria machinery', async ({
+    page,
+    mountReady,
+  }) => {
+    await mountReady();
+    const render = (isLoading: boolean): Promise<void> =>
+      page.evaluate((loading) => {
+        const w = window as unknown as { __root: any; __els: any };
+        w.__root.render(
+          w.__els.React.createElement(
+            w.__els.SkeletonProvider,
+            { store: w.__els.store },
+            w.__els.React.createElement(
+              w.__els.AutoSkeleton,
+              { isLoading: loading, skeletonKey: 'ptr-second-cycle', skeletonOnRefresh: true },
+              w.__els.React.createElement('p', { style: { margin: 0, fontSize: 16 } }, 'Existing content'),
+            ),
+          ),
+        );
+      }, isLoading);
+
+    await page.evaluate(() => {
+      const { React, createRoot, AutoSkeleton, SkeletonProvider, MemoryShapeStore } = window.AutoskeletonComponent;
+      const w = window as unknown as { __root: any; __els: any };
+      w.__root = createRoot(document.getElementById('root')!);
+      w.__els = { React, AutoSkeleton, SkeletonProvider, store: new MemoryShapeStore() };
+    });
+
+    // Cycle 1: a real cold skeleton.
+    await render(true);
+    await settle(page);
+    expect(await page.locator('.askl-overlay').count(), 'cycle 1 must paint at all').toBe(1);
+
+    // Let the handoff FULLY settle so the overlay host genuinely unmounts —
+    // the precondition the defect needed, and the one the test above skipped.
+    await render(false);
+    await page.waitForTimeout(300);
+    expect(await page.locator('.askl-overlay').count(), 'the overlay must be gone once loaded').toBe(0);
+
+    // Cycle 2: the opted-in refresh.
+    await render(true);
+    await settle(page);
+    await settle(page);
+
+    expect(
+      await page.locator('.askl-overlay').count(),
+      'an opted-in second cycle must paint a real overlay, not just announce one',
+    ).toBe(1);
+    const clipPath = await page.evaluate(
+      () => getComputedStyle(document.querySelector('.askl-overlay')!).clipPath,
+    );
+    expect(clipPath, 'the re-mounted overlay must carry the measured shapes').toContain('path(');
+  });
 });
 
 test.describe('AutoSkeleton — REQ-NAV-1 cache hot path + REQ-OBS-METRICS-1', () => {

@@ -183,10 +183,19 @@ function PaintGateScreen() {
         {`renderer: ${renderer}`}
       </Text>
 
+      {/* `skeletonOnRefresh` is REQUIRED for the toggle to show anything on a
+          SECOND load. Without it, REQ-PTR-1's stale-while-revalidate default
+          suppresses the skeleton on every load AFTER the first — deliberately,
+          so a refresh does not blank out content the reader is already looking
+          at. Opting in here is what makes the loading state observable on
+          demand, which is what a fixture needs to be able to demonstrate (and
+          is why this file could not show the empty-snapshot defect at all).
+          Matches `examples/vite/src/App.tsx`. */}
       <AutoSkeleton
         isLoading={isLoading}
         skeletonKey={PAINT_GATE_FIXTURE.skeletonKey}
         onMetrics={(m) => setRenderer(m.renderer)}
+        skeletonOnRefresh
       >
         <View
           accessible
@@ -467,7 +476,10 @@ function Tier2Block({
   onMetrics?: (m: { renderer: string }) => void;
 }) {
   return (
-    <AutoSkeleton isLoading={isLoading} skeletonKey={skeletonKey} onMetrics={onMetrics}>
+    // `skeletonOnRefresh`: same rationale as `PaintGateScreen` above — without
+    // it REQ-PTR-1 suppresses the skeleton on every load after the first, so
+    // the tier-2 toggle could never put the Skia overlay back on screen.
+    <AutoSkeleton isLoading={isLoading} skeletonKey={skeletonKey} onMetrics={onMetrics} skeletonOnRefresh>
       <View
         accessible
         accessibilityLabel={label}

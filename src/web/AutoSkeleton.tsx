@@ -36,7 +36,7 @@ import {
   emitRadiusFallbackWarning,
 } from '../core/metrics';
 import { shouldRunHandoffCycle } from '../core/refresh-gate';
-import { MemoryShapeStore } from '../core/snapshot';
+import { isEmptySnapshot, MAX_EMPTY_MEASUREMENTS, MemoryShapeStore } from '../core/snapshot';
 import type { AnimationKind, OnMetrics, ShapeSnapshot } from '../core/types';
 import { WIRE_HEADER_SLOTS, WIRE_STRIDE } from '../core/types';
 import { createCssRenderer, createShimmerClock, DEFAULT_BASE_COLOR, DEFAULT_HIGHLIGHT_COLOR } from './css-renderer';
@@ -284,6 +284,16 @@ function useOverlayRenderer(
   useEffect(() => {
     const host = hostRef.current;
     if (!host || !snapshot) {
+      // The overlay host is gone (a completed handoff unmounted it), so the
+      // handle now points at a DETACHED subtree. Releasing it here is what
+      // lets a LATER loading cycle mount a fresh overlay into the fresh host:
+      // before this, `destroy()` ran only on component unmount, so every
+      // `skeletonOnRefresh` cycle after the first rendered an `aria-busy`
+      // `role="status"` host with `aria-hidden` content underneath it and
+      // painted nothing at all. Not hypothetical — observed in the real
+      // exported Expo Web app before it was gated.
+      handleRef.current?.destroy();
+      handleRef.current = null;
       return;
     }
     // ADR-8 arbitration. Before this, `theme.speedMs` reached NOTHING on
@@ -342,6 +352,7 @@ function useColdMeasurement(
   wrapperRef: React.RefObject<HTMLDivElement | null>,
   active: boolean,
   cacheKey: string,
+  cycleId: number,
   hintsIgnored: boolean,
   budgetMs: number,
   maxShapes: number,
@@ -393,8 +404,15 @@ function useColdMeasurement(
         emitRadiusFallbackWarning(checkRadiusFallback(result.snapshot.radiusSources, { radiusFallbackShare }));
       }
     }
+    // `cycleId` is what PACES the bounded empty-measurement retry: `active`
+    // stays true across the re-render that follows an empty result, so without
+    // a per-cycle dep the effect would never run again — and with a
+    // frame-paced one it would burn the whole budget in three consecutive
+    // frames that all observe the same not-yet-laid-out DOM. A new loading
+    // cycle is a genuinely different moment in the app's life, which is
+    // exactly when re-measuring can find something new.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, cacheKey]);
+  }, [active, cacheKey, cycleId]);
 }
 
 /** Withholds the skeleton until `delayMs` has elapsed since this loading
@@ -721,15 +739,37 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   const [coldSnapshot, setColdSnapshot] = useState<{ key: string; snapshot: ShapeSnapshot } | null>(null);
   const traversalMsRef = useRef(0);
   const coldSnapshotForKey = coldSnapshot?.key === cacheKey ? coldSnapshot.snapshot : null;
-  const snapshot = cacheHit ? cacheStateRef.current.snapshot : coldSnapshotForKey;
+  // A fresh traversal this instance just took ALWAYS wins over whatever the
+  // store answered with when this `cacheKey` was first seen: the only way to
+  // get here with both present is the empty-remeasure path below, and serving
+  // the stale empty one back would defeat the whole re-measurement.
+  const snapshot = coldSnapshotForKey ?? cacheStateRef.current.snapshot;
+
+  // A zero-shape snapshot is not automatically the truth about this subtree —
+  // it is equally the signature of a subtree that had no layout box yet when
+  // the first traversal ran (an `<img>` whose bytes had not arrived is the
+  // everyday case). Treat it as provisional and take a genuinely fresh
+  // measurement on the next loading cycle, but only while the key's bounded,
+  // inspectable budget lasts, so content that legitimately has nothing to
+  // skeleton settles instead of re-traversing forever. See
+  // `core/snapshot.ts`'s `MAX_EMPTY_MEASUREMENTS` for the full rationale.
+  const remeasureEmpty =
+    snapshot !== null &&
+    isEmptySnapshot(snapshot) &&
+    ctx.store.emptyMeasurementsFor(cacheKey) < MAX_EMPTY_MEASUREMENTS;
+  // A cycle that re-traverses is not serving the cache, whatever the store
+  // happened to hold — reporting `cacheHit: true` alongside a real traversal
+  // would misreport REQ-NAV-1's own hot-path signal.
+  const cacheHitForCycle = cacheHit && !remeasureEmpty;
 
   const wrapperRef = useRef<HTMLDivElement>(null);
   const overlayHostRef = useRef<HTMLDivElement>(null);
 
   useColdMeasurement(
     wrapperRef,
-    showSkeleton && !cacheHit && snapshot === null,
+    showSkeleton && (snapshot === null || remeasureEmpty),
     cacheKey,
+    cycleId,
     false,
     ctx.budgetMs,
     ctx.maxShapes,
@@ -750,8 +790,8 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
     skeletonSuppressed,
     {
       snapshot,
-      cacheHit,
-      traversalMs: cacheHit ? 0 : traversalMsRef.current,
+      cacheHit: cacheHitForCycle,
+      traversalMs: cacheHitForCycle ? 0 : traversalMsRef.current,
       loadStartedAt,
       platform: 'web',
       cacheKey,
@@ -854,7 +894,7 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
           >
             Loading
           </span>
-          {debugOverlayEnabled && snapshot && <DebugOverlay snapshot={snapshot} cacheHit={cacheHit} />}
+          {debugOverlayEnabled && snapshot && <DebugOverlay snapshot={snapshot} cacheHit={cacheHitForCycle} />}
         </div>
       )}
     </div>

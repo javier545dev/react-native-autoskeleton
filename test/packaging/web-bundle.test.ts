@@ -52,8 +52,27 @@ const repoRoot = path.resolve(__dirname, '../..');
 //      against 9216, i.e. 221 B of real headroom, and 7475 + 221 = 7696.
 //      Spending those 221 bytes is still a deliberate act, and they are now
 //      221 bytes a consumer actually pays.
+//   4. 7696 -> 7933 (2026-08-29), by maintainer decision. **A RELAXATION, not
+//      another correction** — entry 3 above was the ruler being wrong; this one
+//      is the budget genuinely moving, and a fifth change has to argue against
+//      BOTH precedents.
+//      Bought: two real user-facing defects, neither of which had a gate.
+//      (a) A snapshot measured before its content had layout — an `<img>` with a
+//      0x0 box — was cached with ZERO shapes, and since the replay reuses the
+//      same cache key, that empty skeleton replayed forever. Measured in the
+//      real component: cold `shapes:0`, then a real 170x179 box, then replay
+//      still `shapes:0`, `clip-path:none`. (b) `useOverlayRenderer` destroyed
+//      its handle only on UNMOUNT, so after a completed handoff the handle
+//      pointed at a detached subtree and every later cycle announced loading
+//      (`aria-busy`, `role=status`, content `aria-hidden`) while painting
+//      nothing.
+//      Cost 99 B: 7613 -> 7712. The budget is set to 7712 + 221, restoring the
+//      SAME working headroom the corrected gate began with, rather than to the
+//      measured need. 7712 exactly would be a gate with zero headroom that
+//      fails on the next commit — which is the argument revision 2 already made
+//      against accepting 7 bytes, and it applies unchanged here.
 // This remains a HARD FAILING GATE, not a downgrade to a tracked budget.
-const NFR6_BUDGET_BYTES = 7696;
+const NFR6_BUDGET_BYTES = 7933;
 
 let outDir: string;
 let bundlePath: string;
