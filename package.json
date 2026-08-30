@@ -86,6 +86,7 @@
     "bench:check": "tsx benchmarks/check-budgets.ts",
     "bench:compare": "tsx benchmarks/compare-cli.ts",
     "pack:tarball": "npm pack --pack-destination ./.tarball",
+    "examples:unpin": "node scripts/unpin-local-tarball.mjs",
     "clean": "del-cli android/build ios/build lib .tarball"
   },
   "keywords": [
@@ -127,7 +128,8 @@
     "typescript": "^5.9.3",
     "uniwind": "^1.11.0",
     "vite": "^7.3.6",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "yaml": "^2.9.0"
   },
   "peerDependencies": {
     "@playwright/test": "^1.55.0",

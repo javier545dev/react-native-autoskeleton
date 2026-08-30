@@ -130,7 +130,14 @@ jobs:
           java-version: 17
       - run: npm ci
       - run: mkdir -p .tarball && npm pack --pack-destination ./.tarball
-      - run: npm install "autoskeleton@file:$(pwd)/.tarball/$(ls .tarball)"
+      - name: Unpin the locally built tarball before installing (see scripts/unpin-local-tarball.mjs)
+        run: node scripts/unpin-local-tarball.mjs examples/bare-rn
+      # `$(pwd)` here is `examples/bare-rn`, NOT the workspace root — the
+      # tarball is two levels up. The previous `$(pwd)/.tarball` pointed at
+      # `examples/bare-rn/.tarball`, which never exists; it was never observed
+      # because this file did not parse and so never ran.
+      - name: Install examples/bare-rn against THIS run's packed tarball
+        run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
         working-directory: examples/bare-rn
       - name: Android unit tests (Robolectric), including AutoskeletonTraversalPerfTest
         run: ./gradlew :autoskeleton:testDebugUnitTest
@@ -154,7 +161,10 @@ jobs:
           java-version: 17
       - run: npm ci
       - run: mkdir -p .tarball && npm pack --pack-destination ./.tarball
-      - run: npm install "autoskeleton@file:$(pwd)/.tarball/$(ls .tarball)"
+      - name: Unpin the locally built tarball before installing (see scripts/unpin-local-tarball.mjs)
+        run: node scripts/unpin-local-tarball.mjs examples/bare-rn
+      - name: Install examples/bare-rn against THIS run's packed tarball
+        run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
         working-directory: examples/bare-rn
       - name: Start Metro
         run: npx react-native start --port 8081 &
@@ -172,9 +182,20 @@ jobs:
 
   # AUTHORED ONLY — see this file's own header comment. iOS traversal timing
   # needs a dedicated XCTest perf target this session did not build.
+  #
+  # The `run:` below is a BLOCK SCALAR (`>-`), not a plain one. As a plain
+  # scalar the string contained `": "` (inside `TODO(9.1 follow-up): `), which
+  # YAML reads as a nested mapping key — "mapping values are not allowed here",
+  # line 180, column 39. GitHub rejected the ENTIRE file for it, so every job
+  # here, including the `PaintGateListFrameDropsInstrumentedTest` frame-drop and
+  # memory gates, silently never ran. `test/packaging/workflows.test.ts` now
+  # parses every workflow in the normal test suite so this cannot recur.
   bench-ios-traversal:
     if: false # not yet implemented — flip this on once ios/Tests gains a timing target
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - run: echo "TODO(9.1 follow-up): add an XCTest perf target measuring AutoskeletonSensor.measure() at 30/60 shapes on a booted iOS Simulator, mirroring AutoskeletonTraversalPerfTest.kt."
+      - run: >-
+          echo "TODO(9.1 follow-up): add an XCTest perf target measuring
+          AutoskeletonSensor.measure() at 30/60 shapes on a booted iOS
+          Simulator, mirroring AutoskeletonTraversalPerfTest.kt."

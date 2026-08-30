@@ -42,10 +42,19 @@ jobs:
           node-version: 22
       - run: npm ci
       - run: mkdir -p .tarball && npm pack --pack-destination ./.tarball
+      # `include-hidden-files` and `if-no-files-found` are BOTH load-bearing —
+      # see the identical note in `examples.yml`. `@actions/glob` skips any
+      # dot-prefixed path segment, including the search root derived from the
+      # pattern's literal prefix, so `.tarball/*.tgz` matched zero files and
+      # this job uploaded NOTHING while exiting green. This workflow has always
+      # had its own producer job (artifacts are scoped to one workflow run, so
+      # it must); the producer was simply producing nothing.
       - uses: actions/upload-artifact@v4
         with:
           name: autoskeleton-tarball
           path: .tarball/*.tgz
+          include-hidden-files: true
+          if-no-files-found: error
 
   # ADR-14's own acceptance test, Android half, across the full supported
   # matrix (spec.md Compatibility Matrix: "RN (bare) 0.83+"). One row per RN
@@ -75,7 +84,10 @@ jobs:
       - name: Pin examples/bare-rn to this matrix row's RN version
         run: npm pkg set "dependencies.react-native=${{ matrix.react-native-version }}"
         working-directory: examples/bare-rn
-      - run: npm install
+      - name: Unpin the locally built tarball before installing (see scripts/unpin-local-tarball.mjs)
+        run: node scripts/unpin-local-tarball.mjs examples/bare-rn
+      - name: Install from the packed tarball, never a workspace symlink (ADR-14's own load-bearing detail)
+        run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
         working-directory: examples/bare-rn
       - name: Zero-Expo-packages guard (ADR-14 / RISK-5)
         run: |
@@ -85,9 +97,6 @@ jobs:
             echo "::error::examples/bare-rn must have zero Expo packages in its dependency tree (ADR-14)"
             exit 1
           fi
-        working-directory: examples/bare-rn
-      - name: Install from the packed tarball, never a workspace symlink (ADR-14's own load-bearing detail)
-        run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
         working-directory: examples/bare-rn
       - name: Real Gradle assembleDebug — proves @react-native-community/cli autolinking end to end
         run: ./gradlew assembleDebug
@@ -119,9 +128,10 @@ jobs:
       - name: Pin examples/bare-rn to this matrix row's RN version
         run: npm pkg set "dependencies.react-native=${{ matrix.react-native-version }}"
         working-directory: examples/bare-rn
-      - run: npm install
-        working-directory: examples/bare-rn
-      - run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
+      - name: Unpin the locally built tarball before installing (see scripts/unpin-local-tarball.mjs)
+        run: node scripts/unpin-local-tarball.mjs examples/bare-rn
+      - name: Install from the packed tarball, never a workspace symlink (ADR-14's own load-bearing detail)
+        run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
         working-directory: examples/bare-rn
       - name: pod install (use_native_modules! resolving the root podspec, use_expo_modules! absent)
         run: pod install
@@ -157,9 +167,10 @@ jobs:
         with:
           name: autoskeleton-tarball
           path: .tarball
-      - run: npm install
-        working-directory: examples/expo
-      - run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
+      - name: Unpin the locally built tarball before installing (see scripts/unpin-local-tarball.mjs)
+        run: node scripts/unpin-local-tarball.mjs examples/expo
+      - name: Install from the packed tarball, never a workspace symlink (ADR-14's own load-bearing detail)
+        run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
         working-directory: examples/expo
       - name: expo prebuild (real expo-modules-autolinking discovery)
         run: npx expo prebuild --platform ios --non-interactive
