@@ -36,31 +36,13 @@ import {
   SkeletonProvider,
   templateTraversalCounter,
 } from 'autoskeleton';
-// ADR-5/RISK-8 tier-2 opt-in, spelled exactly the way a consumer spells it:
-// the peers are imported HERE, in the app's own module graph, so Metro
-// statically resolves and bundles them, and they are handed to the library.
-// The library itself never names either package. If either import is deleted,
-// this file stops compiling — which is the point: tier-2 cannot silently
-// half-exist.
-import * as Skia from '@shopify/react-native-skia';
-import { Easing, cancelAnimation, useDerivedValue, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
-import { createSkiaOverlay } from 'autoskeleton/skia';
-
-/** Built ONCE at module scope. A component identity that changed per render
- *  would remount the whole Skia canvas on every parent render. */
-const SKIA_OVERLAY = createSkiaOverlay({
-  skia: Skia,
-  reanimated: {
-    useSharedValue,
-    useDerivedValue,
-    withRepeat,
-    withTiming,
-    withSequence,
-    withDelay,
-    cancelAnimation,
-    Easing,
-  },
-});
+// ADR-5/RISK-8 tier-2 opt-in, spelled exactly the way a consumer spells it.
+// The optional peers are imported in the app's own module graph, never the
+// library's — see `skiaOverlay.ts` for the full argument and the single
+// module-scope `createSkiaOverlay` call this fixture and the browsable
+// tier-2 demo both use.
+import { SKIA_OVERLAY } from './skiaOverlay';
+import { DemoGallery } from './demos/DemoGallery';
 
 /** Exported so the fixture and any future test/tooling share one source of
  *  truth for the deterministic colors the paint gate asserts against. */
@@ -548,11 +530,22 @@ function PaintGateTier2Screen() {
 function App() {
   const isDarkMode = useColorScheme() === 'dark';
   const [screen, setScreen] = useState<Screen>('card');
+  // The gallery is a SEPARATE route, never a fourth entry in the `Screen`
+  // cycle: the on-device gates reach the list and tier-2 fixtures by tapping
+  // `paint-gate-screen-toggle` exactly once and exactly twice from launch, so
+  // the cycle's length and order are part of the fixture contract.
+  const [galleryOpen, setGalleryOpen] = useState(false);
 
   return (
     <SafeAreaProvider>
       <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-      <AppContent screen={screen} onToggleScreen={() => setScreen(nextScreen)} />
+      <AppContent
+        screen={screen}
+        onToggleScreen={() => setScreen(nextScreen)}
+        galleryOpen={galleryOpen}
+        onOpenGallery={() => setGalleryOpen(true)}
+        onCloseGallery={() => setGalleryOpen(false)}
+      />
     </SafeAreaProvider>
   );
 }
@@ -570,24 +563,55 @@ function nextScreen(current: Screen): Screen {
 function AppContent({
   screen,
   onToggleScreen,
+  galleryOpen,
+  onOpenGallery,
+  onCloseGallery,
 }: {
   screen: Screen;
   onToggleScreen: () => void;
+  galleryOpen: boolean;
+  onOpenGallery: () => void;
+  onCloseGallery: () => void;
 }) {
   const safeAreaInsets = useSafeAreaInsets();
 
+  if (galleryOpen) {
+    return (
+      <View style={[styles.container, { paddingTop: safeAreaInsets.top }]}>
+        <DemoGallery onExit={onCloseGallery} />
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.container, { paddingTop: safeAreaInsets.top }]}>
-      <Pressable
-        accessible
-        accessibilityLabel={PAINT_GATE_LIST_FIXTURE.labels.screenToggle}
-        accessibilityRole="button"
-        testID="paint-gate-screen-toggle"
-        style={styles.screenToggle}
-        onPress={onToggleScreen}
-      >
-        <Text style={styles.toggleLabel}>{`screen: ${screen} (tap to switch)`}</Text>
-      </Pressable>
+      {/* One 40pt row, exactly the height `screenToggle` occupied on its own
+          before the gallery existed — so every fixture below keeps its
+          previous vertical position and the pixel gates keep their framing.
+          The switcher itself is unchanged: same accessibilityLabel, same
+          testID, same cycle, still the app's first interactive element. */}
+      <View style={styles.headerRow}>
+        <Pressable
+          accessible
+          accessibilityLabel={PAINT_GATE_LIST_FIXTURE.labels.screenToggle}
+          accessibilityRole="button"
+          testID="paint-gate-screen-toggle"
+          style={styles.screenToggle}
+          onPress={onToggleScreen}
+        >
+          <Text style={styles.toggleLabel}>{`screen: ${screen} (tap to switch)`}</Text>
+        </Pressable>
+        <Pressable
+          accessible
+          accessibilityLabel="demo-open-gallery"
+          accessibilityRole="button"
+          testID="demo-open-gallery"
+          style={styles.galleryButton}
+          onPress={onOpenGallery}
+        >
+          <Text style={styles.galleryButtonLabel}>Demos ›</Text>
+        </Pressable>
+      </View>
       {screen === 'card' ? <PaintGateScreen /> : null}
       {screen === 'list' ? <PaintGateListScreen /> : null}
       {screen === 'tier2' ? <PaintGateTier2Screen /> : null}
@@ -608,11 +632,25 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 16,
   },
-  screenToggle: {
+  headerRow: {
     height: 40,
+    flexDirection: 'row',
+  },
+  screenToggle: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#cccccc',
+  },
+  galleryButton: {
+    width: 110,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#2f6fed',
+  },
+  galleryButtonLabel: {
+    color: '#ffffff',
+    fontWeight: '700',
   },
   toggle: {
     height: 48,

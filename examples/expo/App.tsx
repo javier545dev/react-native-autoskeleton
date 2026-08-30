@@ -1,44 +1,53 @@
-// tasks.md 7.2 native E2E fixture: `ThemedAutoSkeleton` (autoskeleton/uniwind)
-// driven entirely by `className` — no separate shimmerBaseColor/
-// shimmerHighlightColor/defaultRadius prop is supplied by this screen,
-// which is the exact REQ-THEME-2 scenario ("the developer supplies no
-// separate skeleton-specific color/radius props").
+// Expo example app.
 //
-// The COLOUR half of that scenario is now gated automatically, on a real
-// device, by `scripts/uniwind-paint-gate.mjs` (`npm run gate:uniwind`) — it
-// reads the raw Android framebuffer and asserts that the pixels the skeleton
-// paints resolve from these className values, at every phase of the shimmer.
-// See that file's header for how it separates "the theme was applied" from
-// "the shimmer happened to be at a light phase". Before it existed, the only
-// evidence was a logcat diagnostic (a prop was computed) and one screenshot
-// judged by eye, neither of which is a gate.
+// TWO THINGS LIVE HERE AND THEY DO NOT MIX:
 //
-// The RADIUS half is NOT gated here, and the reason has changed since 7.2 was
-// written: the Phase 5 architectural gap that entry blamed (the `getShapes`
-// Turbo Module bridge carrying no configuration at all, so `defaultRadius`
-// never crossed to the native traversal) HAS since been closed — the spec now
-// takes a `config` argument carrying `defaultRadius`/`budgetMs`/`maxShapes`
-// (`src/native/NativeAutoskeleton.ts`). What is still true on Android is that
-// the className-derived `defaultRadius` has no visible effect on either card
-// below: measured from the framebuffer, the gate card (no radius of its own)
-// paints a SQUARE mask despite `rounded-2xl`, while the big card below (its
-// own `borderRadius: 16`) paints a rounded one. That points at the native
-// radius resolver reporting a definite 0 rather than "unknown", not at the
-// bridge — a different defect from the one 7.2 recorded, and still out of
-// scope for this fixture.
+// 1. `PaintGateStrip` — the tasks.md 7.2 / spec REQ-THEME-2 on-device fixture.
+//    It MUST be visible the moment the app launches, at the top, unclipped,
+//    with nothing else on screen painting its three registration colours.
+//    `scripts/uniwind-paint-gate.mjs` (`npm run gate:uniwind`) launches the
+//    app and polls the RAW Android framebuffer for `#ff00ff`, `#00ff00` and
+//    `#0000ff`; it performs no navigation and cannot. Putting the fixture
+//    behind a menu entry would make that gate time out with "paint-gate
+//    fixture never appeared on screen", so it stays mounted above the demo
+//    index and the index scrolls beneath it.
+//
+// 2. `DemoGallery` — the browsable demos (`demos/registry.ts`). Everything
+//    platform-neutral lives in `examples/bare-rn/demos`; this app covers what
+//    is specific to Expo: the `autoskeleton/uniwind` interop, the
+//    `expo-image` handoff, and Expo autolinking.
+//
+// The COLOUR half of REQ-THEME-2 is gated automatically by that script — it
+// reads the pixels the skeleton paints and asserts they resolve from the
+// `className` values below, at every phase of the shimmer. See that file's
+// header for how it separates "the theme was applied" from "the shimmer
+// happened to be at a light phase".
+//
+// The RADIUS half is NOT gated, and the reason is measured: the
+// className-derived `defaultRadius` has no visible effect on Android. The
+// gate card (no radius of its own) paints a SQUARE mask despite `rounded-2xl`,
+// while a card with its own `borderRadius: 16` paints a rounded one. That
+// points at the native radius resolver reporting a definite 0 rather than
+// "unknown", not at the bridge — which since Phase 5 does carry
+// `defaultRadius` in `config` (`src/native/NativeAutoskeleton.ts`). Use
+// `<AutoSkeleton.Hint radius>` on Android; iOS is unaffected.
+//
+// `App.web.tsx` is the Expo Web entry and imports NONE of this:
+// `autoskeleton/uniwind` is native-only (spec.md §4) and Metro refuses to
+// bundle its native imports for web.
 import './global.css';
 import { StatusBar } from 'expo-status-bar';
-import { useState } from 'react';
-import { StyleSheet, Text, View, Pressable } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { ThemedAutoSkeleton } from 'autoskeleton/uniwind';
+import { DemoGallery } from './demos/DemoGallery';
 
 /** Registration marks for `scripts/uniwind-paint-gate.mjs`. Each gate target
  *  sits inside a solid frame of one unique, saturated colour, so the gate can
  *  find it in a raw device framebuffer by exact colour match and derive the
  *  target's centre from the frame's bounding box — no hard-coded screen
  *  coordinates, no dependence on device size, status-bar height or density.
- *  None of these three collides with any other colour this screen paints
- *  (`bg-slate-400` #90a1b9, `bg-cyan-300` #53eafd, #111827, #2563eb, white). */
+ *  None of these three collides with any other colour this app paints; see
+ *  the colour rule in `demos/ui.tsx`. */
 const GATE_MARK_BASE_SWATCH = '#ff00ff';
 const GATE_MARK_HIGHLIGHT_SWATCH = '#00ff00';
 const GATE_MARK_SKELETON = '#0000ff';
@@ -54,7 +63,7 @@ const GATE_MARK_SKELETON = '#0000ff';
  *  the skeleton, which is the thing under test.
  *
  *  `isLoading` is a constant `true` here on purpose — the gate must not depend
- *  on the interactive fixture's toggle state below. */
+ *  on any interactive state elsewhere in the app. */
 function PaintGateStrip() {
   return (
     <View style={styles.gateStrip}>
@@ -82,37 +91,31 @@ function PaintGateStrip() {
 }
 
 export default function App() {
-  const [isLoading, setIsLoading] = useState(true);
-
   return (
     <View style={styles.container}>
-      <PaintGateStrip />
-      {/* `skeletonOnRefresh` is REQUIRED for the toggle to show anything on a
-          SECOND load. Without it, REQ-PTR-1's stale-while-revalidate default
-          suppresses the skeleton on every load AFTER the first — deliberately,
-          so a refresh does not blank out content the reader is already looking
-          at. Opting in here is what makes the loading state observable on
-          demand, which is what a fixture needs to be able to demonstrate.
-          Matches `examples/vite/src/App.tsx`. */}
-      <ThemedAutoSkeleton
-        isLoading={isLoading}
-        skeletonKey="expo-theming-fixture"
-        className="bg-slate-400 text-cyan-300 rounded-2xl"
-        skeletonOnRefresh
-      >
-        <View style={styles.card}>
-          <Text style={styles.title}>Loaded content</Text>
-        </View>
-      </ThemedAutoSkeleton>
-      <Pressable style={styles.button} onPress={() => setIsLoading((v) => !v)}>
-        <Text style={styles.buttonText}>{isLoading ? 'Stop loading' : 'Start loading'}</Text>
-      </Pressable>
+      <View style={styles.gateHost}>
+        <PaintGateStrip />
+      </View>
+      <DemoGallery />
       <StatusBar style="auto" />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+  /** Clears the status bar so the marks are never clipped, and centres the
+   *  strip horizontally. Fixed height, so the gallery below never pushes it
+   *  off screen no matter how many demos are registered. */
+  gateHost: {
+    paddingTop: 56,
+    paddingBottom: 12,
+    alignItems: 'center',
+    backgroundColor: '#fff',
+  },
   gateStrip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -129,35 +132,5 @@ const styles = StyleSheet.create({
     width: 100,
     height: 56,
     backgroundColor: '#111827',
-  },
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 24,
-  },
-  card: {
-    width: 240,
-    height: 120,
-    borderRadius: 16,
-    backgroundColor: '#111827',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  title: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  button: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-    backgroundColor: '#2563eb',
-  },
-  buttonText: {
-    color: 'white',
-    fontWeight: '600',
   },
 });
