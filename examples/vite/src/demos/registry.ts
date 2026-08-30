@@ -1,0 +1,146 @@
+// examples/vite/src/demos/registry.ts
+//
+// One entry per demo, in reading order. Each entry carries its own source
+// text, imported with Vite's `?raw` so the snippet shown under a demo is
+// literally the file that just ran — a copy-pasted excerpt would be free to
+// drift, and an example app that documents something it no longer does is
+// worse than no example at all.
+
+import type { ComponentType } from 'react'
+
+import { CacheReplay } from './CacheReplay'
+import { ColdLoad } from './ColdLoad'
+import { CssVariableTheme } from './CssVariableTheme'
+import { DebugOverlayDemo } from './DebugOverlayDemo'
+import { HintRadius } from './HintRadius'
+import { IgnoreSubtree } from './IgnoreSubtree'
+import { ImageHandoff } from './ImageHandoff'
+import { ReducedMotion } from './ReducedMotion'
+import { RefreshPolicy } from './RefreshPolicy'
+import { TailwindTheme } from './TailwindTheme'
+import { TextLines } from './TextLines'
+
+import cacheReplaySource from './CacheReplay.tsx?raw'
+import coldLoadSource from './ColdLoad.tsx?raw'
+import cssVariableThemeSource from './CssVariableTheme.tsx?raw'
+import debugOverlaySource from './DebugOverlayDemo.tsx?raw'
+import hintRadiusSource from './HintRadius.tsx?raw'
+import ignoreSubtreeSource from './IgnoreSubtree.tsx?raw'
+import imageHandoffSource from './ImageHandoff.tsx?raw'
+import reducedMotionSource from './ReducedMotion.tsx?raw'
+import refreshPolicySource from './RefreshPolicy.tsx?raw'
+import tailwindThemeSource from './TailwindTheme.tsx?raw'
+import textLinesSource from './TextLines.tsx?raw'
+
+export interface Demo {
+  /** Slug used for the `#/<id>` deep link and the section's DOM id. */
+  readonly id: string
+  readonly title: string
+  /** The single thing this demo is supposed to make obvious. */
+  readonly shows: string
+  readonly file: string
+  readonly source: string
+  readonly Component: ComponentType
+}
+
+export const DEMOS: readonly Demo[] = [
+  {
+    id: 'cold-load',
+    title: 'Cold load',
+    shows:
+      'No skeleton was authored for this card. The shapes come from a real traversal of the content’s own laid-out geometry, on the first frame of the loading state.',
+    file: 'src/demos/ColdLoad.tsx',
+    source: coldLoadSource,
+    Component: ColdLoad,
+  },
+  {
+    id: 'text-lines',
+    title: 'Text resolves per line',
+    shows:
+      'A wrapped paragraph is one element with one box, but the skeleton has one bar per line box — fragmented through Range.getClientRects(), ragged last line included.',
+    file: 'src/demos/TextLines.tsx',
+    source: textLinesSource,
+    Component: TextLines,
+  },
+  {
+    id: 'cache-replay',
+    title: 'Cached replay after navigation',
+    shows:
+      'Unmount the panel and open it again: the skeleton is drawn from the snapshot measured the first time, with a 0.00 ms traversal and a cache HIT.',
+    file: 'src/demos/CacheReplay.tsx',
+    source: cacheReplaySource,
+    Component: CacheReplay,
+  },
+  {
+    id: 'image-handoff',
+    title: 'Images: reveal before hide',
+    shows:
+      'The skeleton is removed only after the real image has actually painted, so there is never a frame with neither on screen.',
+    file: 'src/demos/ImageHandoff.tsx',
+    source: imageHandoffSource,
+    Component: ImageHandoff,
+  },
+  {
+    id: 'ignore',
+    title: 'Opting a subtree out',
+    shows:
+      'AutoSkeleton.Ignore and the exported IGNORE_ATTRIBUTE remove a subtree from detection, leaving a hole in the skeleton and moving the shape count.',
+    file: 'src/demos/IgnoreSubtree.tsx',
+    source: ignoreSubtreeSource,
+    Component: IgnoreSubtree,
+  },
+  {
+    id: 'hint',
+    title: 'Hints override geometry',
+    shows:
+      'Two identical square cards; the one wrapped in AutoSkeleton.Hint radius={40} gets a pill-shaped skeleton. A typed prop, never a parsed className.',
+    file: 'src/demos/HintRadius.tsx',
+    source: hintRadiusSource,
+    Component: HintRadius,
+  },
+  {
+    id: 'css-variables',
+    title: 'Theming with CSS variables',
+    shows:
+      'Three identical components paint three different skeleton colours, purely from --skl-base/--skl-highlight inherited through the cascade. No props.',
+    file: 'src/demos/CssVariableTheme.tsx',
+    source: cssVariableThemeSource,
+    Component: CssVariableTheme,
+  },
+  {
+    id: 'tailwind-theme',
+    title: 'Theming with Tailwind v4 @theme',
+    shows:
+      'The same contract driven by Tailwind v4 design tokens, with dark mode as a pure class flip on <html> — no prop change, no remount, no renderer call.',
+    file: 'src/demos/TailwindTheme.tsx',
+    source: tailwindThemeSource,
+    Component: TailwindTheme,
+  },
+  {
+    id: 'refresh',
+    title: 'Refresh does not blank your content',
+    shows:
+      'Identical prop sequences, one difference: skeletonOnRefresh. By default a refresh over already-shown content keeps the content (REQ-PTR-1).',
+    file: 'src/demos/RefreshPolicy.tsx',
+    source: refreshPolicySource,
+    Component: RefreshPolicy,
+  },
+  {
+    id: 'reduced-motion',
+    title: 'Reduced motion',
+    shows:
+      'What the reader asked for wins: with prefers-reduced-motion: reduce the sweep stops, the same still result animation="none" gives you deliberately.',
+    file: 'src/demos/ReducedMotion.tsx',
+    source: reducedMotionSource,
+    Component: ReducedMotion,
+  },
+  {
+    id: 'debug-overlay',
+    title: 'Debug overlay (dev builds)',
+    shows:
+      'Every detected shape outlined and labelled with the source the sensor classified it as, plus a cache HIT/MISS badge. Compiled out of production builds.',
+    file: 'src/demos/DebugOverlayDemo.tsx',
+    source: debugOverlaySource,
+    Component: DebugOverlayDemo,
+  },
+]

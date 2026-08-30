@@ -1,232 +1,98 @@
-import { useState } from 'react'
-import { AutoSkeleton } from 'autoskeleton'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
+// examples/vite/src/App.tsx
+//
+// The showcase shell: a nav, and one section per demo from
+// `src/demos/registry.ts`. Every demo lives in its own file so that "where is
+// the code for this?" has a one-line answer, and each section can show that
+// file verbatim underneath it.
+//
+// Routing is `location.hash`, read through `useSyncExternalStore` rather than
+// an effect. `#/<id>` focuses a single demo; no hash renders all of them, and
+// that is load-bearing rather than a default: `test/web/tailwind-app-theme
+// .spec.ts` navigates to `/` and expects the Tailwind theming demo to be
+// mounted there. A router that hid it behind a hash would silently take that
+// gate offline.
+
+import { useSyncExternalStore } from 'react'
+import { DEMOS, type Demo } from './demos/registry'
 import './App.css'
 
-// tasks.md 8.4 (ADR-16 / RISK-11): a real, wired demo of the image-handoff
-// no-flash guarantee — proven end to end under Playwright in
-// `test/web/handoff.spec.ts`, reproduced here against a real consuming app.
-// `expectsPlaceholder` tells the controller to wait for the real `<img>`
-// successor (auto-detected via `usePaintDetectionHeuristic`'s double-rAF +
-// `img.decode()` heuristic, zero extra wiring) rather than fading
-// immediately — reveal-before-hide means the hero image is ALWAYS mounted
-// underneath the still-painted skeleton, so there is never a frame with
-// neither on screen.
-function HeroWithSkeleton() {
-  const [isLoading, setIsLoading] = useState(true)
-  // The image drives the FIRST handoff on its own, which is the honest demo:
-  // a real consumer's skeleton disappears when the thing it stands in for
-  // arrives. On localhost with a warm cache that happens in the same tick, so
-  // the loading state is real but unobservable — hence the manual control
-  // below, which lets you put it back and actually look at it.
-  return (
-    <div className="hero">
-      <button
-        type="button"
-        className="counter"
-        data-testid="toggle-loading"
-        style={{ marginBottom: 12 }}
-        onClick={() => setIsLoading((v) => !v)}
-      >
-        {isLoading ? 'Stop loading' : 'Replay loading'}
-      </button>
-      {/* `skeletonOnRefresh` is REQUIRED for the replay button to show anything.
-          Without it, REQ-PTR-1's stale-while-revalidate default suppresses the
-          skeleton on every load AFTER the first — deliberately, so a refresh
-          does not blank out content the reader is already looking at. Opting in
-          here is what makes the loading state observable on demand. */}
-      <AutoSkeleton isLoading={isLoading} skeletonKey="vite-hero" expectsPlaceholder skeletonOnRefresh>
-        <img
-          src={heroImg}
-          className="base"
-          width="170"
-          height="179"
-          alt=""
-          onLoad={() => setIsLoading(false)}
-        />
-      </AutoSkeleton>
-      <img src={reactLogo} className="framework" alt="React logo" />
-      <img src={viteLogo} className="vite" alt="Vite logo" />
-    </div>
-  )
+function subscribeToHash(onChange: () => void): () => void {
+  window.addEventListener('hashchange', onChange)
+  return () => window.removeEventListener('hashchange', onChange)
 }
 
-// tasks.md 7.1 (spec REQ-THEME-1), app-level complement to
-// `test/web/theme-cascade.spec.ts`: that suite proves the Tailwind v4
-// COMPILER contract against a synthetic harness page; this section proves the
-// same contract inside a REAL consuming app, so `test/web/tailwind-app-theme.
-// spec.ts` can gate it against this app's own `vite build` output.
-//
-// The skeleton below receives NO colour prop of any kind and no
-// `SkeletonProvider` — every colour it paints comes from the Tailwind v4
-// `@theme` tokens in `src/tailwind-theme.css`, aliased onto the library's
-// `--skl-base`/`--skl-highlight` contract at `:root`, and re-aliased under
-// `.dark`. Toggling the theme button below only flips a class on `<html>`:
-// no React prop changes, no remount, no renderer method call.
-function ThemedCardDemo() {
-  const [isLoading, setIsLoading] = useState(true)
-  const [dark, setDark] = useState(false)
-
-  function toggleTheme() {
-    const next = !dark
-    setDark(next)
-    document.documentElement.classList.toggle('dark', next)
-  }
-
+function DemoSection({ demo }: { demo: Demo }) {
+  const Component = demo.Component
   return (
-    <section id="themed-demo" data-testid="themed-demo">
-      <h2 className="text-lg font-medium">Tailwind v4 themed skeleton</h2>
-      <p>
-        Colours come from <code>@theme</code> tokens only — this{' '}
-        <code>&lt;AutoSkeleton&gt;</code> passes no colour prop.
-      </p>
-      <AutoSkeleton
-        isLoading={isLoading}
-        skeletonKey="vite-themed-card"
-        skeletonOnRefresh
-      >
-        {/* A single opaque block: the DOM sensor resolves it to exactly one
-            shape, so the overlay's clip-path is a plain rounded rect and the
-            gate has an unambiguous sampling target at its centre. */}
-        <div data-testid="themed-card" className="themed-card rounded-xl" />
-      </AutoSkeleton>
-      <div className="themed-controls">
-        <button
-          type="button"
-          className="counter"
-          data-testid="toggle-themed-loading"
-          onClick={() => setIsLoading((v) => !v)}
-        >
-          {isLoading ? 'Stop loading' : 'Replay loading'}
-        </button>
-        <button
-          type="button"
-          className="counter"
-          data-testid="toggle-theme"
-          onClick={toggleTheme}
-        >
-          {dark ? 'Light theme' : 'Dark theme'}
-        </button>
+    <section className="demo" id={demo.id} data-testid={`demo-${demo.id}`}>
+      <h2 className="demo-title">
+        <a href={`#/${demo.id}`}>{demo.title}</a>
+      </h2>
+      <p className="demo-shows">{demo.shows}</p>
+      <div className="demo-stage">
+        <Component />
       </div>
+      <details className="demo-source">
+        <summary>
+          Source · <code>{demo.file}</code>
+        </summary>
+        <pre>
+          <code>{demo.source}</code>
+        </pre>
+      </details>
     </section>
   )
 }
 
-function App() {
-  const [count, setCount] = useState(0)
+export default function App() {
+  const hash = useSyncExternalStore(
+    subscribeToHash,
+    () => window.location.hash,
+    () => '',
+  )
+  const selectedId = hash.startsWith('#/') ? hash.slice(2) : ''
+  const selected = DEMOS.find((demo) => demo.id === selectedId)
+  const visible = selected ? [selected] : DEMOS
 
   return (
-    <>
-      <section id="center">
-        <HeroWithSkeleton />
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <div className="app">
+      <header className="app-header">
+        <h1>autoskeleton on the web</h1>
+        <p>
+          Eleven focused demos of what the library does in a browser. Every one of them is a real consuming app
+          importing <code>autoskeleton</code> from the packed tarball, not a test fixture — pick one from the
+          list, or scroll through all of them.
+        </p>
+      </header>
 
-      <div className="ticks"></div>
+      <nav className="app-nav" aria-label="Demos">
+        <a href="#/" className={selected ? undefined : 'is-active'} data-testid="nav-all">
+          All demos
+        </a>
+        {DEMOS.map((demo) => (
+          <a
+            key={demo.id}
+            href={`#/${demo.id}`}
+            className={selected?.id === demo.id ? 'is-active' : undefined}
+            data-testid={`nav-${demo.id}`}
+          >
+            {demo.title}
+          </a>
+        ))}
+      </nav>
 
-      <ThemedCardDemo />
+      <main className="app-main">
+        {visible.map((demo) => (
+          <DemoSection key={demo.id} demo={demo} />
+        ))}
+      </main>
 
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+      <footer className="app-footer">
+        <p>
+          Server-side rendering has its own app: <code>examples/next</code> covers the SSR replay path, the
+          RTL capture and the neutral block for an uncaptured key.
+        </p>
+      </footer>
+    </div>
   )
 }
-
-export default App
