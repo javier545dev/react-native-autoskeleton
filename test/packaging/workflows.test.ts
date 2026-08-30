@@ -242,4 +242,44 @@ describe('example apps are installed in a way a committed integrity pin cannot b
       });
     }
   });
+
+});
+
+describe('android-emulator-runner jobs can actually boot an emulator', () => {
+  // An Android emulator cannot boot from an x86_64 image on an Apple Silicon
+  // runner: HAXM is Intel-only and discontinued, and `macos-latest` stopped
+  // being Intel. That is exactly how the frame-drop job failed on the first
+  // run after this file started parsing at all — "Timeout waiting for emulator
+  // to boot" / "could not connect to TCP port 5554", after never having
+  // executed once. The two pairings that work are ubuntu + KVM (the documented
+  // path, and an order of magnitude cheaper) or macos + arm64-v8a.
+  it.each(workflowFiles)('%s: every emulator job pairs its runner with a bootable arch', (file) => {
+    const workflow = readWorkflow(file);
+    for (const [jobName, job] of jobsOf(workflow)) {
+      const steps = stepsOf(job);
+      const emulator = steps.find((step) => usesAction(step, 'reactivecircus/android-emulator-runner'));
+      if (!emulator) {
+        continue;
+      }
+      const runsOn = String((job as unknown as Record<string, unknown>)['runs-on'] ?? '');
+      const arch = String((emulator.with ?? {}).arch ?? '');
+
+      if (runsOn.startsWith('ubuntu')) {
+        const enablesKvm = steps.some((step) => /kvm/i.test(step.run ?? ''));
+        expect(
+          enablesKvm,
+          `${file}: job "${jobName}" runs the emulator on ${runsOn} without enabling KVM. The ` +
+            `runner exposes /dev/kvm but not to the user the emulator runs as, so it times out ` +
+            `waiting to boot.`,
+        ).toBe(true);
+        continue;
+      }
+      expect(
+        arch,
+        `${file}: job "${jobName}" runs the emulator on ${runsOn} with arch "${arch}". macos ` +
+          `runners are Apple Silicon and cannot run an x86_64 Android image — use ubuntu + KVM, ` +
+          `or arm64-v8a.`,
+      ).toBe('arm64-v8a');
+    }
+  });
 });

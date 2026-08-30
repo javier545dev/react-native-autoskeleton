@@ -149,7 +149,18 @@ jobs:
   # Task 9.3's promoted memory-leak recycling-stress test also runs here,
   # since both need the same live-emulator + booted-app fixture.
   bench-android-frame-drops-and-memory:
-    runs-on: macos-latest # android-emulator-runner needs HAXM/hypervisor, macos-latest ships one
+    # WAS `macos-latest` with `arch: x86_64`, and the comment here claimed
+    # macos-latest ships a hypervisor for it. That was true when macos-latest
+    # was Intel; it is now Apple Silicon, where an x86_64 Android image cannot
+    # run at all — HAXM is Intel-only and discontinued. The job failed with
+    # "Timeout waiting for emulator to boot" / "could not connect to TCP port
+    # 5554" on the first run after the file started parsing at all.
+    #
+    # GitHub's ubuntu runners support nested virtualisation, so the documented
+    # path for `reactivecircus/android-emulator-runner` is ubuntu + KVM. It is
+    # also the cheaper runner by an order of magnitude, which matters for a job
+    # that boots an emulator and runs a scroll benchmark.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -169,11 +180,25 @@ jobs:
       - name: Start Metro
         run: npx react-native start --port 8081 &
         working-directory: examples/bare-rn
+      # Required on ubuntu: the runner exposes /dev/kvm but not to the
+      # unprivileged user the emulator runs as.
+      - name: Enable KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
       - uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
           target: google_apis
           arch: x86_64
+          # NOT disabled, deliberately. The action's default sets
+          # window/transition/animator scales to 0, and this job's whole
+          # subject is frame timing during a 50-cell scroll. Measuring dropped
+          # frames on a device with animation disabled would be measuring
+          # something else and calling it NFR-1.
+          disable-animations: false
           working-directory: examples/bare-rn/android
           script: |
             adb reverse tcp:8081 tcp:8081
