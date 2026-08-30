@@ -2,7 +2,8 @@
   "name": "autoskeleton",
   "version": "0.1.0",
   "description": "Automatic skeleton loaders for React Native and web",
-  "main": "./lib/module/index.js",
+  "main": "./lib/commonjs/index.js",
+  "module": "./lib/module/index.js",
   "types": "./lib/typescript/module/src/index.d.ts",
   "exports": {
     ".": {

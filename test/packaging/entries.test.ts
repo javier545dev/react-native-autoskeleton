@@ -522,3 +522,64 @@ describe('RISK-5 packaging detector (entries.test.ts) — RED until 5.6', () => 
     });
   });
 });
+
+// A `bob build` on a clean tree failed in CI with "Found incorrect path in
+// 'main' field" — but only in one job of one run, and only sometimes. It was a
+// race, and the race was legible in bob's own source.
+//
+// `react-native-builder-bob` runs its configured targets CONCURRENTLY, and each
+// target validates one legacy entry field (utils/compile.js): with both the
+// `commonjs` and `module` variants configured, the commonjs pass validates
+// `main` and the module pass validates `module`. Validation is `require.resolve`
+// against the file on disk. So a `main` pointing into `lib/module` is checked by
+// the commonjs pass against a file the *module* pass writes — it passes only
+// when module happens to finish first. It did on every developer machine; it did
+// not on one GitHub runner.
+//
+// The whole packaging suite above validates `exports` and never read the legacy
+// fields, which is exactly why a field pointing at the wrong target's output was
+// invisible here while being the thing bob checks. This closes that: each legacy
+// field must live under the output directory of the target that validates it,
+// which makes every pass validate only its own output and removes the race by
+// construction rather than by timing.
+describe('legacy entry fields resolve within their own bob target output', () => {
+  const bobConfig = (
+    packageJson as unknown as {
+      'react-native-builder-bob'?: {
+        output?: string;
+        targets?: (string | [string, unknown])[];
+      };
+    }
+  )['react-native-builder-bob'];
+
+  const targetNames = (bobConfig?.targets ?? []).map((t) =>
+    Array.isArray(t) ? t[0] : t
+  );
+  const output = bobConfig?.output ?? 'lib';
+
+  // Mirrors compile.js's `variants.commonjs && variants.module` branch: the
+  // per-target field split only exists when BOTH variants are built. With a
+  // single variant bob validates `main` for whichever one it is, so the
+  // owner mapping below would not hold.
+  const bothVariants =
+    targetNames.includes('commonjs') && targetNames.includes('module');
+
+  const owners: { field: 'main' | 'module'; dir: string }[] = [
+    { field: 'main', dir: `${output}/commonjs` },
+    { field: 'module', dir: `${output}/module` },
+  ];
+
+  for (const { field, dir } of owners) {
+    it(`${field} points into ${dir}`, () => {
+      if (!bothVariants) return;
+      const value = (packageJson as unknown as Record<string, string>)[field];
+      // bob skips a field it has no value for, so an absent one cannot race.
+      if (value === undefined) return;
+      expect(value).toMatch(new RegExp(`^\\./${dir}/`));
+      expect(
+        existsSync(path.join(repoRoot, value)),
+        `${field} is ${value}, which does not exist — run \`bob build\``
+      ).toBe(true);
+    });
+  }
+});
