@@ -19,7 +19,9 @@ rationale; this file is the consumer-facing version of that decision.
 manages blurhash. Two reasons, stated plainly:
 
 1. A blurhash decoder would duplicate what `expo-image` already ships, and
-   would blow the < 9 kB gzip web budget (NFR-6) on its own.
+   would blow the web entry's gzip budget (NFR-6 — currently **7933 B**, the
+   single source of truth being `benchmarks/budgets.json`'s
+   `webEntryGzipBytes`) on its own.
 2. Owning phase 2 would force a hard dependency on one specific image
    component, contradicting the "agnostic to styling and component system"
    design that makes the sensor work at all.
@@ -137,7 +139,10 @@ longer skeleton, never a flash.
 **The field signal to watch for:** if `onMetrics.handoffReason` reads
 `'timeout'` in your telemetry, either your successor visual is genuinely
 slow, or (on native, today) the paint-detection heuristic simply hasn't
-shipped for your platform yet.
+shipped for your platform yet. On native it will read `'timeout'` for
+*every* `expectsPlaceholder` handoff, so it is not a useful signal there
+until the heuristic lands — see
+[`observability.md` §1.3](./observability.md).
 
 ## 5. Residual limits (not defects — stated as constraints)
 

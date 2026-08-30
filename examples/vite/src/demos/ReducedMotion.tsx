@@ -73,8 +73,9 @@ export function ReducedMotion() {
         </button>
       </div>
       <p className="demo-note">
-        With the preference on, the left panel stops sweeping and paints as a flat block in the base colour —
-        the same still result as <code>animation="none"</code>. No transform animation runs in either case.
+        With the preference on, the left panel stops sweeping and breathes instead: the highlight parks at the
+        centre and only its opacity moves, once per clock period. That is <em>not</em> the same as{' '}
+        <code>animation="none"</code>, which parks the highlight and animates nothing at all.
       </p>
     </>
   )

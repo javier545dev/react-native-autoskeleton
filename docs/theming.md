@@ -10,9 +10,37 @@ documented non-goal rather than a "coming soon" gap.
 string — this is statically asserted by
 `test/packaging/core-styling-agnostic.test.ts` (spec REQ-THEME-3). Every
 theming interop operates purely at the React **props** layer, upstream of
-`<AutoSkeleton>`'s own render path. You can theme `autoskeleton` with zero
-interop at all, just by passing `shimmerBaseColor` /
-`shimmerHighlightColor` / `defaultRadius` directly:
+`<AutoSkeleton>`'s own render path.
+
+## The three ways to theme, and where each works
+
+| Mechanism | Web | iOS | Android |
+|---|---|---|---|
+| `SkeletonProvider theme={{ baseColor, highlightColor, defaultRadius, speedMs }}` | yes | yes | yes (radius caveat below) |
+| CSS custom properties / Tailwind v4 `@theme` (`--skl-base`, `--skl-highlight`) | yes | n/a | n/a |
+| Per-instance props `shimmerBaseColor` / `shimmerHighlightColor` / `defaultRadius` | **no** | yes | yes (radius caveat below) |
+| `autoskeleton/uniwind`'s `<ThemedAutoSkeleton className>` | **no** | yes | yes (radius caveat below) |
+
+### `SkeletonProvider theme` — everywhere
+
+```tsx
+<SkeletonProvider theme={{ baseColor: '#1e293b', highlightColor: '#334155', defaultRadius: 12, speedMs: 1400 }}>
+  <App />
+</SkeletonProvider>
+```
+
+Defaults are `defaultRadius: 4`, `speedMs: 1400`, and platform-specific colours
+(`'#e2e2e2'` / `'#f5f5f5'` on native; on web the values the renderer's own
+stylesheet uses as its `var(--skl-base, …)` fallback, imported rather than
+duplicated so the two cannot drift).
+
+`speedMs` is **first-writer-wins** across the whole JS context — see
+[`observability.md` §3.3](./observability.md).
+
+`SkeletonTheme` itself is not exported from any entry, so pass an object
+literal; it infers correctly.
+
+### Per-instance props — **native only**
 
 ```tsx
 <AutoSkeleton
@@ -24,10 +52,48 @@ interop at all, just by passing `shimmerBaseColor` /
 />
 ```
 
-`autoskeleton/uniwind` exists purely to let you set those same three props
-from ONE Tailwind `className` instead.
+These three props are declared on the **native** `AutoSkeletonProps` only. The
+web `AutoSkeletonProps` does not have them — on web, theme through the CSS
+cascade (next section) or through `SkeletonProvider`.
 
-## `autoskeleton/uniwind`
+They layer on top of the context theme rather than replacing it: only fields
+you actually define are overridden.
+
+> **Android caveat for `defaultRadius`.** Android's radius ladder answers
+> definitively at rung R1 for a view with no background drawable
+> (`radius = 0, source = 'measured'`), and most RN views have no background —
+> so `defaultRadius` is never consulted for them and has no visible effect.
+> Use `<AutoSkeleton.Hint radius={n}>`, which is rung R0 and always wins.
+> Full detail in [`platform-support.md` §5d](./platform-support.md).
+
+### CSS custom properties — web
+
+Nothing to import and no props to pass. When the theme is still the untouched
+default, the renderer defers to the cascade:
+
+```css
+:root { --skl-base: #e2e8f0; --skl-highlight: #f8fafc; }
+.dark { --skl-base: #1e293b; --skl-highlight: #334155; }
+```
+
+A dark-mode toggle is a pure class flip, with no React state involved. Tailwind
+v4 `@theme` tokens compile to exactly these custom properties, which is why the
+Tailwind path needs no interop at all — verified against a real production build
+in `test/web/tailwind-app-theme.spec.ts`, which samples painted pixels at pinned
+shimmer phases.
+
+`autoskeleton/uniwind` exists purely to let a **native** consumer set the three
+per-instance props from ONE Tailwind `className` instead.
+
+## `autoskeleton/uniwind` — **native only**
+
+> This subpath imports the native `<AutoSkeleton>`, which reaches
+> `react-native/Libraries/Utilities/codegenNativeComponent`. **A web build
+> fails at bundle time** with `Importing native-only module
+> "react-native/Libraries/Utilities/codegenNativeComponent" on web`. That is a
+> loud, correct failure, not a silent one — but it does mean a universal app
+> must split its entry (`App.web.tsx` next to `App.tsx`), which is exactly why
+> `examples/expo` does. On web, use the CSS-custom-property path above.
 
 ```tsx
 import { ThemedAutoSkeleton } from 'autoskeleton/uniwind';
@@ -48,9 +114,17 @@ import { ThemedAutoSkeleton } from 'autoskeleton/uniwind';
 | `text-*` | `color` | `shimmerHighlightColor` |
 | `rounded-*` | `borderRadius` | `defaultRadius` |
 
-This mapping was verified on a real Android emulator (task 7.2): the
-rendered shimmer gradient genuinely matched `bg-slate-400`/`text-cyan-300`,
-not the library's JS defaults.
+The **colour** half of this mapping was verified on a real Android emulator
+(`examples/expo`'s `npm run gate:uniwind`, which polls the raw device
+framebuffer): the rendered shimmer gradient genuinely matched
+`bg-slate-400`/`text-cyan-300`, not the library's JS defaults.
+
+The **radius** half is not gated, and the reason is measured rather than
+assumed: a `rounded-2xl` class resolves to a `defaultRadius` that Android never
+consults for a view with no background drawable, so the gate card paints a
+square mask while a card with its own `borderRadius: 16` paints a rounded one.
+Use `<AutoSkeleton.Hint radius>` on Android. iOS is unaffected. See
+[`platform-support.md` §5d](./platform-support.md).
 
 **Requirements**: `uniwind` (>= 1.11.0, `uni-stack/uniwind`) and
 `tailwindcss` v4 (`@theme` CSS-first syntax) as peer dependencies. Neither

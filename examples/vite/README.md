@@ -30,18 +30,24 @@ Vite's `?raw`, so the snippet cannot drift from the code that just ran).
 | `css-variables` | `CssVariableTheme.tsx` | `--skl-base` / `--skl-highlight` scoped through the cascade; three colours, zero props. |
 | `tailwind-theme` | `TailwindTheme.tsx` | The same contract through Tailwind v4 `@theme` tokens, dark mode as a pure class flip. |
 | `refresh` | `RefreshPolicy.tsx` | REQ-PTR-1: by default a refresh over already-shown content keeps the content; `skeletonOnRefresh` opts out. |
-| `reduced-motion` | `ReducedMotion.tsx` | `prefers-reduced-motion: reduce` stops the sweep, the same still result `animation="none"` gives deliberately. |
+| `reduced-motion` | `ReducedMotion.tsx` | `prefers-reduced-motion: reduce` removes the travelling sweep and leaves the highlight breathing in place. |
 | `debug-overlay` | `DebugOverlayDemo.tsx` | Every detected shape outlined and labelled with its source. Dev builds only — compiled out of production. |
 
-Two things the demos deliberately do NOT claim, because they are not true today:
+One thing the demos deliberately do NOT claim, because it is not true today:
 
 - **`autoskeleton/uniwind` does not work on the web.** It reaches
   `codegenNativeComponent` and is native-only, so there is no uniwind demo
-  here.
-- **Reduced motion degrades to a still block, not to a pulse.** The pulse
-  keyframes animate `.askl-overlay-base`, which has no background of its own
-  (the base colour lives on `.askl-overlay`), so nothing visibly pulses. The
-  demo says "still", which is what a browser actually shows.
+  here. See [`docs/theming.md`](../../docs/theming.md).
+
+> **Stale copy, 2026-08-30.** `ReducedMotion.tsx`'s own on-screen text still
+> says reduce-motion produces "the same still result as `animation="none"`".
+> That was true when it was written — the pulse keyframes targeted
+> `.askl-overlay-base`, a div with no background, so the animation ran and
+> moved zero pixels. Commit `f464f11` fixed that: the pulse now targets the
+> element carrying the highlight, so reduce-motion leaves a real opacity
+> breath, and `animation="none"` is a genuinely different (highlight-free)
+> result. The demo's prose has not caught up. See
+> [`docs/animation.md`](../../docs/animation.md) for the current contract.
 
 ## Things worth knowing while reading the code
 
@@ -50,9 +56,10 @@ Two things the demos deliberately do NOT claim, because they are not true today:
   suppressed by REQ-PTR-1 reports nothing at all, by design.
 - `cacheHit` is decided once, when a wrapper first sees a cache key, and does
   not change for the life of that mounted component — which is why
-  `cache-replay` unmounts instead of just toggling.
-- The reduced-motion preference is read when the overlay mounts. Change the
-  setting, then remount.
+  `cache-replay` unmounts instead of just toggling. Same for `traversalMs`.
+- The reduced-motion preference is read when the overlay mounts and is **not**
+  subscribed to on web. Change the setting, then remount. (Native *is*
+  subscribed — see [`docs/animation.md` §2](../../docs/animation.md).)
 
 ## Gated surface
 

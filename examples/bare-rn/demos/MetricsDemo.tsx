@@ -12,7 +12,9 @@
  *
  * `debugOverlay` is dev-only (`__DEV__`) and draws the detected shapes with
  * their index and source type — the tool for "why was this node not
- * detected".
+ * detected". NOTE: it draws on WEB ONLY. On both native platforms the prop
+ * is accepted and stored and nothing reads it, so this demo shows the
+ * metrics payload and not an overlay. See docs/platform-support.md.
  */
 
 import { useState } from 'react';

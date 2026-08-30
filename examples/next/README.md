@@ -38,16 +38,25 @@ the SERVER, before the browser has any JavaScript, so the only honest control
 is how long the server takes — hence `?delay=`. Where a route has no such
 control, the index does not pretend it has one.
 
-## What these demos deliberately do NOT claim
+## Reduced motion on the pre-hydration path
 
-`prefers-reduced-motion` is honoured on the pre-hydration path — the generated
-bundle's `@media (prefers-reduced-motion: reduce)` block does stop the sweep
-with zero JavaScript — but the degraded result is a **static** block, not the
-pulse the spec describes: the pulse keyframes animate `.askl-overlay-base`,
-which has no background of its own, while the visible colour lives on the
-parent `.askl-overlay`. Rather than stage a demo around a preference a visitor
-cannot toggle in-page and an animation that does not currently appear, there
-is no reduced-motion route here.
+`prefers-reduced-motion` is honoured before hydration, with zero JavaScript:
+the generated bundle carries a `@media (prefers-reduced-motion: reduce)` block
+that swaps the travelling sweep for the same `askl-pulse` keyframes and the
+same `--askl-speed` property the runtime renderer uses.
+
+This paragraph previously said the degraded result was a **static** block
+rather than the pulse the spec describes, and that was accurate at the time —
+the pulse keyframes targeted `.askl-overlay-base`, a div with no background of
+its own, so the animation ran and moved zero pixels. Commit `f464f11` fixed it
+across all four renderers; `test/web/ssr-reduced-motion.spec.ts` now asserts
+the degraded overlay genuinely **repaints across frames** rather than merely
+losing its transform, which is precisely the distinction the old defect hid.
+
+There is still no reduced-motion *route* in this app, for an unchanged reason:
+a visitor cannot toggle the preference in-page, so a route staged around it
+would be a screenshot with no control. The behaviour is gated by that spec
+instead. See [`docs/animation.md`](../../docs/animation.md).
 
 ## Regenerating the capture
 

@@ -1,11 +1,77 @@
 # SSR: the build-time capture CLI
 
-`<AutoSkeleton.SSR>` replays a **build-time capture**, never live server-side
+`<AutoSkeletonSSR>` replays a **build-time capture**, never live server-side
 detection — a Suspense fallback renders before its children exist, so live
 detection is architecturally impossible both server- and client-side
 (`plan.md` ADR-11). The capture CLI is what produces the data
-`<AutoSkeleton.SSR>` replays. This document covers running it and the one
+`<AutoSkeletonSSR>` replays. This document covers running it and the one
 real ergonomic cost it has (RISK-4), stated openly rather than glossed over.
+
+> **The components are named exports, not statics.** They are
+> `AutoSkeletonSSR` and `AutoSkeletonSSRHydrate`, imported from
+> `autoskeleton/ssr`. There is no `AutoSkeleton.SSR` — earlier revisions of
+> this page used that dotted form and it never existed. Corrected 2026-08-30.
+
+## The whole wiring, end to end
+
+Four pieces. `examples/next` is the working version of all of them.
+
+**1. A capture route** that renders the loading-state markup you want measured,
+wrapped in an element matching `#autoskeleton-capture-root`:
+
+```tsx
+// app/dashboard-capture/page.tsx
+export default function DashboardCapturePage() {
+  return <div id="autoskeleton-capture-root"><DashboardSkeletonSource /></div>;
+}
+```
+
+**2. A registry** mapping each `skeletonKey` to that route, and the CLI run
+that turns it into `manifest.json` + `bundle.css` (below).
+
+**3. Import both artifacts once, globally**, and mount the hydration bridge:
+
+```tsx
+// app/layout.tsx
+import { AutoSkeletonSSRHydrate } from 'autoskeleton/ssr';
+import { manifest } from '../generated/autoskeleton-ssr';
+import '../generated/autoskeleton-ssr/bundle.css';
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html><body>
+      <AutoSkeletonSSRHydrate manifest={manifest} />
+      {children}
+    </body></html>
+  );
+}
+```
+
+`AutoSkeletonSSRHydrate` renders `null`. It imports the captured snapshots into
+the runtime store once per mount, so a client-side `<AutoSkeleton>` for the same
+key later gets a real cache hit instead of a cold traversal.
+
+**4. Use it as a Suspense fallback:**
+
+```tsx
+// app/dashboard/page.tsx
+import { Suspense } from 'react';
+import { AutoSkeletonSSR } from 'autoskeleton/ssr';
+import { manifest } from '../../generated/autoskeleton-ssr';
+
+export default function DashboardPage() {
+  return (
+    <Suspense fallback={<AutoSkeletonSSR skeletonKey="dashboard" manifest={manifest} direction="ltr" />}>
+      <DashboardContent />
+    </Suspense>
+  );
+}
+```
+
+`manifest` is a required prop — the component never reads the filesystem
+itself. `direction` defaults to `'ltr'`; pass your own known-at-request-time
+value for RTL locales, since the server cannot infer it from this component
+alone.
 
 ## Install
 
@@ -71,7 +137,7 @@ same value baked into every geometry rule's selector in the CSS):
   only select an element stamped with their own token, so a stale pair falls
   through to a drift-fallback rule that renders the same neutral generic
   block an uncaptured key renders. This needs no wiring from you.
-- **A dev build tells you why.** `<AutoSkeleton.SSRHydrate>` compares the
+- **A dev build tells you why.** `<AutoSkeletonSSRHydrate>` compares the
   manifest's token against the one the stylesheet publishes on `:root`
   (`--askl-ssr-build`) and warns, naming both, in non-production builds only.
 - **You can fail the build instead**, which is the loudest and earliest
@@ -91,11 +157,11 @@ stays safe and never produces a false mismatch.
 
 ## Manifest schema version
 
-`manifest.json` carries a `v` field, and `<AutoSkeleton.SSR>` **validates it
+`manifest.json` carries a `v` field, and `<AutoSkeletonSSR>` **validates it
 on read**. A manifest written by a different `autoskeleton` version renders
 the neutral generic block (with a dev-build warning naming both versions)
 rather than replaying geometry this version may no longer interpret the same
-way — and `<AutoSkeleton.SSRHydrate>` refuses to import its snapshots into
+way — and `<AutoSkeletonSSRHydrate>` refuses to import its snapshots into
 the runtime cache for the same reason.
 
 The current schema is **v2** (`SSR_MANIFEST_VERSION`). A `v1` manifest
@@ -117,7 +183,7 @@ The registry is a **declared list you maintain by hand** — there is no
 route auto-discovery. This is a real, deliberate trade-off
 (`plan.md` §9 RISK-4), not an oversight, and it has a real cost that grows
 with your app: every new SSR'd loading state needs a registry entry, or it
-silently falls back to `<AutoSkeleton.SSR>`'s neutral generic block (see
+silently falls back to `<AutoSkeletonSSR>`'s neutral generic block (see
 below) instead of its real captured shape. At 3 routes this is a minor
 chore; **the ergonomics genuinely get painful as your app grows past a
 handful of routes** — this is the honest reason `examples/next` exists as
@@ -131,7 +197,7 @@ Mitigations that exist today:
   construction, ADR-12). Forgetting a registry entry produces a plainer
   fallback, never a mismatch or a crash.
 - **A dev-mode runtime warning names every uncaptured key**, fired from
-  `<AutoSkeleton.SSR>`'s own render body (`src/web/ssr/uncaptured-warning.ts`),
+  `<AutoSkeletonSSR>`'s own render body (`src/web/ssr/uncaptured-warning.ts`),
   gated to non-production so it never reaches your users.
 - **`runCapture`'s own `report`** (`{ capturedKeys, failedKeys }`) is the
   build-time coverage signal — print it in your capture script to see
@@ -139,7 +205,7 @@ Mitigations that exist today:
 
 What does **not** exist yet: a repo-wide static scan for "keys referenced
 in JSX but never captured" (would need parsing consumer source for
-`<AutoSkeleton.SSR skeletonKey={...}>` usages — a separate, larger
+`<AutoSkeletonSSR skeletonKey={...}>` usages — a separate, larger
 static-analysis feature, explicitly out of scope for this CLI).
 
 ## Programmatic API
@@ -171,3 +237,21 @@ before your production build, against a temporary dev server serving your
 capture routes — see `examples/next`'s two-phase setup (`next dev` for
 capture, then `next build && next start` for the real production
 verification) for a concrete, tested pattern.
+
+## Residual limits
+
+- **A reader with an enlarged browser default font misses every captured
+  entry.** The font scale is part of the composite cache key, and the capture
+  CLI writes the neutral `1` because the preference is unknowable server-side.
+  That is the intended trade: a miss yields a fresh measurement taken for
+  *that* reader, where a hit would have yielded geometry measured for somebody
+  else. It is not a defect to work around.
+- **The captured width buckets are the library's, not yours.** Capture runs
+  every entry in `WIDTH_BUCKETS` (`[320, 375, 414, 768, 1024, 1280, 1536]`) ×
+  `['ltr', 'rtl']`. A committed manifest in this repository may be a smaller
+  subset than a fresh local run produces; that is expected, not drift.
+- **No repo-wide static scan** for keys referenced in JSX but never captured.
+  That would need parsing consumer source for `<AutoSkeletonSSR skeletonKey>`
+  usages — a separate, larger static-analysis feature, explicitly out of scope
+  for this CLI. `runCapture`'s `report` and the dev-mode uncaptured-key warning
+  are what exist today.
