@@ -44,7 +44,6 @@ function overlayMarkup(manifest: AutoSkeletonSSRManifest): string {
     `<div aria-busy="true" role="status" data-askl-ssr-key="dashboard" data-askl-ssr-dir="ltr" ` +
     `${SSR_BUILD_ATTRIBUTE}="${manifest.integrity}" class="askl-overlay askl-anim-shimmer" ` +
     `style="position:relative;overflow:hidden">` +
-    `<div class="askl-overlay-base" style="position:absolute;inset:0"></div>` +
     `<div class="askl-shimmer-layer"></div></div>`
   );
 }

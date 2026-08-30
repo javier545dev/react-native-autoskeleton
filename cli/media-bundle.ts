@@ -126,16 +126,25 @@ const SSR_OVERLAY_MARKERS = ['data-askl-ssr-key', 'data-askl-ssr-neutral'];
  *  The degraded presentation is the opacity pulse rather than nothing at all,
  *  matching `effectiveAnimation()`'s own choice exactly — the same
  *  `askl-pulse` keyframes and the same `--askl-speed` custom property the
- *  base stylesheet already defines, never a second animation implementation. */
+ *  base stylesheet already defines, never a second animation implementation.
+ *
+ *  It targets `.askl-shimmer-layer` for the same reason the runtime rule in
+ *  `buildShimmerStylesheet()` does, and this block is where that defect was
+ *  originally COPIED from: it used to hide the shimmer layer and then pulse
+ *  `.askl-overlay-base`, an element with no background of any kind, so the
+ *  pre-hydration degradation was a perfectly-running animation over a
+ *  completely static block. Overriding `animation-name` (rather than hiding
+ *  one element and animating another) is also what keeps this a single
+ *  declaration that cannot half-apply: the sweep is replaced, not layered
+ *  over. */
 function reducedMotionBlock(): string {
   const selectors = (child: string): string =>
     SSR_OVERLAY_MARKERS.map((marker) => `.askl-overlay[${marker}] ${child}`).join(',');
   return (
     '@media (prefers-reduced-motion: reduce){' +
-    `${selectors('.askl-shimmer-layer')}{animation:none;opacity:0;}` +
-    `${selectors('.askl-overlay-base')}{animation-name:askl-pulse;` +
+    `${selectors('.askl-shimmer-layer')}{animation-name:askl-pulse;` +
     'animation-timing-function:ease-in-out;animation-iteration-count:infinite;' +
-    'animation-duration:var(--askl-speed, 1400ms);}' +
+    'animation-duration:var(--askl-speed, 1400ms);transform:none;}' +
     '}'
   );
 }

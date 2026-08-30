@@ -107,20 +107,13 @@ class AutoskeletonOverlayView(context: Context) : FrameLayout(context) {
             speedMs = speedMs,
         )
         sharedShimmerClock.setPeriod(speedMs)
-        handle = renderer.mount(this, shapes, theme, sharedShimmerClock, isReducedMotionEffective())
+        handle = renderer.mount(this, shapes, theme, sharedShimmerClock, effectiveAnimation(animation, reducedMotion))
         mountedCacheKey = key
     }
 
     private fun applyMotionState() {
-        handle?.setReducedMotion(isReducedMotionEffective())
+        handle?.setAnimation(effectiveAnimation(animation, reducedMotion))
     }
-
-    /** Tier-1's `AutoskeletonRendererHandle` only exposes a binary
-     *  reduced-motion toggle (pulse vs. shimmer — task 4.4's existing
-     *  contract). `animation == "none"` has no dedicated tier-1 visual, so
-     *  it degrades to the same static/pulse path as reduced motion rather
-     *  than an unhandled case. */
-    private fun isReducedMotionEffective(): Boolean = reducedMotion || animation == "none"
 
     /** Removes the mounted overlay, if any. Called from
      *  `AutoskeletonOverlayViewManager.onDropViewInstance` — Fabric view
@@ -133,6 +126,33 @@ class AutoskeletonOverlayView(context: Context) : FrameLayout(context) {
     }
 
     companion object {
+        const val ANIMATION_SHIMMER = "shimmer"
+        const val ANIMATION_PULSE = "pulse"
+        const val ANIMATION_NONE = "none"
+
+        /** The Kotlin mirror of `src/core/animation.ts`'s `effectiveAnimation`,
+         *  pinned against the same table by `AutoskeletonAnimationKindTest`.
+         *  Kotlin cannot import the TypeScript one, so the table is the
+         *  contract and both sides are tested against it.
+         *
+         *  It replaces `isReducedMotionEffective() = reducedMotion || animation
+         *  == "none"`, which was wrong in both directions at once: `"pulse"`
+         *  was absent from the predicate, so an explicit pulse played the full
+         *  travelling shimmer; and `"none"` was present, so the value meaning
+         *  "do not animate" was routed into the reduced-motion PULSE.
+         *
+         *  Reduce-motion only ever REMOVES motion. An unrecognised kind falls
+         *  back to `"shimmer"` rather than to `"none"`: a prop typo must not
+         *  silently disable a skeleton's animation with no diagnostic. */
+        fun effectiveAnimation(animation: String, reducedMotion: Boolean): String {
+            val requested = when (animation) {
+                ANIMATION_PULSE -> ANIMATION_PULSE
+                ANIMATION_NONE -> ANIMATION_NONE
+                else -> ANIMATION_SHIMMER
+            }
+            return if (!reducedMotion || requested == ANIMATION_NONE) requested else ANIMATION_PULSE
+        }
+
         /** Pure: `[VERSION, x,y,w,h,r] x N` (density-independent points) ->
          *  raw-pixel shape rectangles, scaling every geometry component by
          *  `density` (plan.md §4.1). `source`/`radiusSource` never travel

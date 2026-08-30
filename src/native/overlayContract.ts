@@ -16,7 +16,7 @@
 // decoded snapshot for metrics and list sizing, so nothing is measured twice.
 
 import type { ComponentType } from 'react';
-import type { ShapeInfo } from '../core/types';
+import type { AnimationKind, ShapeInfo } from '../core/types';
 
 export interface SkeletonOverlayProps {
   /** Decoded shapes, in wire order, relative to the wrapper's top-left. */
@@ -28,6 +28,21 @@ export interface SkeletonOverlayProps {
   /** The measured wrapper frame the shapes are relative to. */
   readonly width: number;
   readonly height: number;
+  /** The presentation the consumer actually asked for, already resolved
+   *  against `reducedMotion` by `core/animation.ts`.
+   *
+   *  This field was MISSING, and its absence was not a gap in a nice-to-have:
+   *  `animation` is public API, so an overlay that only receives
+   *  `reducedMotion` cannot distinguish "the user asked for no animation at
+   *  all" from "the user asked for the default" — and tier-2 drew the full
+   *  travelling shimmer for `animation="none"` because of it. Optional so an
+   *  overlay written against the older prop shape still type-checks; an
+   *  overlay that ignores it is choosing to, rather than never being told.
+   *
+   *  `reducedMotion` stays alongside it deliberately: it is a different
+   *  question (what the PLATFORM asked for) and an overlay may legitimately
+   *  want both, e.g. to pick a gentler easing. */
+  readonly animation?: AnimationKind;
   readonly reducedMotion: boolean;
 }
 

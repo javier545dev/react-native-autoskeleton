@@ -201,10 +201,19 @@ test.describe('CSS renderer — ADR-6: transform-only shimmer, no background-pos
     expect(animatedProps.join(',').toLowerCase()).not.toContain('background-position');
   });
 
-  test('pulse animates only opacity', async ({ page, setup }) => {
+  // Targets `.askl-shimmer-layer`, the element that actually carries the
+  // highlight. It used to target `.askl-overlay-base` — a div with no
+  // background — and to wrap its only real assertion in
+  // `if (animatedProps.length > 0)`, so it passed both when the pulse worked
+  // and when no animation existed at all. The unconditional assertion below is
+  // the point of the test.
+  test('pulse animates only opacity, on the layer that actually carries the highlight', async ({
+    page,
+    setup,
+  }) => {
     await setup({ animation: 'pulse' });
     const animatedProps = await page.evaluate(() => {
-      const overlay = document.querySelector('.askl-overlay-base') as HTMLElement;
+      const overlay = document.querySelector('.askl-shimmer-layer') as HTMLElement;
       const anims = overlay.getAnimations();
       const props = new Set<string>();
       for (const anim of anims) {
@@ -219,9 +228,8 @@ test.describe('CSS renderer — ADR-6: transform-only shimmer, no background-pos
       }
       return Array.from(props);
     });
-    if (animatedProps.length > 0) {
-      expect(animatedProps).toContain('opacity');
-    }
+    expect(animatedProps).toContain('opacity');
+    expect(animatedProps).not.toContain('transform');
     expect(animatedProps.join(',').toLowerCase()).not.toContain('background');
   });
 
@@ -288,5 +296,52 @@ test.describe('CSS renderer — one deliberate pixel test (plan.md §7.3 point 5
     await page.waitForTimeout(250);
     const maskedShot2 = await page.screenshot({ clip: overlayBox, mask: [shimmerLocator] });
     expect(Buffer.compare(maskedShot1, maskedShot2)).toBe(0);
+  });
+
+  // REQ-A11Y-3 / the `animation` prop's OWN gate. Everything above this point
+  // inspects `getAnimations()` or class names, and an `animation="pulse"`
+  // overlay passes ALL of it while painting a completely static block: the
+  // pulse used to animate the opacity of `.askl-overlay-base`, an element with
+  // no background of any kind (the base colour lives on `.askl-overlay`
+  // itself), so a running, correctly-keyframed opacity animation moved
+  // literally zero pixels. A gate that asserts an animation OBJECT exists
+  // cannot see that; only sampling the painted output can.
+  //
+  // Sampled across a whole period rather than at two arbitrary instants: the
+  // pulse is a symmetric triangle wave, so two samples exactly one half-period
+  // apart are genuinely equal even when it works. Any two DISTINCT frames in
+  // the set prove motion.
+  async function paintsMoreThanOneDistinctFrame(
+    page: import('@playwright/test').Page,
+    clip: { x: number; y: number; width: number; height: number },
+    periodMs: number,
+  ): Promise<boolean> {
+    const samples: Buffer[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      samples.push(await page.screenshot({ clip }));
+      await page.waitForTimeout(Math.round(periodMs / 6));
+    }
+    return samples.some((s) => Buffer.compare(s, samples[0]!) !== 0);
+  }
+
+  test('an explicit animation="pulse" actually repaints — the overlay is not a static block', async ({
+    page,
+    setup,
+  }) => {
+    await setup({ animation: 'pulse', reducedMotion: false, speedMs: 600 });
+    const overlayBox = (await page.locator('.askl-overlay').boundingBox())!;
+    expect(await paintsMoreThanOneDistinctFrame(page, overlayBox, 600)).toBe(true);
+  });
+
+  test('reduce-motion degrades shimmer to a pulse that actually repaints', async ({ page, setup }) => {
+    await setup({ animation: 'shimmer', reducedMotion: true, speedMs: 600 });
+    const overlayBox = (await page.locator('.askl-overlay').boundingBox())!;
+    expect(await paintsMoreThanOneDistinctFrame(page, overlayBox, 600)).toBe(true);
+  });
+
+  test('animation="none" is the one kind that is genuinely static', async ({ page, setup }) => {
+    await setup({ animation: 'none', reducedMotion: false, speedMs: 600 });
+    const overlayBox = (await page.locator('.askl-overlay').boundingBox())!;
+    expect(await paintsMoreThanOneDistinctFrame(page, overlayBox, 600)).toBe(false);
   });
 });

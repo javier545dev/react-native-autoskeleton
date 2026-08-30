@@ -232,7 +232,13 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
         XCTAssertNotNil(gradientLayer.animation(forKey: "autoskeleton.pulse"))
     }
 
-    func testAnimationNoneDegradesToPulseJustLikeReducedMotion() {
+    // WAS `testAnimationNoneDegradesToPulseJustLikeReducedMotion`, asserting
+    // `XCTAssertNotNil(gradientLayer.animation(forKey: "autoskeleton.pulse"))`
+    // for `animation: "none"`. It passed because the code did the wrong thing:
+    // `reducedMotion || animation == "none"` routed the one value meaning "do
+    // not animate" straight into the reduced-motion pulse. A test can only
+    // pin behaviour it can also reject, and this one could not.
+    func testAnimationNoneRunsNoAnimationAtAll() {
         let cache = freshCache()
         cache.set("k1", wireFor([[0, 0, 50, 50, 4]]))
         let host = makeHost(cache: cache)
@@ -241,6 +247,23 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
         host.mountOrUpdate(
             cacheKey: "k1", baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 1400, animation: "none",
+            reducedMotion: false, debugOverlay: false, surface: surface
+        )
+
+        let gradientLayer = shimmerGradient(in: surface)
+        XCTAssertNil(gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey))
+        XCTAssertNil(gradientLayer.animation(forKey: "autoskeleton.pulse"))
+    }
+
+    func testAnExplicitPulseIsAPulseEvenWithThePreferenceOff() {
+        let cache = freshCache()
+        cache.set("k1", wireFor([[0, 0, 50, 50, 4]]))
+        let host = makeHost(cache: cache)
+        let surface = sizedSurface()
+
+        host.mountOrUpdate(
+            cacheKey: "k1", baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
+            defaultRadius: 4, speedMs: 1400, animation: "pulse",
             reducedMotion: false, debugOverlay: false, surface: surface
         )
 

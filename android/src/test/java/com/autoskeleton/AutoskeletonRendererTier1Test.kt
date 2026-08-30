@@ -82,7 +82,7 @@ class AutoskeletonRendererTier1Test {
         val scheduler = AutoskeletonRecordingFrameScheduler()
         val clock = AutoskeletonShimmerClock()
         val renderer = AutoskeletonRendererTier1()
-        val handle = renderer.mount(surface, emptyList(), theme(), clock, reducedMotion = false, scheduler = scheduler)
+        val handle = renderer.mount(surface, emptyList(), theme(), clock, animation = "shimmer", scheduler = scheduler)
 
         val overlay = surface.getChildAt(0) as AutoskeletonShimmerOverlayView
         overlay.draw(android.graphics.Canvas()) // forces the shader to exist
@@ -108,7 +108,7 @@ class AutoskeletonRendererTier1Test {
         val scheduler = AutoskeletonRecordingFrameScheduler()
         val clock = AutoskeletonShimmerClock()
         val renderer = AutoskeletonRendererTier1()
-        val handle = renderer.mount(surface, emptyList(), theme(), clock, reducedMotion = false, scheduler = scheduler)
+        val handle = renderer.mount(surface, emptyList(), theme(), clock, animation = "shimmer", scheduler = scheduler)
         val overlay = surface.getChildAt(0) as AutoskeletonShimmerOverlayView
         overlay.draw(android.graphics.Canvas())
         val startedAt = clock.startedAt
@@ -143,7 +143,7 @@ class AutoskeletonRendererTier1Test {
         val scheduler = AutoskeletonRecordingFrameScheduler()
         val clock = AutoskeletonShimmerClock()
         val renderer = AutoskeletonRendererTier1()
-        renderer.mount(surface, emptyList(), theme(), clock, reducedMotion = false, scheduler = scheduler)
+        renderer.mount(surface, emptyList(), theme(), clock, animation = "shimmer", scheduler = scheduler)
         val overlay = surface.getChildAt(0) as AutoskeletonShimmerOverlayView
         overlay.draw(android.graphics.Canvas())
 
@@ -168,7 +168,7 @@ class AutoskeletonRendererTier1Test {
         val scheduler = AutoskeletonRecordingFrameScheduler()
         val clock = AutoskeletonShimmerClock()
         val renderer = AutoskeletonRendererTier1()
-        val handle = renderer.mount(surface, emptyList(), theme(), clock, reducedMotion = false, scheduler = scheduler)
+        val handle = renderer.mount(surface, emptyList(), theme(), clock, animation = "shimmer", scheduler = scheduler)
         val overlay = surface.getChildAt(0) as AutoskeletonShimmerOverlayView
         overlay.draw(android.graphics.Canvas())
         overlay.layout(0, 0, 400, 200)
@@ -204,7 +204,7 @@ class AutoskeletonRendererTier1Test {
         val scheduler = AutoskeletonRecordingFrameScheduler()
         val clock = AutoskeletonShimmerClock()
         val renderer = AutoskeletonRendererTier1()
-        renderer.mount(surface, emptyList(), theme(), clock, reducedMotion = false, scheduler = scheduler)
+        renderer.mount(surface, emptyList(), theme(), clock, animation = "shimmer", scheduler = scheduler)
         val overlay = surface.getChildAt(0) as AutoskeletonShimmerOverlayView
         overlay.draw(android.graphics.Canvas())
         val shaderBefore = overlay.currentShader
@@ -224,7 +224,7 @@ class AutoskeletonRendererTier1Test {
         val scheduler = AutoskeletonRecordingFrameScheduler()
         val clock = AutoskeletonShimmerClock()
         val renderer = AutoskeletonRendererTier1()
-        renderer.mount(surface, emptyList(), theme(), clock, reducedMotion = false, scheduler = scheduler)
+        renderer.mount(surface, emptyList(), theme(), clock, animation = "shimmer", scheduler = scheduler)
         assertEquals(1, scheduler.postCount)
     }
 
@@ -234,37 +234,45 @@ class AutoskeletonRendererTier1Test {
         val scheduler = AutoskeletonRecordingFrameScheduler()
         val clock = AutoskeletonShimmerClock()
         val renderer = AutoskeletonRendererTier1()
-        renderer.mount(surface, emptyList(), theme(), clock, reducedMotion = false, scheduler = scheduler)
+        renderer.mount(surface, emptyList(), theme(), clock, animation = "shimmer", scheduler = scheduler)
 
         repeat(120) { scheduler.tick() }
         // 1 initial post + 120 re-posts from each tick's own re-schedule
         assertEquals(121, scheduler.postCount)
     }
 
+    // WAS `reducedMotionNeverSchedulesAFrame`, which asserted that the
+    // reduced-motion presentation schedules NO frames — i.e. that it is
+    // static. That was the defect, not the contract: with the loop stopped and
+    // nothing repositioning the shader, the highlight stayed frozen wherever
+    // the last frame left it. Reduce-motion now degrades to a real pulse
+    // (REQ-A11Y-3 and spec §1.10's "the same opacity pulse the runtime
+    // renderer degrades to"), and `animation="none"` is the kind that is
+    // genuinely, deliberately static — so that is what this now pins.
     @Test
-    fun reducedMotionNeverSchedulesAFrame() {
+    fun onlyAnimationNoneNeverSchedulesAFrame() {
         val surface = mountedSurface()
         val scheduler = AutoskeletonRecordingFrameScheduler()
         val clock = AutoskeletonShimmerClock()
         val renderer = AutoskeletonRendererTier1()
-        renderer.mount(surface, emptyList(), theme(), clock, reducedMotion = true, scheduler = scheduler)
+        renderer.mount(surface, emptyList(), theme(), clock, animation = "none", scheduler = scheduler)
         assertEquals(0, scheduler.postCount)
     }
 
     @Test
-    fun setReducedMotionStopsAndRestartsTheFrameLoop() {
+    fun setAnimationStopsAndRestartsTheFrameLoop() {
         val surface = mountedSurface()
         val scheduler = AutoskeletonRecordingFrameScheduler()
         val clock = AutoskeletonShimmerClock()
         val renderer = AutoskeletonRendererTier1()
-        val handle = renderer.mount(surface, emptyList(), theme(), clock, reducedMotion = false, scheduler = scheduler)
+        val handle = renderer.mount(surface, emptyList(), theme(), clock, animation = "shimmer", scheduler = scheduler)
 
-        handle.setReducedMotion(true)
+        handle.setAnimation("none")
         val countAfterStop = scheduler.postCount
-        scheduler.tick() // no pending callback: reduced motion cancelled it
+        scheduler.tick() // no pending callback: the static kind cancelled it
         assertEquals(countAfterStop, scheduler.postCount)
 
-        handle.setReducedMotion(false)
+        handle.setAnimation("shimmer")
         assertEquals(countAfterStop + 1, scheduler.postCount)
     }
 
@@ -276,7 +284,7 @@ class AutoskeletonRendererTier1Test {
         val scheduler = AutoskeletonRecordingFrameScheduler()
         val clock = AutoskeletonShimmerClock()
         val renderer = AutoskeletonRendererTier1()
-        renderer.mount(surface, emptyList(), theme(), clock, reducedMotion = false, scheduler = scheduler)
+        renderer.mount(surface, emptyList(), theme(), clock, animation = "shimmer", scheduler = scheduler)
         val overlay = surface.getChildAt(0) as AutoskeletonShimmerOverlayView
 
         overlay.visibility = View.VISIBLE
@@ -298,7 +306,7 @@ class AutoskeletonRendererTier1Test {
         val scheduler = AutoskeletonRecordingFrameScheduler()
         val clock = AutoskeletonShimmerClock()
         val renderer = AutoskeletonRendererTier1()
-        renderer.mount(surface, emptyList(), theme(), clock, reducedMotion = false, scheduler = scheduler)
+        renderer.mount(surface, emptyList(), theme(), clock, animation = "shimmer", scheduler = scheduler)
 
         val blockStarted = CountDownLatch(1)
         val releaseBlock = CountDownLatch(1)

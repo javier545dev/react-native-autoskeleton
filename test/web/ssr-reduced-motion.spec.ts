@@ -37,6 +37,11 @@ import { SSR_MANIFEST_VERSION } from '../../src/web/ssr/manifest';
 
 const CAPTURED_WIDTH = 375;
 
+/** The generated bundle paces the degraded pulse with `var(--askl-speed,
+ *  1400ms)`, and SSR markup — which by REQ-SSR-4 reads nothing and sets no
+ *  custom properties — always takes that fallback. */
+const PULSE_PERIOD_MS = 1400;
+
 function manifest(): AutoSkeletonSSRManifest {
   const base: AutoSkeletonSSRManifest = {
     v: SSR_MANIFEST_VERSION,
@@ -67,7 +72,6 @@ function capturedOverlayMarkup(m: AutoSkeletonSSRManifest): string {
     `<div id="captured" aria-busy="true" role="status" data-askl-ssr-key="dashboard" ` +
     `data-askl-ssr-dir="ltr" data-askl-ssr-build="${m.integrity}" ` +
     `class="askl-overlay askl-anim-shimmer" style="position:relative;overflow:hidden">` +
-    `<div class="askl-overlay-base" style="position:absolute;inset:0"></div>` +
     `<div class="askl-shimmer-layer"></div></div>`
   );
 }
@@ -77,7 +81,6 @@ function neutralBlockMarkup(): string {
   return (
     `<div id="neutral" aria-busy="true" role="status" data-askl-ssr-neutral="true" ` +
     `class="askl-overlay askl-anim-shimmer" style="position:relative;height:80px;overflow:hidden">` +
-    `<div class="askl-overlay-base" style="position:absolute;inset:0"></div>` +
     `<div class="askl-shimmer-layer"></div></div>`
   );
 }
@@ -89,7 +92,6 @@ function neutralBlockMarkup(): string {
 function runtimeOverlayMarkup(): string {
   return (
     `<div id="runtime" class="askl-overlay askl-anim-shimmer" style="position:relative;height:80px;overflow:hidden">` +
-    `<div class="askl-overlay-base" style="position:absolute;inset:0"></div>` +
     `<div class="askl-shimmer-layer"></div></div>`
   );
 }
@@ -141,11 +143,38 @@ test.describe('SSR pre-hydration reduced motion (REQ-A11Y-3)', () => {
     expect(await animatedProps(page, '#captured .askl-shimmer-layer')).not.toContain('transform');
   });
 
-  test('the captured-key overlay degrades to the opacity pulse, not to nothing at all', async ({
+  // The gate this test replaces was named "degrades to the opacity pulse, not
+  // to nothing at all" and asserted ONLY that `getAnimations()` reported an
+  // opacity animation on `.askl-overlay-base`. That element never had a
+  // background of any kind — the base colour lives on `.askl-overlay` itself —
+  // so the assertion was true while the screen showed a completely static
+  // block. The test name asserted the opposite of what the screen showed, and
+  // it would have FAILED had the pulse ever worked, because a working pulse
+  // does not put an opacity animation on that element at all.
+  //
+  // An animation OBJECT is not a visible property change. The only thing that
+  // can tell the two apart is the painted output, so that is what this asserts.
+  // Sampled across a whole period because the pulse is a symmetric triangle
+  // wave: two samples a half-period apart are legitimately equal even when it
+  // works, so "any two distinct frames in the set" is the honest predicate.
+  async function paintsMoreThanOneDistinctFrame(
+    page: import('@playwright/test').Page,
+    selector: string,
+  ): Promise<boolean> {
+    const clip = (await page.locator(selector).boundingBox())!;
+    const samples: Buffer[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      samples.push(await page.screenshot({ clip }));
+      await page.waitForTimeout(Math.round(PULSE_PERIOD_MS / 6));
+    }
+    return samples.some((s) => Buffer.compare(s, samples[0]!) !== 0);
+  }
+
+  test('the captured-key overlay really REPAINTS under reduce — a pulse, not a static block', async ({
     page,
   }) => {
     await render(page);
-    expect(await animatedProps(page, '#captured .askl-overlay-base')).toContain('opacity');
+    expect(await paintsMoreThanOneDistinctFrame(page, '#captured')).toBe(true);
   });
 
   test('the ADR-12 neutral block degrades identically (same class of bug, sibling instance)', async ({
@@ -153,15 +182,7 @@ test.describe('SSR pre-hydration reduced motion (REQ-A11Y-3)', () => {
   }) => {
     await render(page);
     expect(await animatedProps(page, '#neutral .askl-shimmer-layer')).not.toContain('transform');
-    expect(await animatedProps(page, '#neutral .askl-overlay-base')).toContain('opacity');
-  });
-
-  test('the shimmer layer is also visually removed, not merely frozen mid-sweep', async ({ page }) => {
-    await render(page);
-    const opacity = await page.evaluate(
-      () => getComputedStyle(document.querySelector('#captured .askl-shimmer-layer')!).opacity,
-    );
-    expect(opacity).toBe('0');
+    expect(await paintsMoreThanOneDistinctFrame(page, '#neutral')).toBe(true);
   });
 
   test('a RUNTIME overlay on the same page is untouched — the JS path stays authoritative', async ({

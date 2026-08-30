@@ -36,7 +36,18 @@ interface AutoskeletonRendererHandle {
      *  rebuild is driven exclusively by an actual OVERLAY width change, via
      *  `onSizeChanged`; a shape update never changes the overlay's size.) */
     fun update(shapes: List<AutoskeletonShapeInfo>)
-    fun setReducedMotion(reducedMotion: Boolean)
+
+    /** The RESOLVED presentation — one of `"shimmer"`, `"pulse"`, `"none"`,
+     *  already reconciled with the platform preference by
+     *  `AutoskeletonOverlayView.effectiveAnimation` (the Kotlin mirror of
+     *  `src/core/animation.ts`).
+     *
+     *  This replaced `setReducedMotion(Boolean)`. A boolean cannot carry three
+     *  kinds, and collapsing them is what produced two opposite defects at
+     *  once: `"pulse"` fell through to the travelling shimmer because it was
+     *  not "reduced", and `"none"` was routed INTO the reduced-motion pulse —
+     *  an animation, for the value that means "do not animate". */
+    fun setAnimation(animation: String)
     fun destroy()
 }
 
@@ -53,7 +64,7 @@ class AutoskeletonRendererTier1(
         shapes: List<AutoskeletonShapeInfo>,
         theme: AutoskeletonSkeletonTheme,
         clock: AutoskeletonShimmerClock,
-        reducedMotion: Boolean,
+        animation: String,
         scheduler: AutoskeletonFrameScheduler = AutoskeletonChoreographerFrameScheduler(),
     ): AutoskeletonRendererHandle {
         val token = tracing.begin(MOUNT_TRACE_SECTION)
@@ -72,14 +83,14 @@ class AutoskeletonRendererTier1(
         overlay.measure(widthSpec, heightSpec)
         overlay.layout(0, 0, surface.width, surface.height)
         overlay.updateShapes(shapes)
-        overlay.setReducedMotion(reducedMotion)
+        overlay.setAnimation(animation)
         tracing.end(MOUNT_TRACE_SECTION)
         return Handle(overlay)
     }
 
     private class Handle(private val overlay: AutoskeletonShimmerOverlayView) : AutoskeletonRendererHandle {
         override fun update(shapes: List<AutoskeletonShapeInfo>) = overlay.updateShapes(shapes)
-        override fun setReducedMotion(reducedMotion: Boolean) = overlay.setReducedMotion(reducedMotion)
+        override fun setAnimation(animation: String) = overlay.setAnimation(animation)
         override fun destroy() = overlay.destroySelf()
     }
 
@@ -119,7 +130,13 @@ class AutoskeletonShimmerOverlayView internal constructor(
     private val matrix = Matrix()
     private var shader: LinearGradient? = null
     private var animating = false
-    private var reducedMotion = false
+    private var animation = AutoskeletonOverlayView.ANIMATION_SHIMMER
+
+    /** The opaque base fill drawn UNDER the highlight for every kind whose
+     *  highlight is not itself fully covering. Allocated once, never per frame
+     *  (NFR-5), and never `paint` itself — `paint` carries the gradient shader
+     *  and has its alpha modulated by the pulse. */
+    private val basePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = theme.baseColor }
 
     /** Test/telemetry seam (NFR-5's direct proof): incremented only when a NEW
      *  `LinearGradient` is constructed — must stay constant across any number
@@ -137,18 +154,52 @@ class AutoskeletonShimmerOverlayView internal constructor(
      *  been sized/drawn. */
     val currentShader: Shader? get() = shader
 
+    /** Test seams for the draw pass. A `Canvas` in a Robolectric unit test
+     *  rasterizes nothing inspectable, so the three values that actually decide
+     *  what a frame looks like are recorded as they are applied. They are read
+     *  by `AutoskeletonAnimationKindTest`, which is the only gate that can tell
+     *  a parked gradient apart from a frozen one. */
+    var lastShaderTranslateX = 0f
+        private set
+
+    /** `0` when no highlight was drawn at all, `255` when it was drawn opaque. */
+    var lastHighlightAlpha = 0
+        private set
+
+    /** Whether the last frame laid down the opaque base fill before the
+     *  highlight. Required for every non-shimmer kind: without it the pulse's
+     *  trough would make the skeleton see-through and the real content would
+     *  read through the loading state. */
+    var lastDrewOpaqueBase = false
+        private set
+
     fun updateShapes(shapes: List<AutoskeletonShapeInfo>) {
         maskPath = AutoskeletonRendererTier1.unionPath(shapes)
         postInvalidateOnAnimation()
     }
 
-    fun setReducedMotion(value: Boolean) {
-        reducedMotion = value
-        if (value) {
+    /** `animation` is the already-resolved kind (see
+     *  `AutoskeletonRendererHandle.setAnimation`).
+     *
+     *  Only `"none"` stops the frame loop. `"pulse"` is an ANIMATION and has to
+     *  be driven, exactly as the CSS renderer drives `@keyframes askl-pulse`
+     *  and iOS drives its `CABasicAnimation`; stopping the loop for it was the
+     *  Android half of the defect, and it left the gradient frozen at whatever
+     *  phase the last drawn frame happened to reach — a streak parked at an
+     *  arbitrary point across the skeleton, its position determined by WHEN the
+     *  user toggled the setting. `onDraw` now parks it deliberately instead.
+     *
+     *  The trailing invalidate is what makes the static kind actually repaint:
+     *  with the loop stopped, nothing else would ever ask for the frame that
+     *  shows the new state. */
+    fun setAnimation(value: String) {
+        animation = value
+        if (value == AutoskeletonOverlayView.ANIMATION_NONE) {
             stopAnimating()
         } else {
             startAnimating()
         }
+        postInvalidateOnAnimation()
     }
 
     fun destroySelf() {
@@ -225,17 +276,63 @@ class AutoskeletonShimmerOverlayView internal constructor(
         if (activeShader != null && width > 0 && height > 0) {
             canvas.save()
             canvas.clipPath(maskPath)
-            val phase = clock.phaseAt(System.currentTimeMillis().toDouble())
-            val translateX = ((phase.toFloat() * 2f) - 1f) * width
-            matrix.setTranslate(translateX, 0f)
-            activeShader.setLocalMatrix(matrix)
-            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+
+            val w = width.toFloat()
+            val h = height.toFloat()
+            val isNone = animation == AutoskeletonOverlayView.ANIMATION_NONE
+            val isPulse = animation == AutoskeletonOverlayView.ANIMATION_PULSE
+
+            // Every kind except the travelling shimmer needs its own opaque
+            // base: the shimmer's gradient clamps to the base colour beyond the
+            // band and is therefore already fully covering, while the pulse's
+            // is translucent for most of its cycle and 'none' draws no
+            // highlight at all. "Do not animate" must never become "do not
+            // paint" — the skeleton still has to hide the content beneath it.
+            lastDrewOpaqueBase = isNone || isPulse
+            if (lastDrewOpaqueBase) {
+                canvas.drawRect(0f, 0f, w, h, basePaint)
+            }
+
+            if (isNone) {
+                lastHighlightAlpha = 0
+            } else {
+                val phase = clock.phaseAt(System.currentTimeMillis().toDouble())
+                // The pulse parks the band at the container's CENTRE — the
+                // named resting position `core/animation.ts` defines and every
+                // renderer shares — instead of leaving it wherever the sweep
+                // last happened to be.
+                lastShaderTranslateX =
+                    if (isPulse) w / 2f else ((phase.toFloat() * 2f) - 1f) * w
+                lastHighlightAlpha = if (isPulse) pulseAlpha(phase) else 255
+                matrix.setTranslate(lastShaderTranslateX, 0f)
+                activeShader.setLocalMatrix(matrix)
+                paint.alpha = lastHighlightAlpha
+                canvas.drawRect(0f, 0f, w, h, paint)
+            }
             canvas.restore()
         }
         tracing.end(DRAW_TRACE_SECTION)
     }
 
-    private companion object {
-        const val DRAW_TRACE_SECTION = "AutoskeletonDraw"
+    companion object {
+        private const val DRAW_TRACE_SECTION = "AutoskeletonDraw"
+
+        /** The pulse's trough, as an 8-bit alpha. Mirrors
+         *  `PULSE_MIN_OPACITY` (0.6) in `src/core/animation.ts`. */
+        const val PULSE_MIN_ALPHA = 153
+
+        /** A raised cosine over the SHARED clock's phase: `PULSE_MIN_ALPHA` at
+         *  phase 0, opaque at phase 0.5, back to the floor at phase 1 — one
+         *  full breath per clock period, matching the web `@keyframes
+         *  askl-pulse` rule and iOS's auto-reversing `CABasicAnimation`.
+         *
+         *  Deriving it from `clock.phaseAt` rather than running a separate
+         *  animator is what keeps every instance on this screen breathing
+         *  together (ADR-8) for free — this renderer already draws every frame
+         *  itself, so there is nothing extra to schedule. */
+        fun pulseAlpha(phase: Double): Int {
+            val breath = (1.0 - kotlin.math.cos(2.0 * Math.PI * phase)) / 2.0
+            return (PULSE_MIN_ALPHA + (255 - PULSE_MIN_ALPHA) * breath).toInt().coerceIn(PULSE_MIN_ALPHA, 255)
+        }
     }
 }

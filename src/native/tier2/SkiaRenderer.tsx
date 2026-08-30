@@ -64,7 +64,8 @@
 // DROPPED FEATURE. See `staggerDelayForIndex` at the bottom of this file.
 
 import { useEffect, useMemo, type ReactElement } from 'react';
-import type { ShapeInfo } from '../../core/types';
+import type { AnimationKind, ShapeInfo } from '../../core/types';
+import { effectiveAnimation, PULSE_MIN_OPACITY } from '../../core/animation';
 import { tier2PhaseAt } from './shimmerOrigin';
 
 // ---------------------------------------------------------------------------
@@ -200,6 +201,35 @@ export function createDriveAnimation(reanimated: ReanimatedModule, speedMs: numb
   );
 }
 
+/** Where the highlight RESTS when it is not travelling.
+ *
+ *  `gradientStart`/`gradientEnd` below put the band's centre at
+ *  `travel = -width + drive * width * 2`, so the container's own centre
+ *  (`width / 2`) is `drive = 0.75`. It is a named constant rather than "just
+ *  leave the driver wherever it was" for the same reason Android now parks its
+ *  shader deliberately: an un-named resting position is how the streak ends up
+ *  frozen at an arbitrary point of the sweep, which looks like a rendering bug
+ *  rather than a reduced-motion affordance. */
+const PULSE_PARK_DRIVE = 0.75;
+
+/** `core/animation.ts`'s pulse: the highlight's opacity breathes from
+ *  `PULSE_MIN_OPACITY` to 1 and back exactly once per clock period.
+ *
+ *  `withRepeat(..., true)` — auto-reversing — is correct HERE and wrong for the
+ *  shimmer driver for the same reason: the pulse IS symmetric (up then down is
+ *  one breath) while the sweep is a sawtooth that must always travel the same
+ *  direction. Hence a half-period leg: two legs make one full period, matching
+ *  the web `@keyframes askl-pulse` rule's `0% / 50% / 100%` over one
+ *  `--askl-speed`.
+ *
+ *  No easing is passed on purpose: `withTiming`'s default is
+ *  `Easing.inOut(Easing.quad)`, which is the ease-in-out the CSS rule asks for.
+ *  This is the one place a default is load-bearing rather than incidental. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function createPulseAnimation(reanimated: ReanimatedModule, speedMs: number): any {
+  return reanimated.withRepeat(reanimated.withTiming(1, { duration: speedMs / 2 }), -1, true);
+}
+
 // ---------------------------------------------------------------------------
 // SkiaShimmerOverlay — the actual React component
 // ---------------------------------------------------------------------------
@@ -212,6 +242,13 @@ export interface SkiaShimmerOverlayProps {
   readonly speedMs: number;
   readonly width: number;
   readonly height: number;
+  /** The requested presentation. This USED TO BE ABSENT: `SkeletonOverlayProps`
+   *  carried only `reducedMotion`, and `native/AutoSkeleton.tsx` passed only
+   *  that, so an explicit `animation="none"` — the value whose whole meaning is
+   *  "do not animate" — reached tier-2 as a full travelling shimmer, and so did
+   *  `animation="pulse"`. Optional so an overlay built against the older prop
+   *  shape still compiles; absent means the previous default. */
+  readonly animation?: AnimationKind;
   readonly reducedMotion: boolean;
   /** Test seam: overrides the wall clock used to derive the join phase.
    *  Production never passes it. */
@@ -256,17 +293,51 @@ export function SkiaShimmerOverlay(props: SkiaShimmerOverlayProps): ReactElement
   // concurrent render React discards), a render-body assignment re-created a
   // FRESH animation on EVERY render, so any unrelated parent re-render
   // silently restarted the sweep — the exact opposite of ADR-8.
+  // ONE resolution of the `animation` prop, from the same function web and the
+  // two native tiers use. A zero/negative period cannot express any animation,
+  // so it degrades to the static kind rather than to a divide-by-zero.
+  const animation: AnimationKind =
+    props.speedMs > 0 ? effectiveAnimation(props.animation ?? 'shimmer', props.reducedMotion) : 'none';
+  const travels = animation === 'shimmer';
+  const pulses = animation === 'pulse';
+  const showsHighlight = animation !== 'none';
+  // Every kind still has to COVER — a skeleton that stops animating must not
+  // stop hiding the content underneath it. Only 'shimmer' can skip the
+  // separate fill, because its gradient is opaque and clamps to the base
+  // colour beyond the band.
+  const needsBaseFill = !travels;
+
   const drive = reanimated.useSharedValue(0);
+  // Separate from `drive` because it is a different quantity on a different
+  // curve: `drive` is the band's POSITION (sawtooth), this is its OPACITY
+  // (symmetric breath). Held at 1 whenever the pulse is not running so the
+  // shimmer and static kinds are unaffected by its existence.
+  const highlightOpacity = reanimated.useSharedValue(1);
   const nowMs = props.nowMs;
   useEffect(() => {
-    if (props.reducedMotion || !(props.speedMs > 0)) {
-      // REQ-A11Y-3: no directional movement at all under reduced motion, and
-      // the driver is parked at 0 so the gradient's highlight sits off the
-      // left edge and the skeleton reads as a flat, fully covering base fill.
-      reanimated.cancelAnimation(drive);
+    reanimated.cancelAnimation(drive);
+    reanimated.cancelAnimation(highlightOpacity);
+
+    if (pulses) {
+      // Park the band deliberately (see `PULSE_PARK_DRIVE`) and breathe only
+      // its opacity — no directional movement of any kind, which is what
+      // REQ-A11Y-3 is actually asking for.
+      drive.value = PULSE_PARK_DRIVE;
+      highlightOpacity.value = PULSE_MIN_OPACITY;
+      highlightOpacity.value = createPulseAnimation(reanimated, props.speedMs);
+      return () => {
+        reanimated.cancelAnimation(highlightOpacity);
+      };
+    }
+
+    highlightOpacity.value = 1;
+    if (!travels) {
+      // 'none'. Nothing runs, and the highlight is not drawn at all (see the
+      // render below), so the parked position is immaterial.
       drive.value = 0;
       return;
     }
+
     const phase = tier2PhaseAt((nowMs ?? Date.now)(), props.speedMs);
     drive.value = phase;
     drive.value = createDriveAnimation(reanimated, props.speedMs, phase);
@@ -275,7 +346,7 @@ export function SkiaShimmerOverlay(props: SkiaShimmerOverlayProps): ReactElement
       // `withRepeat` running forever — a real, previously-open defect.
       reanimated.cancelAnimation(drive);
     };
-  }, [drive, reanimated, props.reducedMotion, props.speedMs, nowMs]);
+  }, [drive, highlightOpacity, reanimated, travels, pulses, props.speedMs, nowMs]);
 
   const width = props.width;
   const gradientStart = reanimated.useDerivedValue(() => {
@@ -289,14 +360,26 @@ export function SkiaShimmerOverlay(props: SkiaShimmerOverlayProps): ReactElement
 
   return (
     <skia.Canvas style={{ width: props.width, height: props.height }}>
-      <skia.Path path={maskPath} color={props.baseColor}>
-        <skia.LinearGradient
-          start={gradientStart}
-          end={gradientEnd}
-          colors={[props.baseColor, props.highlightColor, props.baseColor]}
-          positions={[0, 0.5, 1]}
-        />
-      </skia.Path>
+      {/* The opaque base fill, drawn ONLY when the highlight above it is
+       *  translucent for part of the cycle. Under 'shimmer' the gradient's own
+       *  clamped edges are already the base colour at full alpha, so a second
+       *  path would be pure overdraw; under 'pulse' it is mandatory, because
+       *  without it the trough would make the whole skeleton see-through and
+       *  the real content would read through the "loading" state. Under 'none'
+       *  it is the ONLY thing drawn — "do not animate" must not be allowed to
+       *  become "do not paint", which is what dropping this branch did until a
+       *  gate caught it. */}
+      {needsBaseFill && <skia.Path path={maskPath} color={props.baseColor} />}
+      {showsHighlight && (
+        <skia.Path path={maskPath} color={props.baseColor} opacity={highlightOpacity}>
+          <skia.LinearGradient
+            start={gradientStart}
+            end={gradientEnd}
+            colors={[props.baseColor, props.highlightColor, props.baseColor]}
+            positions={[0, 0.5, 1]}
+          />
+        </skia.Path>
+      )}
     </skia.Canvas>
   );
 }

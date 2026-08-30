@@ -46,7 +46,6 @@ import {
   useSyncExternalStore,
 } from 'react';
 import {
-  AccessibilityInfo,
   findNodeHandle,
   I18nManager,
   PixelRatio,
@@ -56,6 +55,8 @@ import {
   View,
   type LayoutChangeEvent,
 } from 'react-native';
+import { useReducedMotion } from './reducedMotion';
+import { effectiveAnimation } from '../core/animation';
 import { bucketWidth, composeCacheKey, quantizeFontScale } from '../core/cache-key';
 import type { SkeletonTheme } from '../core/contracts';
 import { createHandoffController, type HandoffController } from '../core/handoff';
@@ -183,23 +184,6 @@ export interface AutoSkeletonProps {
   readonly defaultRadius?: number;
   readonly children?: ReactNode;
 }
-
-function useReducedMotion(): boolean {
-  return useSyncExternalStore(
-    (onChange) => {
-      const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', onChange);
-      return () => sub.remove();
-    },
-    () => reducedMotionSnapshot,
-    () => false,
-  );
-}
-let reducedMotionSnapshot = false;
-AccessibilityInfo.isReduceMotionEnabled?.()
-  .then((v) => {
-    reducedMotionSnapshot = v;
-  })
-  .catch(() => undefined);
 
 /** Withholds the skeleton until `delayMs` has elapsed since this loading
  *  cycle started (see file header: "the delay prop is a lie" gap closure).
@@ -449,8 +433,12 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
     defaultRadius: props.defaultRadius,
   });
   const reducedMotion = useReducedMotion();
-  const requestedAnimation = props.animation ?? 'shimmer';
-  const animation: AnimationKind = reducedMotion && requestedAnimation === 'shimmer' ? 'pulse' : requestedAnimation;
+  // One shared definition of what `animation` means, rather than this
+  // component's own inline ternary. The ternary was subtly narrower than the
+  // renderers it fed: it only ever rewrote 'shimmer', which was correct, but it
+  // left every renderer downstream to re-derive the same rule for itself, and
+  // none of them agreed. See `core/animation.ts`.
+  const animation: AnimationKind = effectiveAnimation(props.animation ?? 'shimmer', reducedMotion);
   const debugOverlayEnabled = props.debugOverlay === true && typeof __DEV__ !== 'undefined' && __DEV__;
 
   const [everShownContent, setEverShownContent] = useState(!props.isLoading);
@@ -690,6 +678,12 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
               speedMs: resolveSharedShimmerPeriodMs(theme.speedMs),
               width: snapshot.frameWidth,
               height: snapshot.frameHeight,
+              // Tier-2 used to receive ONLY `reducedMotion`, so an explicit
+              // `animation="none"` — and `"pulse"` — never reached it at all
+              // and it drew the full travelling shimmer for both. Already
+              // resolved above; `effectiveAnimation` is idempotent, so tier-2
+              // re-deriving it changes nothing.
+              animation,
               reducedMotion,
             })}
           </View>

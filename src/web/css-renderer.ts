@@ -16,8 +16,8 @@
 // contract, and is never called by this renderer's own mount/update path).
 
 import type { ClockPhase, Renderer, RenderProps, RendererHandle, ShimmerClock } from '../core/contracts';
+import { effectiveAnimation, PULSE_MIN_OPACITY } from '../core/animation';
 import { buildClipPath } from '../core/clip-path';
-import type { AnimationKind } from '../core/types';
 import { decodeWire } from '../core/wire';
 
 const STYLE_ELEMENT_ID = 'autoskeleton-css-renderer-styles';
@@ -52,13 +52,24 @@ export function buildShimmerStylesheet(): string {
     '.askl-anim-shimmer .askl-shimmer-layer{animation-name:askl-shimmer;',
     'animation-timing-function:linear;animation-iteration-count:infinite;',
     'animation-duration:var(--askl-speed, 1400ms);}',
-    '.askl-anim-pulse .askl-overlay-base{animation-name:askl-pulse;',
+    // `core/animation.ts`'s 'pulse': the HIGHLIGHT breathes in place. It is
+    // deliberately the same element the shimmer travels on, because that is
+    // the only element carrying the highlight — the previous rule targeted
+    // `.askl-overlay-base`, a div with no background of any kind, so the
+    // animation ran perfectly and moved zero pixels. Pulsing `.askl-overlay`
+    // instead would be the OTHER wrong answer: it holds the opaque base fill,
+    // so the whole skeleton would go translucent at the trough and let real
+    // content bleed through (the mistake `ios/AutoskeletonRendererTier1.swift`
+    // `applyPulse()`'s own doc comment already warns about). With no transform
+    // applied, the layer's `left:-50%;width:200%` box puts the gradient's 50%
+    // stop exactly at the overlay's centre — the named resting position every
+    // renderer parks at.
+    '.askl-anim-pulse .askl-shimmer-layer{animation-name:askl-pulse;',
     'animation-timing-function:ease-in-out;animation-iteration-count:infinite;',
     'animation-duration:var(--askl-speed, 1400ms);}',
-    '.askl-anim-pulse .askl-shimmer-layer{animation:none;opacity:0;}',
     '.askl-anim-none .askl-shimmer-layer{animation:none;opacity:0;}',
     '@keyframes askl-shimmer{from{transform:translateX(-50%);}to{transform:translateX(50%);}}',
-    '@keyframes askl-pulse{0%,100%{opacity:0.45;}50%{opacity:1;}}',
+    `@keyframes askl-pulse{0%,100%{opacity:${PULSE_MIN_OPACITY};}50%{opacity:1;}}`,
   ].join('');
 }
 
@@ -132,15 +143,6 @@ export function createShimmerClock(periodMs: number = DEFAULT_PERIOD_MS): Shimme
   };
 }
 
-function effectiveAnimation(animation: AnimationKind, reducedMotion: boolean): AnimationKind {
-  if (!reducedMotion) {
-    return animation;
-  }
-  // REQ-A11Y-3 / spec §1.10: reduce-motion degrades shimmer to pulse; 'none'
-  // stays 'none'. No transform-based shimmer sweep is ever applied here.
-  return animation === 'none' ? 'none' : 'pulse';
-}
-
 function applyGeometry(overlay: HTMLDivElement, props: RenderProps): void {
   const decoded = decodeWire(props.snapshot.data);
   const path = buildClipPath(
@@ -207,13 +209,12 @@ export function createCssRenderer(): Renderer<HTMLElement> {
       const overlay = document.createElement('div');
       overlay.className = 'askl-overlay';
       overlay.setAttribute('aria-hidden', 'true');
-      const baseLayer = document.createElement('div');
-      baseLayer.className = 'askl-overlay-base';
-      baseLayer.style.position = 'absolute';
-      baseLayer.style.inset = '0';
+      // `.askl-overlay-base` used to be created here. It never had a
+      // background, existed only to be the pulse's target, and therefore only
+      // ever painted nothing — deleting it removes the element AND the bytes
+      // rather than leaving a dead div in every skeleton on every page.
       const shimmerLayer = document.createElement('div');
       shimmerLayer.className = 'askl-shimmer-layer';
-      overlay.appendChild(baseLayer);
       overlay.appendChild(shimmerLayer);
       surface.appendChild(overlay);
 

@@ -89,7 +89,7 @@ final class AutoskeletonRendererTier1Tests: XCTestCase {
             shapes: [AutoskeletonShapeInfo(x: 0, y: 0, w: 50, h: 20, r: 0, source: .text, radiusSource: .measured)],
             theme: makeTheme(),
             clock: clock,
-            reducedMotion: false
+            animation: "shimmer"
         )
 
         XCTAssertEqual(tracing.events, [
@@ -110,7 +110,7 @@ final class AutoskeletonRendererTier1Tests: XCTestCase {
             shapes: [AutoskeletonShapeInfo(x: 0, y: 0, w: 50, h: 20, r: 0, source: .text, radiusSource: .measured)],
             theme: makeTheme(),
             clock: clock,
-            reducedMotion: false
+            animation: "shimmer"
         )
 
         let gradientLayer = gradient(in: surface)
@@ -141,7 +141,7 @@ final class AutoskeletonRendererTier1Tests: XCTestCase {
             shapes: [AutoskeletonShapeInfo(x: 0, y: 0, w: 50, h: 20, r: 0, source: .text, radiusSource: .measured)],
             theme: makeTheme(),
             clock: clock,
-            reducedMotion: false
+            animation: "shimmer"
         )
         let gradientLayer = gradient(in: surface)
         let before = try! XCTUnwrap(gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey) as? CABasicAnimation)
@@ -177,7 +177,7 @@ final class AutoskeletonRendererTier1Tests: XCTestCase {
             shapes: [AutoskeletonShapeInfo(x: 0, y: 0, w: 50, h: 20, r: 0, source: .text, radiusSource: .measured)],
             theme: makeTheme(),
             clock: clock,
-            reducedMotion: false
+            animation: "shimmer"
         )
         let gradientLayer = gradient(in: surface)
         let beginTimeBefore = try! XCTUnwrap(gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey)).beginTime
@@ -219,7 +219,7 @@ final class AutoskeletonRendererTier1Tests: XCTestCase {
             shapes: [AutoskeletonShapeInfo(x: 0, y: 0, w: 50, h: 20, r: 0, source: .text, radiusSource: .measured)],
             theme: makeTheme(),
             clock: clock,
-            reducedMotion: false
+            animation: "shimmer"
         )
         let gradientLayer = gradient(in: surface)
         // G.18: the CONTAINER is the layer sized to the surface; the gradient is
@@ -260,7 +260,7 @@ final class AutoskeletonRendererTier1Tests: XCTestCase {
             shapes: [AutoskeletonShapeInfo(x: 0, y: 0, w: 50, h: 20, r: 0, source: .text, radiusSource: .measured)],
             theme: makeTheme(),
             clock: clock,
-            reducedMotion: false
+            animation: "shimmer"
         )
         let gradientLayer = gradient(in: surface)
         let beginTimeBefore = try! XCTUnwrap(
@@ -390,7 +390,7 @@ final class AutoskeletonRendererTier1Tests: XCTestCase {
             shapes: [AutoskeletonShapeInfo(x: 20, y: 20, w: 120, h: 40, r: 8, source: .text, radiusSource: .measured)],
             theme: makeTheme(),
             clock: clock,
-            reducedMotion: false
+            animation: "shimmer"
         )
 
         let reference = try! XCTUnwrap(coveredBoundingBox(in: surface), "FIXTURE FAILURE: no mask in the layer tree")
@@ -420,7 +420,7 @@ final class AutoskeletonRendererTier1Tests: XCTestCase {
             shapes: [AutoskeletonShapeInfo(x: 20, y: 20, w: 120, h: 40, r: 8, source: .text, radiusSource: .measured)],
             theme: makeTheme(),
             clock: clock,
-            reducedMotion: false
+            animation: "shimmer"
         )
 
         // The centre of the detected shape — the analogue of the on-device
@@ -447,6 +447,10 @@ final class AutoskeletonRendererTier1Tests: XCTestCase {
 
     // MARK: - REQ-A11Y-3: reduced motion degrades to pulse, not a transform sweep
 
+    // Reduce-motion resolves to the 'pulse' KIND before it reaches this layer
+    // (`AutoskeletonOverlayViewHost.effectiveAnimation`), so this mounts the
+    // resolved kind directly. `AutoskeletonAnimationKindTests` owns the table
+    // that proves the resolution itself.
     func testReducedMotionAppliesPulseNotShimmer() {
         let renderer = AutoskeletonRendererTier1()
         let surface = makeSurface()
@@ -457,7 +461,7 @@ final class AutoskeletonRendererTier1Tests: XCTestCase {
             shapes: [AutoskeletonShapeInfo(x: 0, y: 0, w: 50, h: 20, r: 0, source: .text, radiusSource: .measured)],
             theme: makeTheme(),
             clock: clock,
-            reducedMotion: true
+            animation: "pulse"
         )
         let gradientLayer = gradient(in: surface)
 

@@ -333,6 +333,112 @@ describe('SkiaShimmerOverlay — the shimmer driver is not started from the rend
 });
 
 // ---------------------------------------------------------------------------
+// The `animation` prop reaching tier-2 at all
+// ---------------------------------------------------------------------------
+
+// `SkeletonOverlayProps` carried no `animation` field and `native/
+// AutoSkeleton.tsx` passed none, so an explicit `animation="none"` — the value
+// whose entire meaning is "do not animate" — reached tier-2 as a full
+// travelling shimmer, and so did `animation="pulse"`. Only `reducedMotion`
+// crossed the boundary, which is a different question with a different answer.
+describe('SkiaShimmerOverlay honours the `animation` prop, not only `reducedMotion`', () => {
+  function recordingSkia(): { skia: SkiaModule; paths: Array<Record<string, unknown>> } {
+    const paths: Array<Record<string, unknown>> = [];
+    const passthrough = (props: { children?: unknown }): unknown => props.children ?? null;
+    return {
+      paths,
+      skia: {
+        Skia: {
+          Path: {
+            Make: () => ({
+              addRRect() {
+                return this;
+              },
+              addRect() {
+                return this;
+              },
+            }),
+          },
+        },
+        rrect: () => ({}),
+        rect: () => ({}),
+        vec: (x: number, y: number) => ({ x, y }),
+        Canvas: passthrough,
+        Group: passthrough,
+        Path: (props: Record<string, unknown>) => {
+          paths.push(props);
+          return (props['children'] as unknown) ?? null;
+        },
+        LinearGradient: () => null,
+      },
+    };
+  }
+
+  const props = {
+    shapes: [{ x: 0, y: 0, w: 100, h: 20, r: 4 }],
+    baseColor: '#eee',
+    highlightColor: '#fff',
+    speedMs: 1400,
+    width: 300,
+    height: 200,
+    reducedMotion: false,
+  };
+
+  async function renderWith(animation: 'shimmer' | 'pulse' | 'none', reducedMotion = false) {
+    const { renderToStaticMarkup } = await import('react-dom/server');
+    const { reanimated } = recordingReanimated();
+    const { skia, paths } = recordingSkia();
+    renderToStaticMarkup(
+      createElement(SkiaShimmerOverlay, {
+        ...props,
+        animation,
+        reducedMotion,
+        peers: { skia, reanimated },
+      }),
+    );
+    // A path with a gradient child is the highlight; a childless one is the
+    // opaque base fill the highlight breathes over.
+    return {
+      highlightPaths: paths.filter((p) => p['children'] !== undefined && p['children'] !== null),
+      basePaths: paths.filter((p) => p['children'] === undefined || p['children'] === null),
+    };
+  }
+
+  it("animation='none' draws no highlight at all — the one kind that must not animate", async () => {
+    const { highlightPaths, basePaths } = await renderWith('none');
+    expect(highlightPaths).toHaveLength(0);
+    expect(basePaths).toHaveLength(1);
+  });
+
+  it("animation='pulse' draws the highlight OVER an opaque base fill", async () => {
+    // Without a separate base underneath, breathing the highlight's opacity
+    // would make the whole skeleton translucent at the trough and let the real
+    // content show through — the exact mistake `applyPulse()`'s doc comment on
+    // iOS warns about.
+    const { highlightPaths, basePaths } = await renderWith('pulse');
+    expect(highlightPaths).toHaveLength(1);
+    expect(basePaths).toHaveLength(1);
+  });
+
+  it("animation='shimmer' needs no separate base — the travelling gradient covers", async () => {
+    const { highlightPaths, basePaths } = await renderWith('shimmer');
+    expect(highlightPaths).toHaveLength(1);
+    expect(basePaths).toHaveLength(0);
+  });
+
+  it('reduce-motion still degrades shimmer to the pulse presentation', async () => {
+    const { highlightPaths, basePaths } = await renderWith('shimmer', true);
+    expect(highlightPaths).toHaveLength(1);
+    expect(basePaths).toHaveLength(1);
+  });
+
+  it("reduce-motion never promotes animation='none' into a pulse", async () => {
+    const { highlightPaths } = await renderWith('none', true);
+    expect(highlightPaths).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The dropped feature, still dropped
 // ---------------------------------------------------------------------------
 

@@ -61,7 +61,18 @@ protocol AutoskeletonRendererHandle: AnyObject {
     /// (see `Handle.syncGradientGeometry`), which is a no-op at an unchanged
     /// size and never restarts the phase for a height-only change.
     func update(shapes: [AutoskeletonShapeInfo])
-    func setReducedMotion(_ reducedMotion: Bool)
+
+    /// The RESOLVED presentation — `"shimmer"`, `"pulse"` or `"none"`, already
+    /// reconciled with the platform preference by
+    /// `AutoskeletonOverlayViewHost.effectiveAnimation` (the Swift mirror of
+    /// `src/core/animation.ts`).
+    ///
+    /// This replaced `setReducedMotion(_: Bool)`. A boolean cannot carry three
+    /// kinds, and collapsing them produced two opposite defects at once:
+    /// `"pulse"` fell through to the travelling shimmer because it was not
+    /// "reduced", and `"none"` was routed INTO the reduced-motion pulse — an
+    /// animation, for the value that means "do not animate".
+    func setAnimation(_ animation: String)
     func destroy()
 }
 
@@ -101,7 +112,7 @@ final class AutoskeletonRendererTier1 {
         shapes: [AutoskeletonShapeInfo],
         theme: AutoskeletonSkeletonTheme,
         clock: AutoskeletonShimmerClock,
-        reducedMotion: Bool
+        animation: String
     ) -> AutoskeletonRendererHandle {
         let token = tracing.begin("AutoskeletonRendererMount")
 
@@ -133,7 +144,7 @@ final class AutoskeletonRendererTier1 {
             theme: theme,
             clock: clock
         )
-        handle.setReducedMotion(reducedMotion)
+        handle.setAnimation(animation)
 
         tracing.end("AutoskeletonRendererMount", token: token)
         return handle
@@ -170,9 +181,10 @@ final class AutoskeletonRendererTier1 {
         private let gradientLayer: CAGradientLayer
         private let theme: AutoskeletonSkeletonTheme
         private let clock: AutoskeletonShimmerClock
-        /// The motion mode currently applied, so a geometry resync can
-        /// re-derive the width-dependent sweep without asking the caller.
-        private var reducedMotion = false
+        /// The resolved kind currently applied, so a geometry resync can
+        /// re-derive the width-dependent sweep (or the width-dependent parked
+        /// position) without asking the caller.
+        private var animation = AutoskeletonOverlayViewHost.animationShimmer
 
         init(
             surface: UIView,
@@ -253,18 +265,42 @@ final class AutoskeletonRendererTier1 {
                 containerLayer.frame = bounds
                 gradientLayer.frame = AutoskeletonRendererTier1.gradientFrame(for: bounds)
             }
-            guard widthChanged, !reducedMotion else { return }
-            gradientLayer.removeAnimation(forKey: Self.shimmerAnimationKey)
-            applyShimmer()
+            // A resize changes BOTH the sweep's span and the pulse's parked
+            // position (`width / 2`), so both kinds have to be re-derived —
+            // this used to bail out for anything but the shimmer, which was
+            // harmless only because the parked position did not exist yet.
+            guard widthChanged else { return }
+            applyCurrentAnimation()
         }
 
-        func setReducedMotion(_ reducedMotion: Bool) {
-            self.reducedMotion = reducedMotion
+        func setAnimation(_ animation: String) {
+            self.animation = animation
+            applyCurrentAnimation()
+        }
+
+        /// The single place any kind is applied, so switching between them can
+        /// never leave two animations on the layer or a stale transform behind.
+        private func applyCurrentAnimation() {
             gradientLayer.removeAnimation(forKey: Self.shimmerAnimationKey)
             gradientLayer.removeAnimation(forKey: Self.pulseAnimationKey)
-            if reducedMotion {
+            switch animation {
+            case AutoskeletonOverlayViewHost.animationNone:
+                // The highlight is hidden outright rather than parked and left
+                // opaque: 'none' means no highlight and no motion, matching the
+                // web renderer's `.askl-anim-none .askl-shimmer-layer{opacity:0}`
+                // exactly. The container keeps its opaque base fill, so the
+                // skeleton still COVERS — "do not animate" is not "do not paint".
+                withoutImplicitAnimations {
+                    gradientLayer.opacity = 0
+                    gradientLayer.transform = CATransform3DIdentity
+                }
+            case AutoskeletonOverlayViewHost.animationPulse:
                 applyPulse()
-            } else {
+            default:
+                withoutImplicitAnimations {
+                    gradientLayer.opacity = 1
+                    gradientLayer.transform = CATransform3DIdentity
+                }
                 applyShimmer()
             }
         }
@@ -296,23 +332,43 @@ final class AutoskeletonRendererTier1 {
             gradientLayer.add(animation, forKey: Self.shimmerAnimationKey)
         }
 
-        /// REQ-A11Y-3 reduced-motion degradation: a slow opacity pulse — explicitly
-        /// NOT a `transform`-based sweep (ADR-6's ban applies to the shimmer path;
-        /// reduced motion must not reintroduce directional movement at all).
+        /// `core/animation.ts`'s `'pulse'`: an opacity breath, explicitly NOT a
+        /// `transform`-based sweep (ADR-6's ban applies to the shimmer path;
+        /// the pulse must not reintroduce directional movement at all).
         ///
         /// The pulse is applied to the GRADIENT, never to the container: the
         /// container carries the opaque base fill, so pulsing it would make the
         /// skeleton itself semi-transparent and let the real content bleed
-        /// through at the trough. Reduced motion must still be a static, FULLY
-        /// COVERING skeleton; only the highlight's intensity breathes.
+        /// through at the trough. The skeleton stays FULLY COVERING; only the
+        /// highlight's intensity breathes.
+        ///
+        /// Two things here are shared contract rather than local taste:
+        ///
+        ///  - The band is PARKED at the container's centre. Left at the identity
+        ///    transform it sits at the container's LEFT EDGE, because
+        ///    `gradientFrame(for:)` hangs it a full width to the left — a
+        ///    position nobody chose, and the same class of accident as Android's
+        ///    gradient freezing wherever its frame loop happened to stop.
+        ///  - One full breath per CLOCK PERIOD, so a half-period leg with
+        ///    `autoreverses`. It used to be `max(periodMs / 1000, 1.0)` seconds
+        ///    PER LEG, i.e. a full cycle of at least two seconds that ignored
+        ///    the shared period entirely — the web renderer's `askl-pulse` ran
+        ///    one full breath per `--askl-speed` all along, so the two platforms
+        ///    were breathing at different rates for the same `theme.speedMs`.
         private func applyPulse() {
-            let animation = CABasicAnimation(keyPath: "opacity")
-            animation.fromValue = 0.6
-            animation.toValue = 1.0
-            animation.duration = max(clock.periodMs / 1000, 1.0)
-            animation.autoreverses = true
-            animation.repeatCount = .infinity
-            gradientLayer.add(animation, forKey: Self.pulseAnimationKey)
+            let width = containerLayer.bounds.width > 0 ? containerLayer.bounds.width : (surface?.bounds.width ?? 0)
+            withoutImplicitAnimations {
+                gradientLayer.opacity = 1
+                gradientLayer.transform = CATransform3DMakeTranslation(width / 2, 0, 0)
+            }
+            let pulse = CABasicAnimation(keyPath: "opacity")
+            pulse.fromValue = AutoskeletonOverlayViewHost.pulseMinOpacity
+            pulse.toValue = 1.0
+            pulse.duration = clock.periodMs / 2000
+            pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            pulse.autoreverses = true
+            pulse.repeatCount = .infinity
+            gradientLayer.add(pulse, forKey: Self.pulseAnimationKey)
         }
     }
 }
