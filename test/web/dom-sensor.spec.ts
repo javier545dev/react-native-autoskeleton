@@ -11,7 +11,7 @@
 
 import path from 'node:path';
 import { expect, test as base } from '@playwright/test';
-import { expectCloseTo, loadHarness } from './helpers/page';
+import { expectCloseTo, GEOMETRY_TOLERANCE_PX, loadHarness } from './helpers/page';
 
 const ENTRY = path.join(__dirname, 'helpers/dom-sensor-entry.ts');
 
@@ -332,6 +332,116 @@ test.describe('DOM sensor — overflow clipping (text-overflow ellipsis leak fix
        </div>`,
     );
     expect(shapes!.length).toBeGreaterThan(0);
+  });
+});
+
+test.describe('DOM sensor — overflow clipping applies to NON-text leaves too (carousel leak)', () => {
+  // 1x1 transparent PNG. Explicit width/height means layout does not depend on
+  // the decode, but a real `src` keeps this an ordinary <img> leaf rather than
+  // a broken-image special case.
+  const PIXEL =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+
+  /** A 100px-wide horizontally scrollable strip holding three 100px items, so
+   *  items 2 and 3 are laid out entirely outside the strip's visible box.
+   *  `getBoundingClientRect()` still reports their full laid-out position —
+   *  which is exactly the leak under test. */
+  const carousel = (items: string): string =>
+    `<div id="root" style="position:relative;width:300px;">
+       <div style="width:100px;height:60px;overflow-x:auto;overflow-y:hidden;white-space:nowrap;font-size:0;">${items}</div>
+     </div>`;
+
+  const IMG = `<img src="${PIXEL}" style="width:100px;height:60px;display:inline-block;vertical-align:top;">`;
+  const INPUT = `<input style="width:100px;height:60px;display:inline-block;vertical-align:top;border:0;padding:0;">`;
+  const BLOCK = `<div style="width:100px;height:60px;display:inline-block;vertical-align:top;background:#333;"></div>`;
+
+  test('an off-screen image inside an overflow-x:auto strip produces no shape outside the strip box', async ({
+    measure,
+  }) => {
+    const { shapes } = await measure(carousel(IMG + IMG + IMG));
+    expect(shapes!.length).toBeGreaterThan(0);
+    for (const shape of shapes!) {
+      expect(shape.x + shape.w).toBeLessThanOrEqual(100 + GEOMETRY_TOLERANCE_PX);
+    }
+  });
+
+  test('the same strip of inputs is clipped identically (leaf class, not element type)', async ({ measure }) => {
+    const { shapes } = await measure(carousel(INPUT + INPUT + INPUT));
+    expect(shapes!.length).toBeGreaterThan(0);
+    for (const shape of shapes!) {
+      expect(shape.x + shape.w).toBeLessThanOrEqual(100 + GEOMETRY_TOLERANCE_PX);
+    }
+  });
+
+  test('the same strip of background blocks is clipped identically', async ({ measure }) => {
+    const { shapes } = await measure(carousel(BLOCK + BLOCK + BLOCK));
+    expect(shapes!.length).toBeGreaterThan(0);
+    for (const shape of shapes!) {
+      expect(shape.x + shape.w).toBeLessThanOrEqual(100 + GEOMETRY_TOLERANCE_PX);
+    }
+  });
+
+  test('a partially scrolled-out image keeps only its visible slice', async ({ measure }) => {
+    const { shapes } = await measure(
+      `<div id="root" style="position:relative;width:300px;">
+         <div style="width:100px;height:60px;overflow-x:auto;overflow-y:hidden;white-space:nowrap;font-size:0;">
+           <div style="width:60px;height:60px;display:inline-block;vertical-align:top;"></div>${IMG}
+         </div>
+       </div>`,
+    );
+    expect(shapes).toHaveLength(1);
+    expectCloseTo(shapes![0]!.x, 60);
+    expectCloseTo(shapes![0]!.w, 40);
+  });
+
+  // A shadow child's `parentElement` is null — its parent NODE is the
+  // `ShadowRoot`, which is not an Element — so an ancestor walk that only
+  // follows `parentElement` stops dead at the shadow boundary and never sees
+  // the host. That is the same leak as the carousel above, reached from the
+  // other side: the box that clips is real and laid out, the walk just never
+  // reaches it.
+  test('an overflow:hidden shadow HOST clips its shadow children — the clip chain crosses the shadow boundary', async ({
+    page,
+  }) => {
+    await loadHarness(
+      page,
+      ENTRY,
+      `<div id="root" style="position:relative;width:300px;">
+         <div id="host" style="width:100px;height:60px;overflow:hidden;"></div>
+       </div>`,
+    );
+    const shapes = await page.evaluate(() => {
+      document.getElementById('host')!.attachShadow({ mode: 'open' }).innerHTML =
+        '<div style="width:300px;height:60px;background:#333"></div>';
+      const { createDomSensor, createEmptyHintRegistry, composeCacheKey, decodeWire } = window.Autoskeleton;
+      const result = createDomSensor!().measure(document.getElementById('root')!, {
+        key: composeCacheKey!({
+          skeletonKey: 'shadow-clip',
+          viewportWidth: 375,
+          fontScale: 1,
+          direction: 'ltr',
+          platform: 'web',
+        }),
+        hints: createEmptyHintRegistry!(),
+        budgetMs: 50,
+        maxShapes: 60,
+        defaultRadius: 4,
+        collectDebugSidecars: false,
+      });
+      return result === null ? [] : decodeWire!(result.snapshot.data).shapes.map((s) => ({ x: s.x, w: s.w }));
+    });
+    expect(shapes).toHaveLength(1);
+    expectCloseTo(shapes[0]!.x, 0);
+    expectCloseTo(shapes[0]!.w, 100);
+  });
+
+  test('no clipping ancestor: an image keeps its full laid-out frame (no regression)', async ({ measure }) => {
+    const { shapes } = await measure(
+      `<div id="root" style="position:relative;width:300px;">${IMG}</div>`,
+    );
+    expect(shapes).toHaveLength(1);
+    expectCloseTo(shapes![0]!.w, 100);
+    expectCloseTo(shapes![0]!.h, 60);
   });
 });
 
