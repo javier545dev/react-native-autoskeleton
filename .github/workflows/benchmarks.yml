@@ -81,22 +81,35 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
 
-      - name: Determine baseline ref (merge-base with main, or previous commit on push)
+      # The baseline must be a commit this repo can actually `npm ci` in.
+      # `merge-base origin/main HEAD` is NOT that on a stacked branch: this
+      # project develops as a long chain of PRs branched off the initial
+      # commit, so the merge-base resolves to `Initial commit` — an empty
+      # scaffold with no package-lock.json at all, and `npm ci` there fails
+      # with EUSAGE before a single benchmark runs. HEAD~1 is the honest
+      # comparison anyway: a ratio gate answers "did THIS commit regress",
+      # not "did the whole branch".
+      - name: Determine baseline ref (previous commit, verified installable)
         id: baseline
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "ref=$(git merge-base origin/main HEAD)" >> "$GITHUB_OUTPUT"
+          ref="$(git rev-parse HEAD~1)"
+          if ! git cat-file -e "$ref:package-lock.json" 2>/dev/null; then
+            echo "Baseline $ref has no package-lock.json; nothing to compare against." >&2
+            echo "skip=true" >> "$GITHUB_OUTPUT"
           else
-            echo "ref=HEAD~1" >> "$GITHUB_OUTPUT"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
 
       - name: Run benchmarks against the CANDIDATE (current HEAD)
         run: npm run bench:run -- --out benchmarks/results/candidate.json
 
       - name: Check out the BASELINE ref into a sibling worktree
+        if: steps.baseline.outputs.skip != 'true'
         run: git worktree add /tmp/baseline "${{ steps.baseline.outputs.ref }}"
 
       - name: Run benchmarks against the BASELINE (same job, same runner)
+        if: steps.baseline.outputs.skip != 'true'
         working-directory: /tmp/baseline
         run: |
           npm ci
@@ -104,6 +117,7 @@ jobs:
           npm run bench:run -- --out "${{ github.workspace }}/benchmarks/results/baseline.json"
 
       - name: Compare candidate vs baseline (ratio gate)
+        if: steps.baseline.outputs.skip != 'true'
         run: npm run bench:compare -- benchmarks/results/baseline.json benchmarks/results/candidate.json
 
       - uses: actions/upload-artifact@v4

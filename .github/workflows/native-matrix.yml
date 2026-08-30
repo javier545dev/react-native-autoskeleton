@@ -67,7 +67,13 @@ jobs:
       matrix:
         # Update this list as new RN minors ship; 0.83 is the floor (spec.md
         # §4: "old architecture removed as of 0.83, not merely deprecated").
-        react-native-version: ['0.83.1', '0.84.2', '0.85.0', '0.86.3', '0.87.1']
+        # Latest published PATCH per supported minor, not an arbitrary one.
+        # The previous list pinned 0.83.1, 0.84.2 and 0.85.0, and NONE of those
+        # three was ever published — npm has 0.83.10, 0.84.1 and 0.85.3. Every
+        # row using a real version passed; every row using an invented one died
+        # with ETARGET before it compiled a line. Nobody noticed because this
+        # workflow had never run: it was inside the file that failed to parse.
+        react-native-version: ['0.83.10', '0.84.1', '0.85.3', '0.86.3', '0.87.1']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -178,10 +184,20 @@ jobs:
       - name: pod install
         run: pod install
         working-directory: examples/expo/ios
+      # DISCOVERED, not hardcoded. `expo prebuild` derives the Xcode names from
+      # the app's own `name`/`slug` (`autoskeleton-expo-example`), so the
+      # previous literal `AutoskeletonExpo.xcworkspace` matched nothing and the
+      # job died with "does not exist" before building anything. A generated
+      # artifact's name does not belong in a workflow as a literal — it drifts
+      # the moment the app is renamed, and the failure is 30 lines from the
+      # cause.
       - name: Real xcodebuild
         run: |
+          workspace="$(ls -d *.xcworkspace | head -1)"
+          scheme="$(basename "$workspace" .xcworkspace)"
+          echo "building workspace=$workspace scheme=$scheme"
           xcodebuild build \
-            -workspace AutoskeletonExpo.xcworkspace \
-            -scheme AutoskeletonExpo \
+            -workspace "$workspace" \
+            -scheme "$scheme" \
             -destination 'generic/platform=iOS Simulator'
         working-directory: examples/expo/ios
