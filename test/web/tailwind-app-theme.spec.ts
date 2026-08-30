@@ -216,7 +216,12 @@ test.describe('Tailwind v4 theming in a real consumer app (REQ-THEME-1, tasks.md
     expect(css).toMatch(/--color-skl-highlight:\s*#f59e0b/);
     // ...and is really aliased onto the library's own contract names.
     expect(css).toMatch(/--skl-base:\s*var\(--color-skl-base\)/);
-    expect(css).toMatch(/\.dark\s*\{[^}]*--skl-base:\s*var\(--color-skl-base-dark\)/);
+    // Scoped to the demo's own container rather than `:root` (2026-08-29): the
+    // showcase renders eleven demos on one page, and a document-root alias
+    // inherited into all of them. The substance asserted here is unchanged —
+    // that the dark alias survives compilation onto the library's contract
+    // name — only the selector it lives under moved.
+    expect(css).toMatch(/\.dark\s+\[data-testid=?['"]?themed-demo['"]?\]\s*\{[^}]*--skl-base:\s*var\(--color-skl-base-dark\)/);
     // A utility class only the real Tailwind compiler could have produced from
     // scanning this app's TSX — proof the whole pipeline ran, not just that a
     // `:root` block was hand-written somewhere.

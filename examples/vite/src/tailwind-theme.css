@@ -42,12 +42,25 @@
    mounted. Everything it paints resolves through these variables, and dark
    mode is a pure cascade flip — `App.tsx`'s theme button toggles this class on
    `<html>` and changes nothing else. */
-:root {
+/* SCOPED to this demo's own subtree, not `:root` (2026-08-29). A consuming app
+   would rightly alias these globally — that IS the everyday case. But this app
+   is a showcase whose page carries eleven demos at once, and a `:root` alias
+   inherits into every one of them: the "cold load" demo painted Tailwind blue
+   instead of the library's own default, and "theming with CSS variables"
+   demonstrated nothing, because its scoped override was overriding a colour
+   that was already this one. Nine demos were quietly showing this demo's
+   theme.
+
+   The REQ-THEME-1 contract is unchanged and still exactly what is being
+   proven: `<AutoSkeleton>` is given no colour prop, no `SkeletonProvider` is
+   mounted, and everything it paints still resolves purely through the cascade
+   — just from a container instead of the document root. */
+[data-testid='themed-demo'] {
   --skl-base: var(--color-skl-base);
   --skl-highlight: var(--color-skl-highlight);
 }
 
-.dark {
+.dark [data-testid='themed-demo'] {
   --skl-base: var(--color-skl-base-dark);
   --skl-highlight: var(--color-skl-highlight-dark);
 }
