@@ -332,6 +332,18 @@ describe('emulator scripts do not rely on shell line continuations', () => {
 // Deliberately scoped to `@react-native/*`: those are the packages React Native
 // publishes in lockstep and pins exactly. An ordinary dependency with a normal
 // semver range is not this problem.
+//
+// KNOWN LIMIT, stated because it already bit once. This gate asserts each
+// package is HANDLED (re-pinned or deleted), not that the handling WORKS. The
+// first attempt at the fix re-pinned `@react-native/new-app-screen` to the row
+// instead of deleting it; this gate went green and CI stayed red, because that
+// package peer-depends on react-native exactly and npm still resolved the
+// example's version:
+//   Found: @react-native/new-app-screen@0.87.1
+//   Conflicting peer dependency: react-native@0.86.3
+// Whether a given pin actually resolves is a property of the registry, not of
+// these two files, so it cannot be decided here — only a real install can.
+// Treat a green result as "nothing was forgotten", never as "the matrix builds".
 describe('the RN matrix leaves no @react-native/* package at the example version', () => {
   const EXAMPLE = 'examples/bare-rn/package.json';
   const manifest = JSON.parse(

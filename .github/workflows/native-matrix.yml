@@ -239,11 +239,15 @@ jobs:
           npm pkg set "devDependencies.@react-native/eslint-config=${{ matrix.react-native-version }}"
           npm pkg set "devDependencies.@react-native/metro-config=${{ matrix.react-native-version }}"
           npm pkg set "devDependencies.@react-native/typescript-config=${{ matrix.react-native-version }}"
-          # `@react-native/new-app-screen` peer-depends on react-native
-          # EXACTLY, so leaving it at the example's 0.87.1 makes every older row
-          # unresolvable. It has a published release at every version this
-          # matrix uses, so it pins like its siblings.
-          npm pkg set "dependencies.@react-native/new-app-screen=${{ matrix.react-native-version }}"
+          # `@react-native/new-app-screen` peer-depends on react-native EXACTLY,
+          # so the example's 0.87.1 contradicts every older row. Pinning it to
+          # the row (tried first) does NOT fix that: npm still reports
+          #   Found: @react-native/new-app-screen@0.87.1
+          #   Conflicting peer dependency: react-native@0.86.3
+          # because the resolved tree still carries the example's version. It is
+          # a demo SCREEN — pure JS, and these jobs run Gradle / xcodebuild and
+          # never bundle JS — so like `jest-preset` it is deleted, not pinned.
+          npm pkg delete dependencies.@react-native/new-app-screen
           # `@react-native/jest-preset` is the package ERESOLVE actually named
           # when 20 of 22 rows failed: the example pins 0.87.1, it peer-depends
           # on react-native exactly, and NOTHING pinned it, so every row below
@@ -427,11 +431,15 @@ jobs:
           npm pkg set "devDependencies.@react-native/eslint-config=${{ matrix.react-native-version }}"
           npm pkg set "devDependencies.@react-native/metro-config=${{ matrix.react-native-version }}"
           npm pkg set "devDependencies.@react-native/typescript-config=${{ matrix.react-native-version }}"
-          # `@react-native/new-app-screen` peer-depends on react-native
-          # EXACTLY, so leaving it at the example's 0.87.1 makes every older row
-          # unresolvable. It has a published release at every version this
-          # matrix uses, so it pins like its siblings.
-          npm pkg set "dependencies.@react-native/new-app-screen=${{ matrix.react-native-version }}"
+          # `@react-native/new-app-screen` peer-depends on react-native EXACTLY,
+          # so the example's 0.87.1 contradicts every older row. Pinning it to
+          # the row (tried first) does NOT fix that: npm still reports
+          #   Found: @react-native/new-app-screen@0.87.1
+          #   Conflicting peer dependency: react-native@0.86.3
+          # because the resolved tree still carries the example's version. It is
+          # a demo SCREEN — pure JS, and these jobs run Gradle / xcodebuild and
+          # never bundle JS — so like `jest-preset` it is deleted, not pinned.
+          npm pkg delete dependencies.@react-native/new-app-screen
           # `@react-native/jest-preset` is the package ERESOLVE actually named
           # when 20 of 22 rows failed: the example pins 0.87.1, it peer-depends
           # on react-native exactly, and NOTHING pinned it, so every row below
