@@ -34,6 +34,15 @@ export class AutoskeletonNativeModuleUnavailableError extends Error {
         'The most likely cause is Expo Go, which cannot load custom native modules. ' +
         'Use a development build instead: npx expo prebuild && npx expo run:ios|run:android ' +
         '(or an EAS development build). ' +
+        // The second cause, and the reason this sentence exists: autoskeleton
+        // ships a Turbo Module and a Fabric component, so it has nothing to
+        // register on the old architecture. React Native forbids opting out of
+        // the New Architecture from 0.82 onward, which is why the peer range
+        // starts there — but npm only WARNS on an unmet peer, so an app on an
+        // older version with `newArchEnabled=false` reaches this line, and
+        // blaming Expo Go alone would send it looking in the wrong place.
+        'If you are not using Expo Go, check that this app runs on the New Architecture: ' +
+        'autoskeleton is Fabric/Turbo-Module only and registers nothing under the old one. ' +
         `See ${AUTOSKELETON_NATIVE_MODULE_UNAVAILABLE_DOCS_URL} for details.`,
     );
     this.name = 'AutoskeletonNativeModuleUnavailableError';

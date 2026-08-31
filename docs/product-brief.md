@@ -70,8 +70,23 @@ do not contradict them without new evidence.
 - `os_signpost` / `OSSignposter`; Android `Trace.beginSection` has a 127-character name
   limit and requires same-thread nesting.
 - `performance.mark` / `performance.measure` integrate with RUM tooling.
-- **RN old architecture is REMOVED as of 0.83** (not merely deprecated). This makes
-  Fabric-only v1 the only possible scope, not a simplification.
+- **The New Architecture is opt-in from RN 0.68, the DEFAULT from 0.76 (still
+  switchable off), the ONLY architecture from 0.82 (`newArchEnabled=false` is
+  refused), and from 0.83 React Native begins removing the legacy architecture
+  CLASSES** (the interop layers stay). Fabric-only v1 remains the only sensible
+  scope — but this timeline does not, by itself, set a version floor.
+  **CORRECTED 2026-08-30.** This bullet previously read "RN old architecture is
+  REMOVED as of 0.83 (not merely deprecated)", and that one sentence was carrying
+  a version floor it cannot support: it collapsed three separate RN events into
+  one, and it described React Native's timeline rather than this library's
+  constraint. The floor is **RN 0.77**, set by two independent registration
+  mechanisms, either of which would set it alone — iOS
+  `codegenConfig.ios.componentProvider` feeding
+  `RCTThirdPartyComponentsProvider.mm`, which does not exist before 0.77.0, and
+  `AutoskeletonPackage.kt`'s Kotlin named arguments to `ReactModuleInfo`, whose
+  parameter names were renamed in 0.77.0. On 0.77–0.81 the CONSUMER must keep the
+  New Architecture switched on; from 0.82 the platform guarantees it. Full
+  revision record in `spec.md` §4.
 - `clip-path: path()` is the reliable current cross-browser mechanism for a union of
   rounded rects. CSS `shape()` reached Baseline Feb 2026 but has a shorter support
   tail — do not rely on it alone.
@@ -173,7 +188,9 @@ do not contradict them without new evidence.
   Kotlin/Swift. Library build via `react-native-builder-bob`. Whether that toolchain
   supports a package that also ships a distinct web entry point is UNCONFIRMED and is
   a spike; custom build tooling may be required.
-- Fabric-first. Old RN architecture is out of scope (it no longer exists).
+- Fabric-first. The old RN architecture is out of scope on every supported version
+  — not because it never exists (it is still switchable on RN 0.77–0.81), but
+  because no code path for it exists here. From 0.82 RN removes the choice anyway.
 - The `getShapes` bridge mechanism is an OPEN DECISION that `plan.md` must resolve with
   an ADR comparing:
   (a) Nitro Modules — zero-copy ArrayBuffer and synchronous methods, at the cost of a
@@ -505,7 +522,10 @@ as done unless it emits its metrics and instrumentation.
 
 ## 13. Out of scope for v1 (must be declared in the spec)
 
-- Old RN architecture (pre-Fabric) — it no longer exists as of RN 0.83.
+- Old RN architecture (pre-Fabric) — no code path for it exists here on any RN
+  version. **Amended 2026-08-30 with the floor revision:** it is still switchable
+  on RN 0.77–0.81 and out of scope there by choice; from 0.82 it is gone. See §2
+  and `spec.md` §4.
 - Disk persistence of the cache.
 - Per-corner border-radius detection on Android.
 - Vue/Svelte/other frameworks.

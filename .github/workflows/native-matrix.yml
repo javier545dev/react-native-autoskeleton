@@ -5,12 +5,30 @@ name: Native build matrix (ADR-14 verification closure)
 # library's default output satisfies both [autolinkers] must be VERIFIED in
 # CI, not assumed") and spec.md Open Question 9.
 #
+# THE FLOOR IS 0.77, NOT 0.83. This header used to justify a 0.83 floor with
+# "the old architecture was removed in 0.83". That is not what sets the floor
+# of THIS package. `package.json` declares `react-native: ">=0.77.0"`, and 0.77
+# is the floor for two independent, verified reasons, neither of which is about
+# Paper being removed:
+#   1. iOS: `codegenConfig.ios.componentProvider` — the mechanism that puts
+#      `AutoskeletonOverlayView` into `RCTThirdPartyComponentsProvider.mm` (see
+#      that file's own header comment in `ios/AutoskeletonOverlayView.mm`) —
+#      has no generator before 0.77.0.
+#   2. Android: `AutoskeletonPackage.kt` constructs `ReactModuleInfo` with the
+#      Kotlin named arguments `name =` / `className =`; those parameters were
+#      `_name` / `_className` until they were renamed in 0.77.0, so the file
+#      does not compile against 0.76 or earlier.
+# Between 0.77 and 0.81 the New Architecture can still be switched OFF, which
+# this package does not support. That case is now a NAMED build failure rather
+# than a header-not-found: see the `#error` guard at the top of
+# `ios/AutoskeletonOverlayView.mm`.
+#
 # HONEST SCOPE NOTE (see the apply-progress report and the sdd-apply prompt's
 # own instruction — this is explicitly flagged, not silently claimed done):
 # this environment has exactly ONE pinned React Native version installed
 # (0.87.1 in examples/bare-rn, 0.85.0 at the root, 0.86.3 in examples/expo)
 # and ONE Android AVD / ONE booted iOS Simulator. There is no way to
-# genuinely exercise "every supported RN version (0.83+)" from this machine
+# genuinely exercise "every supported RN version (0.77+)" from this machine
 # — that requires N real dependency installs, N real native builds, each
 # taking real CI minutes, which only a real CI matrix runner provides. This
 # file expresses the INTENDED matrix (ADR-14's own acceptance test: "the
@@ -25,6 +43,23 @@ name: Native build matrix (ADR-14 verification closure)
 # actually installed: `./gradlew :autoskeleton:testDebugUnitTest` (109/109)
 # and an instrumented `androidTest` run against a live emulator — both
 # against RN 0.87.1 specifically, not the matrix.
+#
+# KNOWN-RED ROWS THAT THIS FILE DOES NOT FIX, stated rather than hidden.
+# `examples/bare-rn` pins third-party native modules whose OWN published peer
+# ranges exclude most of this matrix (read from the npm registry):
+#   @react-native/new-app-screen@0.87.1 -> peer react-native "0.87.1" (exact)
+#   react-native-reanimated@^4.6.0      -> peer react-native "0.83-0.87"
+#   react-native-worklets@^0.12.1       -> peer react-native "0.83-0.87"
+#   @shopify/react-native-skia@^2.11.1  -> peer react-native ">=0.78"
+# So every row except 0.87.1 fails `npm install` on peer resolution, and the
+# 0.82.1 row would additionally be compiling reanimated 4 against an RN it
+# does not claim to support. The 0.77-0.81 rows added below sidestep this by
+# TRIMMING those modules out of the example (see the trim step: they are the
+# example app's UI dependencies, not autoskeleton's, and a Debug native build
+# never bundles the JS that imports them). The 0.82.1-0.86.3 rows are left
+# exactly as they were: fixing them means giving `examples/bare-rn` a per-row
+# pin of reanimated/worklets/skia/new-app-screen, which is a change to
+# `examples/` and out of this change's scope.
 
 on:
   pull_request:
@@ -57,23 +92,115 @@ jobs:
           if-no-files-found: error
 
   # ADR-14's own acceptance test, Android half, across the full supported
-  # matrix (spec.md Compatibility Matrix: "RN (bare) 0.83+"). One row per RN
-  # minor actually released against the New Architecture / Fabric-only line.
+  # matrix. spec.md's Compatibility Matrix used to read "RN (bare) 0.83+";
+  # `package.json`'s actual floor is `react-native: ">=0.77.0"` and this
+  # matrix now covers it (see the header for what really sets 0.77). One row
+  # per RN minor from the floor up.
   bare-rn-android-matrix:
     needs: pack-library
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # Update this list as new RN minors ship; 0.83 is the floor (spec.md
-        # §4: "old architecture removed as of 0.83, not merely deprecated").
-        # Latest published PATCH per supported minor, not an arbitrary one.
-        # The previous list pinned 0.83.1, 0.84.2 and 0.85.0, and NONE of those
-        # three was ever published — npm has 0.83.10, 0.84.1 and 0.85.3. Every
-        # row using a real version passed; every row using an invented one died
-        # with ETARGET before it compiled a line. Nobody noticed because this
-        # workflow had never run: it was inside the file that failed to parse.
-        react-native-version: ['0.83.10', '0.84.1', '0.85.3', '0.86.3', '0.87.1']
+        # ONE ROW PER SUPPORTED RN MINOR, floor 0.77 (see this file's header for
+        # why 0.77 and not 0.83). Latest published PATCH per minor, not an
+        # arbitrary one. The previous list pinned 0.83.1, 0.84.2 and 0.85.0,
+        # and NONE of those three was ever published — npm has 0.83.10, 0.84.1
+        # and 0.85.3. Every row using a real version passed; every row using an
+        # invented one died with ETARGET before it compiled a line. Nobody
+        # noticed because this workflow had never run: it was inside the file
+        # that failed to parse. EVERY version below (react-native, react,
+        # react-test-renderer, @react-native-community/cli) was confirmed to
+        # exist with `npm view <pkg>@<version> version` before being written
+        # here.
+        #
+        # `react` is NOT optional to pin. `react-native@0.77` peer-depends on
+        # `react ^18.2.0`, 0.78/0.79 on `^19.0.0`, 0.80 on `^19.1.0` and 0.81
+        # on `^19.1.4` (read from the registry, not from memory), while
+        # `examples/bare-rn` pins `react@19.2.3`. Pinning react-native alone
+        # would leave an incompatible React in the tree and fail install before
+        # a single native file compiled. The react / react-test-renderer /
+        # @types/react / CLI triple for each row is exactly the one
+        # `@react-native-community/template@<same patch>` ships, so the row
+        # matches a real, shipped app configuration rather than a guess.
+        include:
+          - react-native-version: '0.77.3'
+            react: '18.3.1'
+            react-test-renderer: '18.3.1'
+            types-react: '^18.2.6'
+            community-cli: '15.0.1'
+            trim-example: 'true'
+            npm-install-flags: '--legacy-peer-deps'
+          - react-native-version: '0.78.3'
+            react: '19.0.0'
+            react-test-renderer: '19.0.0'
+            types-react: '^19.0.0'
+            community-cli: '15.0.1'
+            trim-example: 'true'
+            npm-install-flags: '--legacy-peer-deps'
+          - react-native-version: '0.79.7'
+            react: '19.0.0'
+            react-test-renderer: '19.0.0'
+            types-react: '^19.0.0'
+            community-cli: '18.0.0'
+            trim-example: 'true'
+            npm-install-flags: '--legacy-peer-deps'
+          - react-native-version: '0.80.3'
+            react: '19.1.0'
+            react-test-renderer: '19.1.0'
+            types-react: '^19.1.0'
+            community-cli: '19.1.2'
+            trim-example: 'true'
+            npm-install-flags: '--legacy-peer-deps'
+          - react-native-version: '0.81.6'
+            react: '19.1.4'
+            react-test-renderer: '19.1.0'
+            types-react: '^19.1.4'
+            community-cli: '20.0.0'
+            trim-example: 'true'
+            npm-install-flags: '--legacy-peer-deps'
+          - react-native-version: '0.82.1'
+            react: '19.2.3'
+            react-test-renderer: '19.2.3'
+            types-react: '^19.2.0'
+            community-cli: '20.2.0'
+            trim-example: 'false'
+            npm-install-flags: ''
+          - react-native-version: '0.83.10'
+            react: '19.2.3'
+            react-test-renderer: '19.2.3'
+            types-react: '^19.2.0'
+            community-cli: '20.2.0'
+            trim-example: 'false'
+            npm-install-flags: ''
+          - react-native-version: '0.84.1'
+            react: '19.2.3'
+            react-test-renderer: '19.2.3'
+            types-react: '^19.2.0'
+            community-cli: '20.2.0'
+            trim-example: 'false'
+            npm-install-flags: ''
+          - react-native-version: '0.85.3'
+            react: '19.2.3'
+            react-test-renderer: '19.2.3'
+            types-react: '^19.2.0'
+            community-cli: '20.2.0'
+            trim-example: 'false'
+            npm-install-flags: ''
+          - react-native-version: '0.86.3'
+            react: '19.2.3'
+            react-test-renderer: '19.2.3'
+            types-react: '^19.2.0'
+            community-cli: '20.2.0'
+            trim-example: 'false'
+            npm-install-flags: ''
+          - react-native-version: '0.87.1'
+            react: '19.2.3'
+            react-test-renderer: '19.2.3'
+            types-react: '^19.2.0'
+            community-cli: '20.2.0'
+            trim-example: 'false'
+            npm-install-flags: ''
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -90,10 +217,62 @@ jobs:
       - name: Pin examples/bare-rn to this matrix row's RN version
         run: npm pkg set "dependencies.react-native=${{ matrix.react-native-version }}"
         working-directory: examples/bare-rn
+
+      # `react-native` alone is not a complete pin. Each RN release peer-depends
+      # on a specific React major/minor, and the `@react-native/*` and
+      # `@react-native-community/cli*` packages are published in lockstep with
+      # it. Pinning only react-native leaves `react@19.2.3` (bare-rn's own pin)
+      # in front of `react-native@0.77.3`, whose peer range is `^18.2.0`, and
+      # npm refuses the tree before any native tool runs. Values come from
+      # `@react-native-community/template@<this row's exact patch>`.
+      - name: Pin the React and CLI versions this RN release actually ships with
+        run: |
+          npm pkg set "dependencies.react=${{ matrix.react }}"
+          npm pkg set "devDependencies.react-test-renderer=${{ matrix.react-test-renderer }}"
+          npm pkg set "devDependencies.@types/react=${{ matrix.types-react }}"
+          npm pkg set "devDependencies.@react-native-community/cli=${{ matrix.community-cli }}"
+          npm pkg set "devDependencies.@react-native-community/cli-platform-android=${{ matrix.community-cli }}"
+          npm pkg set "devDependencies.@react-native-community/cli-platform-ios=${{ matrix.community-cli }}"
+          npm pkg set "devDependencies.@react-native/babel-preset=${{ matrix.react-native-version }}"
+          npm pkg set "devDependencies.@react-native/eslint-config=${{ matrix.react-native-version }}"
+          npm pkg set "devDependencies.@react-native/metro-config=${{ matrix.react-native-version }}"
+          npm pkg set "devDependencies.@react-native/typescript-config=${{ matrix.react-native-version }}"
+        working-directory: examples/bare-rn
+
+      # Only on the pre-0.82 rows. These are the example APP's UI dependencies,
+      # not autoskeleton's, and every one of them declares a peer range that
+      # excludes this row (see the header): new-app-screen pins react-native
+      # exactly, reanimated/worklets accept only 0.83-0.87, skia only >=0.78.
+      # `@react-native/jest-preset` is deleted because it has no published
+      # 0.77-0.81 release at all (`npm view @react-native/jest-preset@0.81.6`
+      # is a 404). Removing them leaves the row testing precisely what ADR-14
+      # claims — that @react-native-community/cli autolinking discovers
+      # autoskeleton and its native code compiles — and nothing else. A Debug
+      # native build does not bundle JS, so the App.tsx imports of the removed
+      # modules are never resolved by this job.
+      - name: Trim examples/bare-rn to what a pre-0.82 row can build
+        if: matrix.trim-example == 'true'
+        run: |
+          npm pkg delete dependencies.@react-native/new-app-screen
+          npm pkg delete dependencies.@shopify/flash-list
+          npm pkg delete dependencies.@shopify/react-native-skia
+          npm pkg delete dependencies.react-native-reanimated
+          npm pkg delete dependencies.react-native-worklets
+          npm pkg delete dependencies.react-native-safe-area-context
+          npm pkg delete devDependencies.@react-native/jest-preset
+        working-directory: examples/bare-rn
+
       - name: Unpin the locally built tarball before installing (see scripts/unpin-local-tarball.mjs)
         run: node scripts/unpin-local-tarball.mjs examples/bare-rn
       - name: Install from the packed tarball, never a workspace symlink (ADR-14's own load-bearing detail)
-        run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
+        # `${{ matrix.npm-install-flags }}` is `--legacy-peer-deps` on the trimmed
+        # pre-0.82 rows and empty everywhere else. Without it npm 7+ would
+        # AUTO-INSTALL autoskeleton's own permissive peers
+        # (`@shopify/react-native-skia >=1.0.0`, `react-native-reanimated
+        # >=3.0.0`, `uniwind ^1.0.0`) at their latest published versions,
+        # putting back exactly the RN-0.83+-only packages the trim step just
+        # removed.
+        run: npm install ${{ matrix.npm-install-flags }} "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
         working-directory: examples/bare-rn
       - name: Zero-Expo-packages guard (ADR-14 / RISK-5)
         run: |
@@ -121,7 +300,86 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        react-native-version: ['0.83.1', '0.84.2', '0.85.0', '0.86.3', '0.87.1']
+        # Same rows, same verified pins, same reasoning as the Android
+        # matrix above — see the comment there.
+        include:
+          - react-native-version: '0.77.3'
+            react: '18.3.1'
+            react-test-renderer: '18.3.1'
+            types-react: '^18.2.6'
+            community-cli: '15.0.1'
+            trim-example: 'true'
+            npm-install-flags: '--legacy-peer-deps'
+          - react-native-version: '0.78.3'
+            react: '19.0.0'
+            react-test-renderer: '19.0.0'
+            types-react: '^19.0.0'
+            community-cli: '15.0.1'
+            trim-example: 'true'
+            npm-install-flags: '--legacy-peer-deps'
+          - react-native-version: '0.79.7'
+            react: '19.0.0'
+            react-test-renderer: '19.0.0'
+            types-react: '^19.0.0'
+            community-cli: '18.0.0'
+            trim-example: 'true'
+            npm-install-flags: '--legacy-peer-deps'
+          - react-native-version: '0.80.3'
+            react: '19.1.0'
+            react-test-renderer: '19.1.0'
+            types-react: '^19.1.0'
+            community-cli: '19.1.2'
+            trim-example: 'true'
+            npm-install-flags: '--legacy-peer-deps'
+          - react-native-version: '0.81.6'
+            react: '19.1.4'
+            react-test-renderer: '19.1.0'
+            types-react: '^19.1.4'
+            community-cli: '20.0.0'
+            trim-example: 'true'
+            npm-install-flags: '--legacy-peer-deps'
+          - react-native-version: '0.82.1'
+            react: '19.2.3'
+            react-test-renderer: '19.2.3'
+            types-react: '^19.2.0'
+            community-cli: '20.2.0'
+            trim-example: 'false'
+            npm-install-flags: ''
+          - react-native-version: '0.83.1'
+            react: '19.2.3'
+            react-test-renderer: '19.2.3'
+            types-react: '^19.2.0'
+            community-cli: '20.2.0'
+            trim-example: 'false'
+            npm-install-flags: ''
+          - react-native-version: '0.84.1'
+            react: '19.2.3'
+            react-test-renderer: '19.2.3'
+            types-react: '^19.2.0'
+            community-cli: '20.2.0'
+            trim-example: 'false'
+            npm-install-flags: ''
+          - react-native-version: '0.85.0'
+            react: '19.2.3'
+            react-test-renderer: '19.2.3'
+            types-react: '^19.2.0'
+            community-cli: '20.2.0'
+            trim-example: 'false'
+            npm-install-flags: ''
+          - react-native-version: '0.86.3'
+            react: '19.2.3'
+            react-test-renderer: '19.2.3'
+            types-react: '^19.2.0'
+            community-cli: '20.2.0'
+            trim-example: 'false'
+            npm-install-flags: ''
+          - react-native-version: '0.87.1'
+            react: '19.2.3'
+            react-test-renderer: '19.2.3'
+            types-react: '^19.2.0'
+            community-cli: '20.2.0'
+            trim-example: 'false'
+            npm-install-flags: ''
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -134,10 +392,62 @@ jobs:
       - name: Pin examples/bare-rn to this matrix row's RN version
         run: npm pkg set "dependencies.react-native=${{ matrix.react-native-version }}"
         working-directory: examples/bare-rn
+
+      # `react-native` alone is not a complete pin. Each RN release peer-depends
+      # on a specific React major/minor, and the `@react-native/*` and
+      # `@react-native-community/cli*` packages are published in lockstep with
+      # it. Pinning only react-native leaves `react@19.2.3` (bare-rn's own pin)
+      # in front of `react-native@0.77.3`, whose peer range is `^18.2.0`, and
+      # npm refuses the tree before any native tool runs. Values come from
+      # `@react-native-community/template@<this row's exact patch>`.
+      - name: Pin the React and CLI versions this RN release actually ships with
+        run: |
+          npm pkg set "dependencies.react=${{ matrix.react }}"
+          npm pkg set "devDependencies.react-test-renderer=${{ matrix.react-test-renderer }}"
+          npm pkg set "devDependencies.@types/react=${{ matrix.types-react }}"
+          npm pkg set "devDependencies.@react-native-community/cli=${{ matrix.community-cli }}"
+          npm pkg set "devDependencies.@react-native-community/cli-platform-android=${{ matrix.community-cli }}"
+          npm pkg set "devDependencies.@react-native-community/cli-platform-ios=${{ matrix.community-cli }}"
+          npm pkg set "devDependencies.@react-native/babel-preset=${{ matrix.react-native-version }}"
+          npm pkg set "devDependencies.@react-native/eslint-config=${{ matrix.react-native-version }}"
+          npm pkg set "devDependencies.@react-native/metro-config=${{ matrix.react-native-version }}"
+          npm pkg set "devDependencies.@react-native/typescript-config=${{ matrix.react-native-version }}"
+        working-directory: examples/bare-rn
+
+      # Only on the pre-0.82 rows. These are the example APP's UI dependencies,
+      # not autoskeleton's, and every one of them declares a peer range that
+      # excludes this row (see the header): new-app-screen pins react-native
+      # exactly, reanimated/worklets accept only 0.83-0.87, skia only >=0.78.
+      # `@react-native/jest-preset` is deleted because it has no published
+      # 0.77-0.81 release at all (`npm view @react-native/jest-preset@0.81.6`
+      # is a 404). Removing them leaves the row testing precisely what ADR-14
+      # claims — that @react-native-community/cli autolinking discovers
+      # autoskeleton and its native code compiles — and nothing else. A Debug
+      # native build does not bundle JS, so the App.tsx imports of the removed
+      # modules are never resolved by this job.
+      - name: Trim examples/bare-rn to what a pre-0.82 row can build
+        if: matrix.trim-example == 'true'
+        run: |
+          npm pkg delete dependencies.@react-native/new-app-screen
+          npm pkg delete dependencies.@shopify/flash-list
+          npm pkg delete dependencies.@shopify/react-native-skia
+          npm pkg delete dependencies.react-native-reanimated
+          npm pkg delete dependencies.react-native-worklets
+          npm pkg delete dependencies.react-native-safe-area-context
+          npm pkg delete devDependencies.@react-native/jest-preset
+        working-directory: examples/bare-rn
+
       - name: Unpin the locally built tarball before installing (see scripts/unpin-local-tarball.mjs)
         run: node scripts/unpin-local-tarball.mjs examples/bare-rn
       - name: Install from the packed tarball, never a workspace symlink (ADR-14's own load-bearing detail)
-        run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
+        # `${{ matrix.npm-install-flags }}` is `--legacy-peer-deps` on the trimmed
+        # pre-0.82 rows and empty everywhere else. Without it npm 7+ would
+        # AUTO-INSTALL autoskeleton's own permissive peers
+        # (`@shopify/react-native-skia >=1.0.0`, `react-native-reanimated
+        # >=3.0.0`, `uniwind ^1.0.0`) at their latest published versions,
+        # putting back exactly the RN-0.83+-only packages the trim step just
+        # removed.
+        run: npm install ${{ matrix.npm-install-flags }} "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
         working-directory: examples/bare-rn
       - name: pod install (use_native_modules! resolving the root podspec, use_expo_modules! absent)
         run: pod install

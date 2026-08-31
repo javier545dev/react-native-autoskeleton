@@ -5,6 +5,7 @@
   "main": "./lib/commonjs/index.js",
   "module": "./lib/module/index.js",
   "types": "./lib/typescript/module/src/index.d.ts",
+  "sideEffects": false,
   "exports": {
     ".": {
       "browser": {
@@ -60,7 +61,9 @@
     "react-native.config.js",
     "expo-module.config.json",
     "!ios/build",
+    "!ios/generated",
     "!android/build",
+    "!android/generated",
     "!android/gradle",
     "!android/gradlew",
     "!android/gradlew.bat",
@@ -134,11 +137,11 @@
   },
   "peerDependencies": {
     "@playwright/test": "^1.55.0",
-    "@shopify/react-native-skia": "*",
-    "react": "*",
-    "react-native": "*",
-    "react-native-reanimated": "*",
-    "uniwind": "*"
+    "@shopify/react-native-skia": ">=1.0.0",
+    "react": ">=18.2.0",
+    "react-native": ">=0.77.0",
+    "react-native-reanimated": ">=3.0.0",
+    "uniwind": "^1.0.0"
   },
   "peerDependenciesMeta": {
     "@playwright/test": {

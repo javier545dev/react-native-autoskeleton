@@ -198,7 +198,7 @@ Flagged so nobody re-derives them as facts:
   `bench-ios-traversal` job is marked "AUTHORED ONLY" in its own header and the
   frame-drop job that exists is Android.
 - **The native build matrix has run against one pinned RN version**, not the
-  full 0.83+ range `native-matrix.yml` expresses.
+  full supported range `native-matrix.yml` expresses.
 - **The baseline-vs-candidate ratio gate** has been exercised on hand-fed
   results, not on two real commits in a real Actions run.
 

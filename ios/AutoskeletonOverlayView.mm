@@ -1,3 +1,54 @@
+// ===========================================================================
+// NEW ARCHITECTURE GUARD. Deliberately the FIRST thing in this file, ahead of
+// every `#import`, so that a consumer who builds autoskeleton with the old
+// architecture reads the sentence below instead of
+// `'react/renderer/components/AutoskeletonSpec/ComponentDescriptors.h' file
+// not found` — an error that names a header nobody asked for and no cause.
+//
+// WHY THIS CAN HAPPEN AT ALL, verified against the actual CocoaPods scripts of
+// both ends of the supported range rather than assumed. `Autoskeleton.podspec`
+// ends in `install_modules_dependencies(s)`. In
+// `react-native/scripts/react_native_pods.rb` that function reads:
+//
+//   0.77.3 / 0.81.6:  NewArchitectureHelper.install_modules_dependencies(
+//                       spec, new_arch_enabled, folly_config[:version])
+//   0.82.1 and later: NewArchitectureHelper.install_modules_dependencies(
+//                       spec, true, folly_config[:version])
+//
+// and `scripts/cocoapods/new_architecture.rb`'s `computeFlags(enabled)` returns
+// `-DRCT_NEW_ARCH_ENABLED=1` only when that argument is true, feeding it into
+// BOTH `spec.compiler_flags` and the pod's `OTHER_CPLUSPLUSFLAGS` (present in
+// 0.77.3 and 0.81.6 alike). So on 0.77-0.81 the flag genuinely tracks
+// `RCT_NEW_ARCH_ENABLED` in the environment, and from 0.82 the literal `true`
+// makes it unconditional. That is the whole window in which this guard can
+// fire, and it matches `package.json`'s `react-native: ">=0.77.0"` floor.
+//
+// WHY `#error` AND NOT A SILENT NO-OP. Compiling this file into an inert stub
+// under the old architecture would produce a library that links, ships, and
+// then paints nothing at runtime — the exact failure mode task 5.8 was written
+// to fix, rediscovered on a user's device instead of on this line. A skeleton
+// library that refuses to build is strictly cheaper than one that builds and
+// renders an empty screen.
+//
+// WHY IT CANNOT FIRE ON A CORRECT BUILD: `RCT_NEW_ARCH_ENABLED` is defined by
+// RN's own podspec helper above for every New-Architecture `pod install` in
+// [0.77, 0.87]; this pod calls that helper, and the only other target that
+// compiles anything from `ios/` is the `Tests` test_spec, whose source_files
+// are `ios/Tests/**/*.swift` — no `.mm`, so this directive is never reached
+// there.
+#if !defined(RCT_NEW_ARCH_ENABLED)
+#error "autoskeleton is New Architecture only: this file hosts the Fabric \
+component 'AutoskeletonOverlayView', and it was compiled without \
+RCT_NEW_ARCH_ENABLED, which means React Native installed this pod for the OLD \
+architecture. Enable the New Architecture and re-run `pod install`: unset (or \
+set to 1) RCT_NEW_ARCH_ENABLED in the environment your `pod install` runs in, \
+and set newArchEnabled=true in android/gradle.properties for the Android half. \
+React Native 0.82 and newer turn the New Architecture on unconditionally, so \
+this can only be reached on 0.77-0.81. autoskeleton refuses to build here on \
+purpose: with Paper it would register no view and paint nothing at all."
+#endif
+// ===========================================================================
+
 #import "AutoskeletonOverlayView.h"
 
 #import <react/renderer/components/AutoskeletonSpec/ComponentDescriptors.h>
@@ -54,6 +105,13 @@ using namespace facebook::react;
 // package's root `package.json` (`{"AutoskeletonOverlayView":
 // "AutoskeletonOverlayView"}`), confirmed by re-running `pod install` and
 // grepping the regenerated provider file for the new entry.
+//
+// ARCHITECTURE PRECONDITION for everything above: none of that discovery
+// machinery exists under the old architecture — `RCTComponentViewFactory`,
+// `RCTThirdPartyComponentsProvider` and `codegenConfig.ios.componentProvider`
+// are all Fabric-only. That is what the `#error` at the top of this file
+// guards, and it is why the reasoning recorded here has no old-architecture
+// counterpart to document: there is nothing to register with.
 //
 // ALL real mount/update/destroy behaviour lives in
 // `AutoskeletonOverlayViewHost` (Swift, fully unit tested by

@@ -1,8 +1,46 @@
 buildscript {
+  // These are FALLBACKS only: `getExtOrDefault` below prefers the consuming
+  // app's `rootProject.ext` and reaches this map solely when the app does not
+  // define the property. The standard React Native app template DOES define
+  // `compileSdkVersion` (verified: @react-native-community/template's
+  // `template/android/build.gradle` sets 35 at 0.77.3/0.78.3/0.79.7/0.80.3 and
+  // 36 from 0.81.1 on), and `examples/bare-rn` sets 37 — so this value only
+  // ever reaches a project that omitted it.
+  //
+  // WHY 35 AND NOT 36. `package.json` declares `react-native: ">=0.77.0"`, and
+  // each RN release pins the Android Gradle Plugin its template resolves
+  // (read out of `@react-native/gradle-plugin@<v>/gradle/libs.versions.toml`):
+  // 0.77 -> AGP 8.7.2, 0.78 -> 8.8.0, 0.79 -> 8.8.2, 0.80 -> 8.9.2,
+  // 0.81 -> 8.11.0, 0.82 -> 8.12.0, 0.87 -> 9.2.1. AGP 8.7.2's
+  // `ToolsRevisionUtils.MAX_RECOMMENDED_COMPILE_SDK_VERSION` aliases
+  // `SdkConstants.MAX_SUPPORTED_ANDROID_PLATFORM_VERSION`, which is API **35**
+  // in the `com.android.tools:common:31.7.2` that AGP 8.7.2 ships with
+  // (verified by reading the constant out of the published class file, not
+  // inferred from release notes). A higher `compileSdkVersion` is reported by
+  // AGP 8.7.2 as a WARNING, not an error — `SdkParsingUtilsKt
+  // .warnIfCompileSdkTooNew` calls `IssueReporter.reportWarning` with
+  // `COMPILE_SDK_VERSION_TOO_HIGH` — but it also requires the corresponding
+  // `platforms;android-36` to be installed, which an SDK image provisioned for
+  // an RN 0.77 project (template compileSdk 35) has no reason to carry. 35 is
+  // the highest value that is both fully supported by the OLDEST AGP in range
+  // and already required by every project in it.
+  //
+  // 35 is high enough at the other end too, checked against what is actually
+  // consumed rather than assumed: the AAR metadata of `react-android` declares
+  // `minCompileSdk=1` at 0.77.3/0.81.6/0.82.1 and `minCompileSdk=34` at
+  // 0.87.1, and its androidx transitives at 0.87.1 (appcompat 1.7.0,
+  // window 1.5.1, autofill 1.3.0) all declare `minCompileSdk=34`. This
+  // library's own Kotlin needs nothing newer either — every `android.*` import
+  // across `src/main/java/com/autoskeleton/` is API 21 or older
+  // (`ComponentCallbacks2`, `Outline`, `Choreographer`, `android.os.Trace`,
+  // `LinearGradient`, ...) against `minSdkVersion 24`. It also finally agrees
+  // with the `targetSdkVersion 35` pinned below for Robolectric 4.14.1, which
+  // supports SDK <= 35: compileSdk 36 with targetSdk 35 was an unexplained
+  // split.
   ext.Autoskeleton = [
     kotlinVersion: "2.0.21",
     minSdkVersion: 24,
-    compileSdkVersion: 36
+    compileSdkVersion: 35
   ]
 
   ext.getExtOrDefault = { prop ->
