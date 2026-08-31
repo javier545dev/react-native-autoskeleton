@@ -547,3 +547,68 @@ jobs:
             -scheme "$scheme" \
             -destination 'generic/platform=iOS Simulator'
         working-directory: examples/expo/ios
+
+  # The floor row that actually means something.
+  #
+  # `bare-rn-android-matrix` covers 0.77 by taking a React Native 0.87 app and
+  # swapping its JavaScript dependencies down. That is not the same as being on
+  # 0.77: the app keeps Kotlin 2.2.0 and Gradle 9.4.1, and React Native's OWN
+  # react-native-gradle-plugin does not compile under them. Those rows fail for
+  # a reason that has nothing to do with this library, which makes them useless
+  # as evidence for the `react-native: ">=0.77.0"` peer range.
+  #
+  # `examples/rn-077` is a real 0.77.3 app — scaffolded by
+  # `@react-native-community/cli@15.0.1 --version 0.77.3`, carrying 0.77's own
+  # Kotlin 2.0.21, Gradle 8.10.2 and compileSdk 35 — so building it exercises
+  # the two mechanisms that set the floor: the named-argument `ReactModuleInfo`
+  # call in `AutoskeletonPackage.kt`, and codegen for the overlay component.
+  #
+  # Android only, deliberately. Current Xcode's Clang rejects the `fmt` release
+  # RN 0.77 pins, which is a break between those two and says nothing about this
+  # package; claiming an iOS 0.77 build here would be claiming something the
+  # runner cannot decide. See `examples/rn-077/README.md`.
+  floor-rn-077-android:
+    runs-on: ubuntu-latest
+    needs: pack-library
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+      - uses: actions/download-artifact@v4
+        with:
+          name: autoskeleton-tarball
+          path: .tarball
+      - name: Fail loudly if the tarball did not arrive
+        run: test -n "$(ls -A .tarball 2>/dev/null)" || { echo "::error::no tarball"; exit 1; }
+      - name: Unpin the locally built tarball before installing (see scripts/unpin-local-tarball.mjs)
+        run: node scripts/unpin-local-tarball.mjs examples/rn-077
+      - name: Install THIS run's tarball into the real 0.77 app
+        run: npm install --no-audit --no-fund "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
+        working-directory: examples/rn-077
+      - name: Autolinking must discover autoskeleton on 0.77 (ADR-14)
+        run: |
+          npx react-native config > /tmp/rn-config.json
+          node -e "
+            const c = require('/tmp/rn-config.json');
+            const found = Object.keys(c.dependencies || {}).includes('autoskeleton');
+            if (!found) { console.error('::error::autolinking did not discover autoskeleton on RN 0.77'); process.exit(1); }
+            console.log('autolinking discovered autoskeleton');
+          "
+        working-directory: examples/rn-077
+      - name: assembleDebug — the floor claim, compiled
+        run: ./gradlew assembleDebug
+        working-directory: examples/rn-077/android
+      - name: The class the floor argument is about must exist
+        # AutoskeletonPackage.kt is the file whose named `ReactModuleInfo`
+        # arguments do not bind before 0.77. A green build that somehow skipped
+        # it would prove nothing, so the artifact is asserted directly.
+        run: |
+          hit=$(find node_modules/autoskeleton/android/build -name 'AutoskeletonPackage*.class' | head -1)
+          test -n "$hit" || { echo "::error::AutoskeletonPackage was never compiled"; exit 1; }
+          echo "compiled: $hit"
+        working-directory: examples/rn-077
