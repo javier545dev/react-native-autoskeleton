@@ -618,6 +618,18 @@ jobs:
           path: .tarball
       - name: Fail loudly if the tarball did not arrive
         run: test -n "$(ls -A .tarball 2>/dev/null)" || { echo "::error::no tarball"; exit 1; }
+      # The 0.77 template pins `ndkVersion = "27.1.12297006"`, and New
+      # Architecture codegen compiles C++, so the NDK is genuinely needed. AGP's
+      # own auto-install failed on the runner with
+      #   InstallFailedException: Failed to install ndk;27.1.12297006
+      # after a runner-image change; this job was green before it and nothing in
+      # the repository moved. Installing it explicitly, with licences accepted,
+      # takes that away from AGP.
+      - name: Install the NDK the 0.77 template pins
+        run: |
+          set -euo pipefail
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.1.12297006"
       - name: Unpin the locally built tarball before installing (see scripts/unpin-local-tarball.mjs)
         run: node scripts/unpin-local-tarball.mjs examples/rn-077
       - name: Install THIS run's tarball into the real 0.77 app
