@@ -29,7 +29,7 @@ while the skeleton is up.
 It does **not** fire for a cycle suppressed by the refresh policy (REQ-PTR-1),
 because no skeleton-to-content lifecycle visually occurred. A missing event on
 a pull-to-refresh is that, not a dropped callback. See
-[`api.md` §2.1](./api.md).
+[`api.md` §2.3](./api.md).
 
 ### 1.1 Which fields are real, per platform
 

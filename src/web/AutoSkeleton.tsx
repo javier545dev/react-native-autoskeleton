@@ -23,6 +23,8 @@ import type { ReactNode } from 'react';
 import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { bucketWidth, composeCacheKey, quantizeFontScale } from '../core/cache-key';
 import type { RendererHandle, SkeletonTheme } from '../core/contracts';
+import { isLoadingFromProps, resolveSkeletonChildren } from '../core/data-props';
+import type { SkeletonLoadingSource } from '../core/data-props';
 import { createHandoffController } from '../core/handoff';
 import type { HandoffController, SkeletonPipelinePhase } from '../core/handoff';
 import {
@@ -159,8 +161,7 @@ const sensor = createDomSensor();
 const renderer = createCssRenderer();
 const sharedClock = createShimmerClock();
 
-export interface AutoSkeletonProps {
-  readonly isLoading: boolean;
+interface AutoSkeletonBaseProps {
   readonly skeletonKey: string;
   readonly itemType?: string;
   readonly animation?: AnimationKind;
@@ -176,8 +177,29 @@ export interface AutoSkeletonProps {
   /** ADR-16 / plan.md §3.8 handoff props. */
   readonly onSuccessorPainted?: () => void;
   readonly expectsPlaceholder?: boolean;
-  readonly children?: ReactNode;
+  /** Shown ONLY on a cold miss: this cycle would paint a skeleton, and there
+   *  is no usable measured geometry for the cache key yet.
+   *
+   *  This is the answer to the hole `core/data-props.ts` documents at length.
+   *  The sensor can only measure what is mounted, and it only looks while the
+   *  skeleton is up — so a subtree that renders nothing during loading (the
+   *  function-child form, and the older `{x !== null && <Content/>}` form
+   *  alike) is measured EMPTY, every cycle, and paints nothing forever.
+   *  A hand-authored `fallback` is the only thing that can be on screen then.
+   *
+   *  It yields to the measured skeleton as soon as real geometry exists,
+   *  which happens for consumers whose children stay mounted through the
+   *  loading cycle — not on some fixed second cycle. For strictly conditional
+   *  children it stays: there is never anything for the sensor to find.
+   *
+   *  Omitting it is byte-for-byte today's behaviour — the render gate below
+   *  starts with `props.fallback !== undefined`, so no existing tree gains a
+   *  node, and the fallback is excluded from the sensor's traversal
+   *  (`IGNORE_ATTRIBUTE`) so it can never be measured as if it were content. */
+  readonly fallback?: ReactNode;
 }
+
+export type AutoSkeletonProps<T = unknown> = AutoSkeletonBaseProps & SkeletonLoadingSource<T, ReactNode>;
 
 function reducedMotionPreferred(): boolean {
   return (
@@ -644,18 +666,26 @@ function usePaintDetectionHeuristic(
   }, [phase, controller, wrapperRef, expectsSuccessor]);
 }
 
-export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
+export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JSX.Element {
   const ctx = useContext(SkeletonContext);
   const theme = ctx.theme;
   const animation = props.animation ?? 'shimmer';
   const debugOverlayEnabled = props.debugOverlay === true && process.env.NODE_ENV !== 'production';
 
+  // The `data` form's two derivations, both from `core/data-props.ts` so web
+  // and native cannot drift on either. When neither `data` nor a function
+  // child is used — every call site that predates this change — `isLoading`
+  // is `props.isLoading` and `children` is `props.children` BY REFERENCE, so
+  // nothing below can behave differently for them.
+  const isLoading = isLoadingFromProps(props.isLoading, props.data);
+  const children = resolveSkeletonChildren<T, ReactNode>(props.children, props.data);
+
   // REQ-PTR-1: "has real content ever been shown" — the FACT of "ever" needs
   // one bit of history, tracked via React's documented "adjusting state
   // during render" pattern (a real prior-value comparison against STATE, not
   // a bare ref-as-effect-avoidance — Rule 6).
-  const [everShownContent, setEverShownContent] = useState(!props.isLoading);
-  if (!props.isLoading && !everShownContent) {
+  const [everShownContent, setEverShownContent] = useState(!isLoading);
+  if (!isLoading && !everShownContent) {
     setEverShownContent(true);
   }
 
@@ -666,11 +696,11 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   // exact moment — it must stay stable for the cycle's whole lifetime
   // (including its handoff teardown, well after `isLoading` has already
   // flipped back to `false`), not be recomputed live every render.
-  const [wasLoading, setWasLoading] = useState(props.isLoading);
+  const [wasLoading, setWasLoading] = useState(isLoading);
   const [cycleId, setCycleId] = useState(0);
-  if (props.isLoading !== wasLoading) {
-    setWasLoading(props.isLoading);
-    if (props.isLoading && !wasLoading) {
+  if (isLoading !== wasLoading) {
+    setWasLoading(isLoading);
+    if (isLoading && !wasLoading) {
       setCycleId((c) => c + 1);
     }
   }
@@ -753,9 +783,19 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   // inspectable budget lasts, so content that legitimately has nothing to
   // skeleton settles instead of re-traversing forever. See
   // `core/snapshot.ts`'s `MAX_EMPTY_MEASUREMENTS` for the full rationale.
+  //
+  // `noUsableGeometry` names the same fact for the `fallback` gate below. It
+  // is deliberately NOT `snapshot === null`: a cold traversal over a subtree
+  // whose content has not mounted yet returns an EMPTY snapshot, not a
+  // missing one, and an empty snapshot paints exactly zero shapes. Gating
+  // `fallback` on nullness alone would show it for a single frame and then
+  // hand over to a "measured" skeleton that draws nothing — i.e. it would not
+  // fix the hole it exists for. Same predicate the re-measure budget below is
+  // built on, so the two can never disagree about what "measured" means.
+  const noUsableGeometry = snapshot === null || isEmptySnapshot(snapshot);
   const remeasureEmpty =
     snapshot !== null &&
-    isEmptySnapshot(snapshot) &&
+    noUsableGeometry &&
     ctx.store.emptyMeasurementsFor(cacheKey) < MAX_EMPTY_MEASUREMENTS;
   // A cycle that re-traverses is not serving the cache, whatever the store
   // happened to hold — reporting `cacheHit: true` alongside a real traversal
@@ -785,7 +825,7 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   useOverlayRenderer(overlayHostRef, showSkeleton ? snapshot : null, theme, animation, debugOverlayEnabled);
 
   useHandoffAndMetrics(
-    props.isLoading,
+    isLoading,
     controller,
     skeletonSuppressed,
     {
@@ -833,6 +873,16 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   //    defect G.15 fixed on native, in the other direction.
   const overlayVisible = showSkeleton && snapshot !== null;
 
+  // The cold-miss gate. `props.fallback !== undefined` comes FIRST, and it is
+  // the whole reason this addition cannot touch an existing render path: with
+  // the prop omitted this is `false` for every state, `false` renders no DOM
+  // node, and the tree below is the same tree it was before. The remaining
+  // terms are "this cycle would paint a skeleton" (`showSkeleton`, which is
+  // already false during the `delay` window and on the REQ-PTR-1 suppressed
+  // refresh path, where content the reader can still see must not be covered)
+  // and "there is nothing measured to paint instead".
+  const showFallback = props.fallback !== undefined && showSkeleton && noUsableGeometry;
+
   // ADR-16 reveal-before-hide: `props.children` is ALWAYS mounted (never
   // `display:none`) so it is already painted underneath the still-visible
   // overlay by the time the overlay is removed — there is no instant where
@@ -860,10 +910,28 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   // above. `|| overlayVisible` covers the handoff tail, where `isLoading` has
   // already flipped false but the transition is not finished.
   return (
-    <div ref={wrapperRef} aria-busy={props.isLoading || overlayVisible ? true : undefined} style={{ position: 'relative' }}>
+    <div ref={wrapperRef} aria-busy={isLoading || overlayVisible ? true : undefined} style={{ position: 'relative' }}>
       <div aria-hidden={overlayVisible ? true : undefined} style={{ display: 'contents' }}>
-        {props.children}
+        {children}
       </div>
+      {/* The fallback is IN FLOW, not in the absolutely-positioned overlay
+       *  host below, because on a cold miss the wrapper's own content is
+       *  typically not mounted yet — an `inset: 0` box over a zero-height
+       *  wrapper would collapse to nothing, which is precisely the state
+       *  `fallback` exists to escape. It carries the same
+       *  `data-autoskeleton-ignore` marker the overlay does (`Ignore`'s
+       *  channel, `dom-sensor.ts`'s `isIgnored`, which skips the whole
+       *  subtree) so a later traversal can never measure the hand-authored
+       *  skeleton and cache a skeleton OF a skeleton. `display: contents`
+       *  keeps it out of the box model exactly like `<AutoSkeleton.Ignore>`,
+       *  and `aria-hidden` keeps a decorative placeholder out of the
+       *  accessibility tree — the `role="status"` "Loading" element below is
+       *  what a screen-reader user gets instead. */}
+      {showFallback && (
+        <div aria-hidden="true" data-autoskeleton-ignore="true" style={{ display: 'contents' }}>
+          {props.fallback}
+        </div>
+      )}
       {showSkeleton && (
         <div
           ref={overlayHostRef}

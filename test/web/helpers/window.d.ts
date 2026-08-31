@@ -49,6 +49,12 @@ export interface AutoskeletonHarness {
   store: MemoryShapeStore;
   setLoading: (isLoading: boolean) => void;
   setSized: (sized: boolean) => void;
+  /** Optional, additive: `data-fallback.spec.ts` drives the `data` prop
+   *  rather than `isLoading`, and counts how often a function child actually
+   *  ran. Optional so no existing harness has to grow fields it never uses —
+   *  the same reason every field in `AutoskeletonTestGlobal` above is. */
+  setData?: (data: unknown) => void;
+  functionChildCalls?: () => number;
 }
 
 declare global {

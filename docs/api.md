@@ -112,21 +112,35 @@ The one component you need for the simple case. Wrap the subtree whose loading
 state you want to skeletonize.
 
 ```tsx
-<AutoSkeleton isLoading={product === null} skeletonKey="product-card">
-  {product !== null && <ProductContent product={product} />}
+<AutoSkeleton skeletonKey="product-card" data={product} fallback={<CardSkeleton />}>
+  {(product) => <ProductContent product={product} />}
 </AutoSkeleton>
 ```
+
+The older form still works, unchanged, and is still the right one whenever
+loading is not simply "the value has not arrived":
+
+```tsx
+<AutoSkeleton isLoading={isFetching} skeletonKey="product-card">
+  <ProductContent product={product} />
+</AutoSkeleton>
+```
+
+**You must provide `isLoading` or `data`.** Providing neither is a compile
+error, not a component that renders as permanently loaded — see §2.1.
 
 ### Props
 
 | Prop | Type | Default | Platforms | Notes |
 |---|---|---|---|---|
-| `isLoading` | `boolean` | required | all | |
+| `isLoading` | `boolean` | — | all | Required unless `data` is given. Wins over `data` when both are. |
+| `data` | `T` | — | all | Required unless `isLoading` is given. **Nullish** (`null`/`undefined`) means loading; nothing else does. |
+| `fallback` | `ReactNode` | — | all | Rendered only on a cold miss. **Read §2.2 before assuming when that is.** |
 | `skeletonKey` | `string` | required | all | Identifies the cached geometry. Part of the composite cache key. |
 | `itemType` | `string` | — | all | Second cache-key segment. Use it when one `skeletonKey` covers several shapes of content. |
 | `animation` | `'shimmer' \| 'pulse' \| 'none'` | `'shimmer'` | all | See [`animation.md`](./animation.md). |
 | `delay` | `number` (ms) | `0` | all | Withholds the skeleton until `delay` has elapsed in this loading cycle. A load that resolves sooner never shows one. |
-| `skeletonOnRefresh` | `boolean` | `false` | all | Opts out of the REQ-PTR-1 default. **Read §2.1 — this surprises everyone.** |
+| `skeletonOnRefresh` | `boolean` | `false` | all | Opts out of the REQ-PTR-1 default. **Read §2.3 — this surprises everyone.** |
 | `onMetrics` | `(m: SkeletonMetrics) => void` | — | all | Fires once per *completed, non-suppressed* cycle. |
 | `debugOverlay` | `boolean` | `false` | **web only draws** | Accepted everywhere; only web renders it. Also gated on a non-production build. |
 | `expectsPlaceholder` | `boolean` | `false` | all | Tells the handoff there is a successor visual to wait for. |
@@ -134,13 +148,87 @@ state you want to skeletonize.
 | `shimmerBaseColor` | `string` | — | **native only** | Per-instance theme override. |
 | `shimmerHighlightColor` | `string` | — | **native only** | Per-instance theme override. |
 | `defaultRadius` | `number` | — | **native only** | Per-instance theme override. See the Android caveat in [`platform-support.md` §5d](./platform-support.md). |
-| `children` | `ReactNode` | — | all | |
+| `children` | `ReactNode`, or `(value: NonNullable<T>) => ReactNode` with `data` | — | all | The function form is only available in the `data` form. |
 
 The three theme-override props are declared on the **native**
 `AutoSkeletonProps` only. The web `AutoSkeletonProps` does not have them — on
 web you theme through CSS custom properties or the `SkeletonProvider` theme.
 
-### 2.1 The refresh policy (REQ-PTR-1) — read this one
+`isLoading`, `data`, `fallback` and the function child are identical in name
+and in behaviour on web and native. `AutoSkeletonSSR` does **not** have any of
+them; its fallback story is the captured manifest (§6).
+
+### 2.1 `data`, and which prop decides "loading"
+
+```
+loading = isLoading is provided ? isLoading : data == null
+```
+
+- **Only nullish data means loading.** `null` and `undefined`, and nothing
+  else. `0`, `''`, `false` and `NaN` are ordinary loaded values —
+  `<AutoSkeleton data={cartItemCount}>` must not sit on a skeleton the moment
+  the cart empties. This is the one rule here that is easy to get wrong.
+- **`isLoading` always wins.** It is the escape hatch for everything `data`
+  cannot express: an `isFetching` flag from a data library, a state derived
+  from several sources, a skeleton shown deliberately. Passing both is legal
+  but discouraged — `data` then decides only what the function child receives.
+- **Providing neither does not compile.** `AutoSkeletonProps` is a
+  discriminated union, so `<AutoSkeleton skeletonKey="x">…</AutoSkeleton>` is
+  a type error rather than a component that is loading forever.
+
+The function child is invoked **only** when `data` is non-nullish, and
+receives `NonNullable<T>`. That narrowing is the whole point of the form: it
+removes the second, inverted copy of the condition that
+`{product !== null && <ProductContent product={product} />}` forced you to
+write. Inference is automatic — you never write `<AutoSkeleton<Product> …>`.
+
+A plain `ReactNode` child is still accepted with `data`. Use it when your
+content can render before the value arrives.
+
+### 2.2 `fallback` — and what actually happens on a cold start
+
+`fallback` is rendered when **this cycle would paint a skeleton and there is
+no usable measured geometry for the cache key** — no snapshot at all, or a
+snapshot that yields zero shapes.
+
+That second half is the important one, and it explains why you probably need
+this prop. The sensor measures the wrapper's **children**, and it only looks
+**while the skeleton is up**. So:
+
+- If your children **stay mounted** during loading (they render placeholder
+  or previous values), the sensor measures them on the first cycle, the
+  measured skeleton appears, and `fallback` disappears and never returns.
+- If your children are **conditional** — the function child form, or the
+  older `{product !== null && …}` — then during every loading cycle there is
+  *nothing mounted to measure*. The traversal records an **empty** snapshot,
+  which paints zero shapes. Empty results are re-measured for a bounded
+  number of cycles (`MAX_EMPTY_MEASUREMENTS`) and then become permanent for
+  that key. Without `fallback`, that subtree paints **nothing, ever** — not
+  "nothing on the first cycle".
+
+So: conditional children need a `fallback`, and it is not a temporary measure
+for them. It is also the migration ramp — put your existing hand-authored
+skeleton in `fallback`, and consumers whose children stay mounted get the
+measured one from the first cycle onward.
+
+Three further facts, all deliberate:
+
+- **It is never measured.** The fallback is wrapped in the same ignore channel
+  as `<AutoSkeleton.Ignore>` (`data-autoskeleton-ignore` on web, the marker
+  `nativeID`/`testID` on native), so the library can never cache a skeleton of
+  your skeleton.
+- **It is hidden from assistive technology.** It is decorative; the
+  `role="status"` "Loading" element (web) / the `accessibilityLabel="Loading"`
+  sibling (native) is what a screen-reader user gets.
+- **It obeys `delay` and the refresh policy below.** It does not appear during
+  the `delay` window, and on a suppressed refresh cycle (§2.3) it does not
+  appear at all — covering content the reader is still looking at is exactly
+  what that policy exists to prevent. Pass `skeletonOnRefresh` if you want
+  both back on every load.
+
+Omitting `fallback` leaves every render path exactly as it was.
+
+### 2.3 The refresh policy (REQ-PTR-1) — read this one
 
 **By default, once content has been shown, setting `isLoading` back to `true`
 does NOT bring the skeleton back.** The already-rendered content stays on
@@ -168,7 +256,7 @@ To get a skeleton on every load:
 <AutoSkeleton isLoading={isLoading} skeletonKey="feed" skeletonOnRefresh>
 ```
 
-### 2.2 Statics
+### 2.4 Statics
 
 ```tsx
 <AutoSkeleton.Ignore>{/* exactly one element child */}</AutoSkeleton.Ignore>

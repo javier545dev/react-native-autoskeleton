@@ -59,6 +59,8 @@ import { useReducedMotion } from './reducedMotion';
 import { effectiveAnimation } from '../core/animation';
 import { bucketWidth, composeCacheKey, quantizeFontScale } from '../core/cache-key';
 import type { SkeletonTheme } from '../core/contracts';
+import { isLoadingFromProps, resolveSkeletonChildren } from '../core/data-props';
+import type { SkeletonLoadingSource } from '../core/data-props';
 import { createHandoffController, type HandoffController } from '../core/handoff';
 import { assembleMetrics } from '../core/metrics';
 import { shouldRunHandoffCycle } from '../core/refresh-gate';
@@ -69,7 +71,7 @@ import { applyThemeOverride } from '../core/theme-override';
 import type { AnimationKind, OnMetrics, RendererKind, ShapeSnapshot } from '../core/types';
 import { decodeWire } from '../core/wire';
 import { Hint } from './Hint';
-import { Ignore } from './Ignore';
+import { AUTOSKELETON_IGNORE_MARKER_ID, Ignore } from './Ignore';
 import { nativeSensor } from './nativeSensorInstance';
 import { resolveAutoskeletonOverlayNativeComponent } from './renderer/AutoskeletonOverlayHostComponent';
 import type { NativeSensorTarget } from './sensor';
@@ -159,8 +161,7 @@ export function SkeletonProvider(props: SkeletonProviderProps): React.JSX.Elemen
   return <SkeletonContext.Provider value={value}>{props.children}</SkeletonContext.Provider>;
 }
 
-export interface AutoSkeletonProps {
-  readonly isLoading: boolean;
+interface AutoSkeletonBaseProps {
   readonly skeletonKey: string;
   readonly itemType?: string;
   readonly animation?: AnimationKind;
@@ -182,8 +183,21 @@ export interface AutoSkeletonProps {
   readonly shimmerBaseColor?: string;
   readonly shimmerHighlightColor?: string;
   readonly defaultRadius?: number;
-  readonly children?: ReactNode;
+  /** Shown ONLY on a cold miss: this cycle would paint a skeleton, and there
+   *  is no usable measured geometry for the cache key yet. Identical prop
+   *  name, identical gate and identical semantics to `web/AutoSkeleton.tsx`
+   *  — the shared contract lives in `core/data-props.ts`, which also records
+   *  WHY the hole exists (the sensor can only measure a subtree that is
+   *  already mounted, and on the first loading cycle of a session it is not).
+   *
+   *  Omitting it changes nothing: the render gate starts with
+   *  `props.fallback !== undefined`, so no existing tree gains a `View`, and
+   *  the native paint-gate fixtures — which pass no `fallback` — cannot be
+   *  affected. */
+  readonly fallback?: ReactNode;
 }
+
+export type AutoSkeletonProps<T = unknown> = AutoSkeletonBaseProps & SkeletonLoadingSource<T, ReactNode>;
 
 /** Withholds the skeleton until `delayMs` has elapsed since this loading
  *  cycle started (see file header: "the delay prop is a lie" gap closure).
@@ -421,7 +435,7 @@ function useHandoffAndMetrics(
   }, [controller, runCycle]);
 }
 
-export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
+export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JSX.Element {
   const ctx = useContext(SkeletonContext);
   // tasks.md 7.2/7.3: per-instance overrides (plain props OR whatever a
   // theming interop resolved from `className`) layer on top of the
@@ -441,16 +455,25 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   const animation: AnimationKind = effectiveAnimation(props.animation ?? 'shimmer', reducedMotion);
   const debugOverlayEnabled = props.debugOverlay === true && typeof __DEV__ !== 'undefined' && __DEV__;
 
-  const [everShownContent, setEverShownContent] = useState(!props.isLoading);
-  if (!props.isLoading && !everShownContent) {
+  // The `data` form's two derivations, from `core/data-props.ts` — the same
+  // two calls `web/AutoSkeleton.tsx` makes, in the same order, so the two
+  // platforms cannot drift on what "loading" means or on when a function
+  // child runs. With neither `data` nor a function child (every call site
+  // that predates this change) `isLoading` is `props.isLoading` and
+  // `children` is `props.children` by reference.
+  const isLoading = isLoadingFromProps(props.isLoading, props.data);
+  const children = resolveSkeletonChildren<T, ReactNode>(props.children, props.data);
+
+  const [everShownContent, setEverShownContent] = useState(!isLoading);
+  if (!isLoading && !everShownContent) {
     setEverShownContent(true);
   }
 
-  const [wasLoading, setWasLoading] = useState(props.isLoading);
+  const [wasLoading, setWasLoading] = useState(isLoading);
   const [cycleId, setCycleId] = useState(0);
-  if (props.isLoading !== wasLoading) {
-    setWasLoading(props.isLoading);
-    if (props.isLoading && !wasLoading) {
+  if (isLoading !== wasLoading) {
+    setWasLoading(isLoading);
+    if (isLoading && !wasLoading) {
       setCycleId((c) => c + 1);
     }
   }
@@ -515,9 +538,15 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   // loading cycle while the key's bounded, inspectable budget lasts. Shared
   // policy with web, by construction — see `core/snapshot.ts`'s
   // `MAX_EMPTY_MEASUREMENTS`.
+  //
+  // `noUsableGeometry` names the same fact for the `fallback` gate below, and
+  // is deliberately NOT `snapshot === null` — see the identically-shaped
+  // comment in `web/AutoSkeleton.tsx` for the reasoning (an unmounted subtree
+  // measures EMPTY, not missing, and an empty snapshot paints zero shapes).
+  const noUsableGeometry = snapshot === null || isEmptySnapshot(snapshot);
   const remeasureEmpty =
     snapshot !== null &&
-    isEmptySnapshot(snapshot) &&
+    noUsableGeometry &&
     ctx.store.emptyMeasurementsFor(cacheKey) < MAX_EMPTY_MEASUREMENTS;
   const cacheHitForCycle = cacheHit && !remeasureEmpty;
 
@@ -562,7 +591,7 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   const rendererKind: RendererKind = overlayRenderer ? 'skia' : 'native';
 
   useHandoffAndMetrics(
-    props.isLoading,
+    isLoading,
     controller,
     skeletonSuppressed,
     {
@@ -582,7 +611,7 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   // no crash. `__DEV__` never reaches here — `useColdMeasurement`'s
   // `onNativeModuleUnavailable` callback throws first.
   if (nativeUnavailable) {
-    return <>{props.children}</>;
+    return <>{children}</>;
   }
 
   // REQ-A11Y-1 (G.15). `overlayVisible` is the single predicate for "the
@@ -608,6 +637,15 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   // two arms of this predicate differ only in what "there is something that
   // can draw" means for the selected tier.
   const overlayVisible = showSkeleton && snapshot !== null && (overlayRenderer !== undefined || OverlayComponent !== null);
+
+  // The cold-miss gate, term for term the same expression `web/AutoSkeleton
+  // .tsx` uses. `props.fallback !== undefined` leads, which is what makes
+  // this addition unable to touch an existing render path: with the prop
+  // omitted it is `false` in every state, and `false` mounts no `View`. The
+  // on-device paint gates and every existing fixture pass no `fallback`, so
+  // the native view hierarchy they assert against is unchanged by
+  // construction rather than by luck.
+  const showFallback = props.fallback !== undefined && showSkeleton && noUsableGeometry;
 
   // Decoded once per snapshot, only for tier-2. Tier-1 never needs it: the
   // native view reads geometry straight out of the native shape cache by
@@ -661,7 +699,38 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
         importantForAccessibility={overlayVisible ? 'no-hide-descendants' : 'auto'}
         style={styles.wrapper}
       >
-        {props.children}
+        {children}
+        {/* IN FLOW, above the absolutely-positioned overlays below: on a cold
+         *  miss the real content is typically not mounted yet, so an
+         *  `absoluteFill` box would have a zero-height parent to fill —
+         *  exactly the blank state `fallback` exists to escape.
+         *
+         *  The marker `nativeID`/`testID` is `<AutoSkeleton.Ignore>`'s own
+         *  channel (see `Ignore.tsx` for why BOTH props are needed: Android
+         *  reads `nativeID`, iOS reads `testID` via `accessibilityIdentifier`),
+         *  and both native sensors skip an ignored view's whole subtree. That
+         *  is not optional here: the cold traversal runs during precisely this
+         *  window, so without the marker the library would measure the
+         *  hand-authored skeleton and cache a skeleton OF a skeleton.
+         *
+         *  A real wrapping `View` — not `Ignore`'s `cloneElement` — because
+         *  `fallback` is an arbitrary `ReactNode`, not the single element child
+         *  `Children.only` demands. It is layout-visible by design (it must
+         *  occupy the space the missing content would), and it only ever exists
+         *  for a consumer who passed the prop. `accessibilityElementsHidden` /
+         *  `no-hide-descendants` keep a decorative placeholder out of the
+         *  accessibility tree; the sibling "Loading" element below is what a
+         *  screen-reader user gets instead. */}
+        {showFallback && (
+          <View
+            nativeID={AUTOSKELETON_IGNORE_MARKER_ID}
+            testID={AUTOSKELETON_IGNORE_MARKER_ID}
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+          >
+            {props.fallback}
+          </View>
+        )}
         {overlayVisible && overlayRenderer !== undefined && snapshot !== null && (
           <View
             accessible={false}
@@ -734,7 +803,14 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
        *  nothing. `pointerEvents="none"` keeps it out of the touch path.
        *  Deliberately no `testID`: it is identified by the string a screen reader
        *  actually speaks, so no production identifier exists purely for a test. */}
-      {overlayVisible && (
+      {/* `|| showFallback` (parity with web, which reaches this state already):
+       *  web's `role="status"` host is gated on `showSkeleton`, so it announces
+       *  during a cold miss whether or not geometry exists. Native's gate is
+       *  `overlayVisible`, which is false while a `fallback` is the only thing
+       *  painted — a screen-reader user would get silence in front of a visible
+       *  placeholder. `showFallback` is false whenever the prop is omitted, so
+       *  no existing tree changes. */}
+      {(overlayVisible || showFallback) && (
         <View
           accessible
           accessibilityLabel={LOADING_ACCESSIBILITY_LABEL}
