@@ -113,6 +113,10 @@ dependencies {
   // (plan.md §7.2a). Fast, runs on every PR.
   testImplementation "junit:junit:4.13.2"
   testImplementation "org.robolectric:robolectric:4.14.1"
+  // Replaces a hand-written ReactApplicationContext subclass whose nineteen
+  // overrides tracked one RN version's class surface and broke on 0.83-0.86.
+  // A mock adapts to whatever the installed version declares.
+  testImplementation "org.mockito:mockito-core:5.14.2"
 
   // task 0.4: instrumented androidTest — radius-ladder R2 raster-probe validation
   // on a real emulator/device (plan.md §7.2b); Robolectric shadows Canvas/Bitmap
