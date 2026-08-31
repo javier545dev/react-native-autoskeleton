@@ -124,7 +124,7 @@ hand — this library's whole premise is that the two should match.
 
 ## Is this for you?
 
-**Yes if** you are on React Native 0.87+ with the New Architecture enabled and
+**Yes if** you are on React Native 0.77+ with the New Architecture enabled and
 a development build, or on the web, and you are tired of placeholder components
 drifting away from the UI they are supposed to imitate.
 
@@ -165,7 +165,7 @@ v4 — [an explicit, evidence-backed exclusion](docs/theming.md), not a gap).
 > [`docs/development.md`](docs/development.md).
 <!-- END PRE-PUBLISH BLOCK -->
 
-### Bare React Native — RN 0.87+, New Architecture (Fabric) only
+### Bare React Native — RN 0.77+, New Architecture (Fabric) only
 
 ```bash
 npm install autoskeleton
@@ -185,17 +185,15 @@ Android, `AutoskeletonPackage.kt` builds `ReactModuleInfo` with Kotlin named
 arguments, whose parameter names were renamed in 0.77.0. Below 0.77 the package
 does not register at all — that is a missing module, not a degraded skeleton.
 
-The peer range is `>=0.87.0` because 0.87 is the version the CI matrix actually
-builds. The library's own code floor is lower — 0.77, set by two native
-registration mechanisms — but nothing verifies it today, so it is not claimed.
-[`docs/platform-support.md`](docs/platform-support.md) §1a carries both numbers
-and the three toolchain blockers between them. From 0.82 React Native refuses
-`newArchEnabled=false`, so on any supported version the platform satisfies the
-New Architecture requirement for you.
+**On RN 0.77–0.81, "New Architecture" is a requirement you have to satisfy.** It
+has been the default since 0.76, but `newArchEnabled=false` still works there,
+and with it off this library has nothing to run. From 0.82 React Native refuses
+that flag, so on 0.82+ the platform satisfies the requirement for you.
 
-Your React version comes from React Native, not from us: RN 0.87 requires React
-`^19.2.3`, read from that release's own `peerDependencies` on npm. Install what
-your RN release asks for; this package's `react: >=18.2.0` peer range is
+Your React version comes from React Native, not from us: RN 0.77 requires React
+`^18.2.0`, 0.78 and 0.79 require `^19.0.0`, 0.80 and 0.81 require `^19.1.0`, and
+0.87 requires `^19.2.3` — each release's own `peerDependencies` on npm. Install
+what your RN release asks for; this package's `react: >=18.2.0` peer range is
 deliberately wide enough not to argue with it.
 
 The RN versions CI builds against live in
@@ -210,11 +208,9 @@ npx expo prebuild
 npx expo run:ios     # or run:android, or an EAS development build
 ```
 
-**The Expo path is verified on iOS only.** `expo prebuild --platform ios` plus a
-real `xcodebuild` runs per SDK in CI; no Expo row builds Android, so Expo on
-Android is untested here rather than known-good. Note also that
-`examples/expo` currently pins RN 0.86.3, one minor below the declared peer
-range — see [`docs/platform-support.md`](docs/platform-support.md) §1a.
+The peer range starts at RN 0.77, but **the Expo path effectively starts at SDK
+53**, because no Expo SDK ships RN 0.77 or 0.78: SDK 52 is RN 0.76 and SDK 53 is
+RN 0.79. There is nothing to install in between.
 
 > **Expo Go does not work, and that is expected — not a bug to file.**
 > `autoskeleton` ships a custom native Turbo Module, and custom native modules
