@@ -15,7 +15,7 @@ implementation, and the "how it was verified" column says how.
 
 | Target | Status |
 |---|---|
-| Bare React Native, New Architecture (Fabric) | Supported. **RN 0.77+**, New Architecture on — see §1a for why that is the floor and what you have to do per version. |
+| Bare React Native, New Architecture (Fabric) | Supported and verified on **RN 0.87+**, New Architecture on. The code floor is lower (0.77) but is not currently verified — see §1a for both numbers and why they differ. |
 | Expo with a development build (`expo prebuild` / EAS dev build) | Supported. **Expo SDK 53+ in practice**, one RN minor above the bare floor — see §1a. |
 | **Expo Go** | **Not supported, and never will be.** See §2. |
 | Expo Web / `react-native-web` | Supported for the `<AutoSkeleton>` surface. Two large gaps — see §3. |
@@ -23,11 +23,16 @@ implementation, and the "how it was verified" column says how.
 | Next.js server rendering (`autoskeleton/ssr`) | Supported, via a build-time capture step. See [`ssr-capture-cli.md`](./ssr-capture-cli.md). |
 | React Native old architecture (Paper) | Not supported on any RN version. No code path for it exists in this library. |
 
-### 1a. Why the floor is RN 0.77, and what "New Architecture" costs you per version
+### 1a. Two floors, and why they are different numbers
 
-The floor is not about when React Native retired the legacy architecture. It is
-about when the two registration mechanisms this package uses landed — two
-independent constraints, either of which would set 0.77 on its own:
+**The declared peer range is `react-native: ">=0.87.0"`, because 0.87 is the
+only version the CI matrix actually builds.** That is a VERIFIED floor, not a
+statement that the library breaks below it.
+
+**The code floor is 0.77**, and that reasoning still holds — it is not about
+when React Native retired the legacy architecture, but about when the two
+registration mechanisms this package uses landed. Two independent constraints,
+either of which would set 0.77 on its own:
 
 - **iOS.** `codegenConfig.ios.componentProvider` (in this package's
   `package.json`) feeds `RCTThirdPartyComponentsProvider.mm`, which does not
@@ -38,6 +43,36 @@ independent constraints, either of which would set 0.77 on its own:
 
 Below 0.77 the package does not register. That is a missing native module, not a
 degraded skeleton.
+
+**Why the verified floor is higher than the code floor.** Every matrix row below
+0.87 fails, and not one of them fails in this library. `examples/bare-rn` — the
+app the matrix builds — pins its own native toolchain to what RN 0.87 wants, and
+the matrix varies the JavaScript dependencies per row without varying that:
+
+- **Android, every row below 0.87.** `android/build.gradle` pins
+  `kotlinVersion = "2.2.0"` and the wrapper pins Gradle 9.4.1. React Native's
+  OWN `react-native-gradle-plugin` sources fail to compile under them
+  (`:gradle-plugin:shared:compileKotlin`, a Kotlin `FileAnalysisException`).
+- **iOS 0.82, 0.84–0.86.** `pod install` ends with *"CocoaPods could not find
+  compatible versions for pod React-Core-prebuilt"* — the prebuilt-frameworks
+  configuration the example carries for 0.87.
+- **iOS 0.77–0.81.** `Pods/fmt` fails to compile against the runner's Clang
+  (`call to consteval function … is not a constant expression`), a known break
+  between old `fmt` releases and current Xcode.
+
+Raising the verified floor back down means pinning Gradle, Kotlin and the
+Podfile per matrix row the same way the JS dependencies already are. Until
+somebody does that, claiming 0.77 in the peer range would be asserting something
+no run has ever checked — which is what this file exists to prevent.
+
+**Two inconsistencies this floor leaves open, recorded rather than hidden.**
+`examples/expo` pins `react-native@0.86.3`, one minor BELOW the range this
+package now declares, and its CI rows are green — so 0.86.3 does build, on iOS.
+It is not enough to lower the declared floor, because the Expo rows run
+`expo prebuild --platform ios` and never build Android, and no Android row below
+0.87 has ever gone green. Bringing the two into line means either bumping that
+example or earning an Android green below 0.87; until one of those happens the
+example contradicts the range on purpose and in writing.
 
 The New-Architecture requirement is a *separate* thing from the floor, and it is
 only free further up the range:

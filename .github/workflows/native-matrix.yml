@@ -5,11 +5,25 @@ name: Native build matrix (ADR-14 verification closure)
 # library's default output satisfies both [autolinkers] must be VERIFIED in
 # CI, not assumed") and spec.md Open Question 9.
 #
-# THE FLOOR IS 0.77, NOT 0.83. This header used to justify a 0.83 floor with
-# "the old architecture was removed in 0.83". That is not what sets the floor
-# of THIS package. `package.json` declares `react-native: ">=0.77.0"`, and 0.77
-# is the floor for two independent, verified reasons, neither of which is about
-# Paper being removed:
+# THIS MATRIX BUILDS ONE VERSION, AND THAT IS THE HONEST STATE OF IT.
+# `package.json` declares `react-native: ">=0.87.0"` because 0.87.1 is the only
+# version that has ever gone green on BOTH platforms here. It ran eleven minors
+# (0.77.3 through 0.87.1) and nineteen of the twenty-two rows failed — not one
+# of them inside this library:
+#   * Android, every row below 0.87: `examples/bare-rn` pins Kotlin 2.2.0 and
+#     Gradle 9.4.1 for 0.87, and React Native's OWN react-native-gradle-plugin
+#     will not compile under them (`:gradle-plugin:shared:compileKotlin`).
+#   * iOS 0.82 and 0.84-0.86: `pod install` cannot resolve `React-Core-prebuilt`,
+#     the prebuilt-frameworks setup the example carries for 0.87.
+#   * iOS 0.77-0.81: `Pods/fmt` will not compile against the runner's Clang.
+# The rows were removed rather than left red, because a matrix that is always
+# red teaches people to ignore it. Restoring them means pinning Gradle, Kotlin
+# and the Podfile per row exactly as the JS dependencies already are; see
+# `docs/platform-support.md` §1a, which keeps the full failure record.
+#
+# THE CODE FLOOR IS STILL 0.77, and that reasoning is unaffected by any of the
+# above — it is simply no longer verified, so it is no longer claimed. 0.77 is
+# the code floor for two independent reasons, neither about Paper being removed:
 #   1. iOS: `codegenConfig.ios.componentProvider` — the mechanism that puts
 #      `AutoskeletonOverlayView` into `RCTThirdPartyComponentsProvider.mm` (see
 #      that file's own header comment in `ios/AutoskeletonOverlayView.mm`) —
@@ -126,76 +140,6 @@ jobs:
         # `@react-native-community/template@<same patch>` ships, so the row
         # matches a real, shipped app configuration rather than a guess.
         include:
-          - react-native-version: '0.77.3'
-            react: '18.3.1'
-            react-test-renderer: '18.3.1'
-            types-react: '^18.2.6'
-            community-cli: '15.0.1'
-            trim-example: 'true'
-            npm-install-flags: '--legacy-peer-deps'
-          - react-native-version: '0.78.3'
-            react: '19.0.0'
-            react-test-renderer: '19.0.0'
-            types-react: '^19.0.0'
-            community-cli: '15.0.1'
-            trim-example: 'true'
-            npm-install-flags: '--legacy-peer-deps'
-          - react-native-version: '0.79.7'
-            react: '19.0.0'
-            react-test-renderer: '19.0.0'
-            types-react: '^19.0.0'
-            community-cli: '18.0.0'
-            trim-example: 'true'
-            npm-install-flags: '--legacy-peer-deps'
-          - react-native-version: '0.80.3'
-            react: '19.1.0'
-            react-test-renderer: '19.1.0'
-            types-react: '^19.1.0'
-            community-cli: '19.1.2'
-            trim-example: 'true'
-            npm-install-flags: '--legacy-peer-deps'
-          - react-native-version: '0.81.6'
-            react: '19.1.4'
-            react-test-renderer: '19.1.0'
-            types-react: '^19.1.4'
-            community-cli: '20.0.0'
-            trim-example: 'true'
-            npm-install-flags: '--legacy-peer-deps'
-          - react-native-version: '0.82.1'
-            react: '19.2.3'
-            react-test-renderer: '19.2.3'
-            types-react: '^19.2.0'
-            community-cli: '20.2.0'
-            trim-example: 'false'
-            npm-install-flags: ''
-          - react-native-version: '0.83.10'
-            react: '19.2.3'
-            react-test-renderer: '19.2.3'
-            types-react: '^19.2.0'
-            community-cli: '20.2.0'
-            trim-example: 'false'
-            npm-install-flags: ''
-          - react-native-version: '0.84.1'
-            react: '19.2.3'
-            react-test-renderer: '19.2.3'
-            types-react: '^19.2.0'
-            community-cli: '20.2.0'
-            trim-example: 'false'
-            npm-install-flags: ''
-          - react-native-version: '0.85.3'
-            react: '19.2.3'
-            react-test-renderer: '19.2.3'
-            types-react: '^19.2.0'
-            community-cli: '20.2.0'
-            trim-example: 'false'
-            npm-install-flags: ''
-          - react-native-version: '0.86.3'
-            react: '19.2.3'
-            react-test-renderer: '19.2.3'
-            types-react: '^19.2.0'
-            community-cli: '20.2.0'
-            trim-example: 'false'
-            npm-install-flags: ''
           - react-native-version: '0.87.1'
             react: '19.2.3'
             react-test-renderer: '19.2.3'
@@ -322,76 +266,6 @@ jobs:
         # Same rows, same verified pins, same reasoning as the Android
         # matrix above — see the comment there.
         include:
-          - react-native-version: '0.77.3'
-            react: '18.3.1'
-            react-test-renderer: '18.3.1'
-            types-react: '^18.2.6'
-            community-cli: '15.0.1'
-            trim-example: 'true'
-            npm-install-flags: '--legacy-peer-deps'
-          - react-native-version: '0.78.3'
-            react: '19.0.0'
-            react-test-renderer: '19.0.0'
-            types-react: '^19.0.0'
-            community-cli: '15.0.1'
-            trim-example: 'true'
-            npm-install-flags: '--legacy-peer-deps'
-          - react-native-version: '0.79.7'
-            react: '19.0.0'
-            react-test-renderer: '19.0.0'
-            types-react: '^19.0.0'
-            community-cli: '18.0.0'
-            trim-example: 'true'
-            npm-install-flags: '--legacy-peer-deps'
-          - react-native-version: '0.80.3'
-            react: '19.1.0'
-            react-test-renderer: '19.1.0'
-            types-react: '^19.1.0'
-            community-cli: '19.1.2'
-            trim-example: 'true'
-            npm-install-flags: '--legacy-peer-deps'
-          - react-native-version: '0.81.6'
-            react: '19.1.4'
-            react-test-renderer: '19.1.0'
-            types-react: '^19.1.4'
-            community-cli: '20.0.0'
-            trim-example: 'true'
-            npm-install-flags: '--legacy-peer-deps'
-          - react-native-version: '0.82.1'
-            react: '19.2.3'
-            react-test-renderer: '19.2.3'
-            types-react: '^19.2.0'
-            community-cli: '20.2.0'
-            trim-example: 'false'
-            npm-install-flags: ''
-          - react-native-version: '0.83.10'
-            react: '19.2.3'
-            react-test-renderer: '19.2.3'
-            types-react: '^19.2.0'
-            community-cli: '20.2.0'
-            trim-example: 'false'
-            npm-install-flags: ''
-          - react-native-version: '0.84.1'
-            react: '19.2.3'
-            react-test-renderer: '19.2.3'
-            types-react: '^19.2.0'
-            community-cli: '20.2.0'
-            trim-example: 'false'
-            npm-install-flags: ''
-          - react-native-version: '0.85.3'
-            react: '19.2.3'
-            react-test-renderer: '19.2.3'
-            types-react: '^19.2.0'
-            community-cli: '20.2.0'
-            trim-example: 'false'
-            npm-install-flags: ''
-          - react-native-version: '0.86.3'
-            react: '19.2.3'
-            react-test-renderer: '19.2.3'
-            types-react: '^19.2.0'
-            community-cli: '20.2.0'
-            trim-example: 'false'
-            npm-install-flags: ''
           - react-native-version: '0.87.1'
             react: '19.2.3'
             react-test-renderer: '19.2.3'
