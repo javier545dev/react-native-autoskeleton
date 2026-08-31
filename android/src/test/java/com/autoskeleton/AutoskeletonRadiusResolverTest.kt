@@ -10,6 +10,7 @@ import com.facebook.react.uimanager.style.BorderRadiusProp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -32,6 +33,10 @@ import org.robolectric.RuntimeEnvironment
  */
 @RunWith(RobolectricTestRunner::class)
 class AutoskeletonRadiusResolverTest {
+    /** See the rule's own doc: without it any code path that reads a React
+     *  Native feature flag fails to link on the host JVM. */
+    @get:Rule val featureFlags = AutoskeletonFeatureFlagsRule()
+
     private fun freshView(): FrameLayout {
         val context = RuntimeEnvironment.getApplication()
         DisplayMetricsHolder.initDisplayMetricsIfNotInitialized(context)

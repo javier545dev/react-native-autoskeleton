@@ -6,6 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -27,6 +28,10 @@ import kotlin.math.abs
  */
 @RunWith(RobolectricTestRunner::class)
 class AutoskeletonSensorTest {
+    /** See the rule's own doc: without it any code path that reads a React
+     *  Native feature flag fails to link on the host JVM. */
+    @get:Rule val featureFlags = AutoskeletonFeatureFlagsRule()
+
     private val tolerance = 0.5f
 
     private fun assertShapesMatch(actual: List<AutoskeletonShapeInfo>, expectedName: String) {
