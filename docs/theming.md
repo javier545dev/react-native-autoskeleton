@@ -14,6 +14,18 @@ theming interop operates purely at the React **props** layer, upstream of
 
 ## The three ways to theme, and where each works
 
+<p align="center">
+  <img
+    src="assets/css-variables.png"
+    alt="Three identical components rendering blue, amber and neutral skeletons purely from scoped CSS variables"
+    width="720">
+</p>
+
+<sub>Three identical components, three skeleton colours, **zero props**. The
+only difference between them is which element they are nested inside: the first
+two sit under scopes declaring `--skl-base`, the third declares nothing and
+inherits `:root`. Recorded from the `examples/vite` `#/css-variables` demo.</sub>
+
 | Mechanism | Web | iOS | Android |
 |---|---|---|---|
 | `SkeletonProvider theme={{ baseColor, highlightColor, defaultRadius, speedMs }}` | yes | yes | yes (radius caveat below) |

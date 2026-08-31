@@ -28,7 +28,7 @@
 // 418/423/425 are the hydration family.
 
 import { useSyncExternalStore } from 'react';
-import { DemoReadout, DemoReadoutRow } from '../_demo/DemoShell';
+import { DemoReadout, DemoReadoutRow } from '../_demo/ui';
 
 export interface ConsoleRecord {
   readonly level: 'console.error' | 'console.warn' | 'uncaught';
@@ -102,7 +102,7 @@ export function HydrationConsole() {
       </DemoReadout>
 
       {entries.length === 0 ? (
-        <p className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">
+        <p className="ui-note">
           React has said nothing, on either channel, while a real server-rendered skeleton was on screen and
           hydrating.
         </p>
@@ -113,11 +113,11 @@ export function HydrationConsole() {
               key={`${index}-${entry.text.slice(0, 32)}`}
               className={
                 entry.hydration
-                  ? 'rounded border border-red-500/40 bg-red-500/[.08] p-3'
-                  : 'rounded border border-black/[.08] p-3 dark:border-white/[.145]'
+                  ? 'rounded border border-ui-danger/40 bg-ui-danger/10 p-3'
+                  : 'rounded border border-ui-line p-3'
               }
             >
-              <span className="text-zinc-500">
+              <span className="text-ui-ink-3">
                 {entry.level}
                 {entry.hydration ? ' · hydration' : ''} ·{' '}
               </span>

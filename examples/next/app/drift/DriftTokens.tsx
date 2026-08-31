@@ -12,7 +12,7 @@
 // page is a measurement, not an assertion.
 
 import { useSyncExternalStore } from 'react';
-import { DemoReadout, DemoReadoutRow } from '../_demo/DemoShell';
+import { DemoReadout, DemoReadoutRow, DemoStage } from '../_demo/ui';
 
 interface CascadeReading {
   readonly cssToken: string;
@@ -80,23 +80,23 @@ export function DriftTokens({ matchedToken, driftedToken }: { matchedToken: stri
   );
 
   return (
-    <div className="mt-10 border-t border-black/[.08] pt-8 dark:border-white/[.145]">
-      <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">The three tokens</h2>
-      <DemoReadout>
-        <DemoReadoutRow label="bundle.css (:root)" value={reading.cssToken} />
-        <DemoReadoutRow label="matched manifest" value={matchedToken} />
-        <DemoReadoutRow label="drifted manifest" value={driftedToken} />
-      </DemoReadout>
+    <>
+      <DemoStage label="The three tokens" live="manifest.integrity">
+        <DemoReadout>
+          <DemoReadoutRow label="bundle.css (:root)" value={reading.cssToken} />
+          <DemoReadoutRow label="matched manifest" value={matchedToken} />
+          <DemoReadoutRow label="drifted manifest" value={driftedToken} />
+        </DemoReadout>
+      </DemoStage>
 
-      <h2 className="mt-8 text-sm font-medium uppercase tracking-wide text-zinc-500">
-        What the cascade resolved
-      </h2>
-      <DemoReadout>
-        <DemoReadoutRow label="matched height" value={reading.matchedHeight} />
-        <DemoReadoutRow label="matched clip-path" value={reading.matchedClipPath} />
-        <DemoReadoutRow label="drifted height" value={reading.driftedHeight} />
-        <DemoReadoutRow label="drifted clip-path" value={reading.driftedClipPath} />
-      </DemoReadout>
-    </div>
+      <DemoStage label="What the cascade resolved" live="getComputedStyle">
+        <DemoReadout>
+          <DemoReadoutRow label="matched height" value={reading.matchedHeight} />
+          <DemoReadoutRow label="matched clip-path" value={reading.matchedClipPath} />
+          <DemoReadoutRow label="drifted height" value={reading.driftedHeight} />
+          <DemoReadoutRow label="drifted clip-path" value={reading.driftedClipPath} />
+        </DemoReadout>
+      </DemoStage>
+    </>
   );
 }

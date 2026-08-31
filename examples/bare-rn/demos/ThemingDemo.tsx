@@ -18,7 +18,8 @@ import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { AutoSkeleton, SkeletonProvider } from 'autoskeleton';
 import { Segmented } from './controls';
-import { DEMO_COLORS, DemoPage, Panel, Readout, Row } from './ui';
+import { useDemoTheme } from './theme';
+import { DemoPage, Panel, Readout, Row } from './ui';
 
 const THEMES = {
   light: { baseColor: '#e2e8f0', highlightColor: '#f8fafc' },
@@ -75,11 +76,12 @@ export function ThemingDemo(): React.JSX.Element {
 }
 
 function Card(): React.JSX.Element {
+  const t = useDemoTheme();
   return (
     <View style={styles.card}>
-      <View style={styles.line} />
-      <View style={[styles.line, styles.lineShort]} />
-      <View style={styles.block} />
+      <View style={[styles.line, { backgroundColor: t.color.ink }]} />
+      <View style={[styles.line, styles.lineShort, { backgroundColor: t.color.ink }]} />
+      <View style={[styles.block, { backgroundColor: t.color.lineStrong }]} />
     </View>
   );
 }
@@ -92,7 +94,6 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 20,
     borderRadius: 4,
-    backgroundColor: DEMO_COLORS.ink,
   },
   lineShort: {
     width: '60%',
@@ -101,6 +102,5 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 72,
     borderRadius: 10,
-    backgroundColor: '#334155',
   },
 });

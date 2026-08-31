@@ -1,3 +1,5 @@
+<img src="../../docs/assets/autoskeleton-logo.svg" alt="" width="64" height="64">
+
 # autoskeleton — Expo example
 
 An Expo app that installs `autoskeleton` from the packed tarball
@@ -96,24 +98,76 @@ overlay exist" check and fail this one.
 
 ## What is on screen (native)
 
-Two things, stacked, and they do not mix:
+Two things, stacked, and they do not mix.
 
-**1. `PaintGateStrip`** — the on-device theming fixture, mounted at the top and
-never behind a menu entry. `npm run gate:uniwind` launches the app and polls
-the **raw Android framebuffer** for three saturated registration colours
-(`#ff00ff`, `#00ff00`, `#0000ff`), derives each target's centre from its frame's
-bounding box, and asserts the painted shimmer pixels resolve from the
-`className` values — at every phase of the shimmer, so a light phase cannot be
-mistaken for a correct theme. It performs no navigation and cannot; putting the
-fixture behind a menu would make it time out.
+### 1. The three coloured rectangles at the top are not a rendering bug
 
-**2. `DemoGallery`** (`demos/registry.ts`) — three browsable demos:
+`PaintGateStrip` is the on-device theming fixture, mounted at the top and never
+behind a menu entry. `npm run gate:uniwind` launches the app and polls the **raw
+Android framebuffer** for three saturated registration colours (`#ff00ff`,
+`#00ff00`, `#0000ff`), derives each target's centre from its frame's bounding
+box, and asserts the painted shimmer pixels resolve from the `className` values
+— at every phase of the shimmer, so a light phase cannot be mistaken for a
+correct theme. It performs no navigation and cannot; putting the fixture behind
+a menu would make it time out with *"paint-gate fixture never appeared on
+screen"*.
 
-| Demo | What it makes obvious |
-| --- | --- |
-| Theming with uniwind | One `className` drives the shimmer colours, checked against swatches carrying the same classes. |
-| Image pipeline | Skeleton → `expo-image` blurhash → decoded image, and the handoff reason it really reports. |
-| Basics under Expo | The same tarball, resolved by Expo autolinking instead of the RN CLI. |
+Because a magenta / green / blue strip at the top of an app reads as a broken
+image or a failed shader, **the gallery's home screen opens with a small card
+directly beneath it that says exactly this**. The confusion is documented
+in-app rather than left for the reader to resolve.
+
+That is also why nothing else in `demos/` may paint those three exact colours:
+a second region in any of them would widen the gate's bounding box and move its
+sample point off the fixture. The rule is stated in `demos/ui.tsx` and restated
+in `demos/theme.ts`, which is where a new colour would be added.
+
+### 2. The demo gallery
+
+`DemoGallery` (`demos/registry.ts`) scrolls beneath the strip. Home carries the
+explanatory card, a one-sentence pitch, a hero card that cycles on its own
+(about 1.5 s of skeleton, then the real content), and the index as section
+headers on one scrolling list — the same grouped taxonomy every example app in
+this repository uses.
+
+| Group | Demo | What it makes obvious |
+| --- | --- | --- |
+| Start here | Basics under Expo | The same tarball, resolved by Expo autolinking instead of the RN CLI. |
+| What gets detected | Image pipeline | Skeleton → `expo-image` blurhash → decoded image, and the handoff reason it really reports. |
+| Theming & motion | Theming with uniwind | One `className` drives the shimmer colours, checked against swatches carrying the same classes. |
+
+Navigation is hand-rolled (`demos/nav.tsx`): a `useState<Route[]>` stack, one
+shared nav bar, and a `BackHandler` subscription so the **Android hardware back
+button pops the stack** instead of killing the app. No navigation library — a
+native-stack dependency for two screens would be the only native package this
+app does not otherwise need. The gallery follows the OS colour scheme; the gate
+strip does not, because the gate reads its pixels.
+
+### Shared with `examples/bare-rn`, and what is not
+
+`demos/theme.ts` (colour, type, spacing, radii, `useDemoTheme`) and
+`demos/nav.tsx` (the route stack, the nav bar, the back handler) exist
+**byte-identically** in both RN example apps:
+
+```bash
+diff examples/bare-rn/demos/theme.ts examples/expo/demos/theme.ts   # prints nothing
+diff examples/bare-rn/demos/nav.tsx  examples/expo/demos/nav.tsx    # prints nothing
+```
+
+They are duplicated rather than extracted to a shared folder because the two
+apps keep separate lockfiles, run different React Native versions (0.86.3 here,
+0.87.1 there) and are installed independently in CI from a packed tarball — a
+shared folder would need `metro.config` `watchFolders` surgery in both and would
+undermine the tarball-install realism that is the point of these examples.
+
+`ui.tsx` and `controls.tsx` stay per-app on purpose: each carries a load-bearing
+rule in its header (the framebuffer colour rule here, a naming rule there) and
+their needs genuinely differ — three demos need fewer affordances than twelve
+do. Both are built on the same tokens, which removes the drift that mattered.
+
+`App.web.tsx` imports **none** of `demos/`: the gallery reaches
+`autoskeleton/uniwind`, which is native-only, so the web entry stays the plain
+geometry fixture `test/web/expo-web-export.spec.ts` drives.
 
 ### What the uniwind gate deliberately does not claim
 

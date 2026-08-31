@@ -1,75 +1,431 @@
 /* examples/vite/src/App.css
  *
  * Showcase chrome plus the small set of content shapes the demos reuse
- * (card, avatar, prose, swatch, badge). Deliberately plain: every visual
- * decision here is one the DOM sensor will read back, so a heavily decorated
- * demo would be documenting the stylesheet rather than the library.
+ * (card, avatar, prose, swatch, badge). Every chrome value resolves through a
+ * `--ui-*` token from `src/styles/tokens.css`, whose header states the five
+ * rules this file exists to obey — the short version being that the chrome
+ * must never be mistaken for the skeleton it frames.
+ *
+ * The content shapes stay deliberately plain: every visual decision on them
+ * is one the DOM sensor will read back, so a heavily decorated demo would be
+ * documenting the stylesheet rather than the library. Their GEOMETRY is
+ * therefore frozen — the sizes below are the sizes the sensor measures, and
+ * the borders added in this rewrite are all `box-sizing: border-box` so the
+ * measured box did not move.
  *
  * One rule worth knowing before editing: a container's own shape is emitted
  * ONLY when none of its descendants produced one. `.demo-card` is therefore
  * given a border and no background, so the skeleton shows its parts (avatar,
  * title, meta, action) rather than one slab over the whole card. */
 
+/* ── Shell ──────────────────────────────────────────────────────────────── */
+
 .app {
-  text-align: left;
-  padding: 0 24px 64px;
-}
-
-.app-header {
-  padding: 40px 0 24px;
-}
-
-.app-header h1 {
-  margin: 0 0 12px;
-  font-size: 40px;
-  letter-spacing: -1px;
-}
-
-.app-header p {
-  max-width: 62ch;
-}
-
-.app-nav {
-  position: sticky;
-  top: 0;
-  z-index: 2;
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 12px 0;
-  margin-bottom: 8px;
-  background: var(--bg);
-  border-block: 1px solid var(--border);
+  flex-direction: column;
+  flex: 1;
+  min-height: 100%;
 }
 
-.app-nav a {
-  font-size: 14px;
-  line-height: 1;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--text);
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 50;
+  padding: var(--ui-sp-2) var(--ui-sp-3);
+  border: 1px solid var(--ui-line-strong);
+  border-radius: var(--ui-r-md);
+  background: var(--ui-surface);
+  font-size: var(--ui-text-sm);
   text-decoration: none;
 }
 
-.app-nav a:hover {
-  border-color: var(--accent-border);
-  color: var(--text-h);
+.skip-link:focus {
+  left: var(--ui-sp-3);
+  top: var(--ui-sp-3);
 }
 
-.app-nav a.is-active {
-  background: var(--accent-bg);
-  border-color: var(--accent-border);
-  color: var(--text-h);
+/* ── Identity band ──────────────────────────────────────────────────────── */
+
+.band {
+  border-bottom: 1px solid var(--ui-line);
+  background: var(--ui-surface);
 }
+
+.band-inner {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--ui-sp-4);
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: var(--ui-sp-3) var(--ui-sp-5);
+}
+
+.band-mark {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-sp-2);
+  color: var(--ui-ink);
+  font-size: var(--ui-text-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+}
+
+/* The mark is static and stays static. §0's chrome rule forbids motion
+ * anywhere the skeleton is not, and this one draws skeleton shapes of its own,
+ * so a hover transform or a pulse here would be the exact confusion the rule
+ * exists to prevent. `flex: none` keeps it from being squeezed when the band
+ * runs out of room; the wordmark beside it is what shrinks. */
+.band-logo {
+  display: block;
+  flex: none;
+}
+
+/* Wordmark and role keep their shared baseline. The logo is centred against
+ * the pair rather than baseline-aligned: on a baseline the image's bottom edge
+ * sits on the text baseline, so its box hangs above the line and grows the
+ * band. Centred, the band measures the same 57.14px / 65.19px it did before
+ * the mark existed — which is what keeps `.demo`'s 72px `scroll-margin-top`
+ * clearing it. */
+.band-mark-text {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ui-sp-2);
+}
+
+.band-mark-sub {
+  font-size: var(--ui-text-2xs);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ui-ink-3);
+}
+
+.renderers {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-sp-1);
+  margin-left: auto;
+}
+
+.renderer {
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-r-pill);
+  font-size: var(--ui-text-sm);
+  line-height: var(--ui-leading-sm);
+  color: var(--ui-ink-2);
+  text-decoration: none;
+}
+
+.renderer:hover {
+  border-color: var(--ui-line-strong);
+  color: var(--ui-ink);
+}
+
+.renderer[aria-current='true'] {
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent);
+  font-weight: 600;
+}
+
+/* The other renderers are GitHub folder links, never localhost links: neither
+ * app can assume the other's dev server is running. The local URLs are stated
+ * as text instead, so the reader knows what to start. */
+.renderer-urls {
+  margin-left: var(--ui-sp-3);
+  padding-left: var(--ui-sp-3);
+  border-left: 1px solid var(--ui-line);
+  font-family: var(--ui-font-mono);
+  font-size: var(--ui-text-2xs);
+  line-height: var(--ui-leading-2xs);
+  color: var(--ui-ink-3);
+  white-space: nowrap;
+}
+
+.band-menu {
+  display: none;
+  padding: var(--ui-sp-2) var(--ui-sp-3);
+  border: 1px solid var(--ui-line-strong);
+  border-radius: var(--ui-r-pill);
+  background: var(--ui-surface);
+  font-family: var(--ui-font-mono);
+  font-size: var(--ui-text-sm);
+  line-height: 1;
+  color: var(--ui-ink);
+  cursor: pointer;
+}
+
+/* ── Sidebar + content ──────────────────────────────────────────────────── */
+
+.shell {
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ui-sp-7);
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 var(--ui-sp-5) var(--ui-sp-8);
+}
+
+.sidebar {
+  position: sticky;
+  top: var(--ui-sp-5);
+  flex: none;
+  width: 224px;
+  max-height: calc(100svh - var(--ui-sp-7));
+  overflow-y: auto;
+  padding: var(--ui-sp-7) 0 var(--ui-sp-5);
+}
+
+.nav-group {
+  margin: var(--ui-sp-5) 0 var(--ui-sp-1);
+  padding: 0 var(--ui-sp-3);
+  font-size: var(--ui-text-2xs);
+  line-height: var(--ui-leading-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ui-ink-3);
+}
+
+.nav-link {
+  display: block;
+  padding: 6px var(--ui-sp-3);
+  border-left: 2px solid transparent;
+  border-radius: 0 var(--ui-r-sm) var(--ui-r-sm) 0;
+  font-size: var(--ui-text-sm);
+  line-height: var(--ui-leading-sm);
+  color: var(--ui-ink-2);
+  text-decoration: none;
+}
+
+.nav-link:hover {
+  background: var(--ui-accent-soft);
+  color: var(--ui-ink);
+}
+
+.nav-link[aria-current='page'] {
+  border-left-color: var(--ui-accent);
+  background: var(--ui-accent-soft);
+  color: var(--ui-ink);
+  font-weight: 600;
+}
+
+.nav-all {
+  margin-bottom: var(--ui-sp-1);
+  font-weight: 600;
+  color: var(--ui-ink);
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  padding-top: var(--ui-sp-7);
+}
+
+.back-link {
+  display: inline-block;
+  font-size: var(--ui-text-sm);
+  line-height: var(--ui-leading-sm);
+  text-decoration: none;
+}
+
+.back-link:hover {
+  text-decoration: underline;
+}
+
+/* The sidebar's own header and the scrim exist only in narrow mode, where the
+ * same single nav list turns into an overlay panel. */
+.sidebar-head,
+.nav-scrim {
+  display: none;
+}
+
+@media (max-width: 879px) {
+  /* Only here does the band stick. On desktop it scrolls away with the page,
+   * which is why nothing translucent is ever over a stage when
+   * `test/web/tailwind-app-theme.spec.ts` samples a painted pixel. */
+  .band {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+  }
+
+  .band-menu {
+    display: block;
+  }
+
+  .renderer-urls {
+    display: none;
+  }
+
+  /* Same element, same `data-testid`s, different position: rendering a second
+   * copy of the list for narrow screens would make every `nav-*` selector
+   * match twice. */
+  .sidebar {
+    display: none;
+    position: fixed;
+    inset-block: 0;
+    inset-inline-start: 0;
+    z-index: 40;
+    box-sizing: border-box;
+    width: min(320px, 86vw);
+    max-height: none;
+    padding: var(--ui-sp-4);
+    background: var(--ui-surface);
+    border-inline-end: 1px solid var(--ui-line);
+    /* The one shadow in this app. A panel floating OVER content is the only
+     * place where flatness would cost the reader information. */
+    box-shadow: 0 0 40px rgb(0 0 0 / 0.18);
+  }
+
+  .sidebar.is-open {
+    display: block;
+  }
+
+  .sidebar-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--ui-sp-3);
+    margin-bottom: var(--ui-sp-3);
+    padding-bottom: var(--ui-sp-3);
+    border-bottom: 1px solid var(--ui-line);
+  }
+
+  .sidebar-title {
+    font-size: var(--ui-text-2xs);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ui-ink-3);
+  }
+
+  .nav-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 39;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: rgb(0 0 0 / 0.4);
+    cursor: pointer;
+  }
+
+  .content {
+    padding-top: var(--ui-sp-6);
+  }
+}
+
+@media (max-width: 1079px) {
+  .renderer-urls {
+    display: none;
+  }
+}
+
+/* ── Hero ───────────────────────────────────────────────────────────────── */
+
+.hero-kicker {
+  margin-bottom: var(--ui-sp-2);
+  font-size: var(--ui-text-2xs);
+  line-height: var(--ui-leading-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ui-ink-3);
+}
+
+.hero-title {
+  max-width: 22ch;
+  font-size: var(--ui-text-2xl);
+  line-height: var(--ui-leading-2xl);
+  letter-spacing: -0.02em;
+}
+
+.hero-claim {
+  margin-top: var(--ui-sp-4);
+  max-width: 68ch;
+  font-size: var(--ui-text-md);
+  line-height: var(--ui-leading-md);
+  color: var(--ui-ink-2);
+}
+
+/* `--ui-ink-3` is a micro-label colour: at 2.2:1 on the page background it is
+ * legible as an uppercase kicker and not as a sentence. Anything with real
+ * words in it uses `--ui-ink-2`. */
+.hero-meta {
+  margin-top: var(--ui-sp-4);
+  max-width: 68ch;
+  font-size: var(--ui-text-sm);
+  line-height: var(--ui-leading-sm);
+  color: var(--ui-ink-2);
+}
+
+.app-main {
+  margin-top: var(--ui-sp-8);
+}
+
+/* ── Group section ──────────────────────────────────────────────────────── */
+
+.group + .group {
+  /* 64 is the demo-to-demo rhythm; a group boundary adds the 48 that makes it
+   * read as a bigger break than the sections it contains. */
+  margin-top: calc(var(--ui-sp-8) + var(--ui-sp-7));
+}
+
+.group-head {
+  margin-bottom: var(--ui-sp-6);
+  padding-bottom: var(--ui-sp-3);
+  border-bottom: 1px solid var(--ui-line);
+}
+
+.group-title {
+  font-size: var(--ui-text-xl);
+  line-height: var(--ui-leading-xl);
+  letter-spacing: -0.01em;
+}
+
+.group-line {
+  margin-top: var(--ui-sp-2);
+  max-width: 68ch;
+  font-size: var(--ui-text-md);
+  line-height: var(--ui-leading-md);
+  color: var(--ui-ink-2);
+}
+
+/* ── Demo section ───────────────────────────────────────────────────────── */
 
 .demo {
-  padding: 40px 0;
-  border-bottom: 1px solid var(--border);
+  /* At least the height of the band, which is sticky below 880px. The theming
+   * gate calls `scrollIntoViewIfNeeded()` before it samples a pixel, and a
+   * demo scrolled under the band would be sampled through it. */
+  scroll-margin-top: 72px;
+}
+
+.demo + .demo {
+  margin-top: var(--ui-sp-8);
+}
+
+.demo-kicker {
+  margin-bottom: var(--ui-sp-2);
+  font-size: var(--ui-text-2xs);
+  line-height: var(--ui-leading-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ui-ink-3);
 }
 
 .demo-title {
-  margin: 0 0 8px;
+  font-size: var(--ui-text-lg);
+  line-height: var(--ui-leading-lg);
+  letter-spacing: -0.01em;
 }
 
 .demo-title a {
@@ -78,79 +434,242 @@
 }
 
 .demo-title a:hover {
-  text-decoration: underline;
+  color: var(--ui-accent);
 }
 
-.demo-shows {
+.demo-claim {
+  margin-top: var(--ui-sp-2);
   max-width: 68ch;
-  margin-bottom: 24px;
+  font-size: var(--ui-text-md);
+  line-height: var(--ui-leading-md);
+  color: var(--ui-ink-2);
 }
+
+/* ── Stage ──────────────────────────────────────────────────────────────── */
 
 .demo-stage {
-  padding: 24px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--social-bg);
+  margin-top: var(--ui-sp-5);
+  padding: var(--ui-sp-5);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-r-lg);
+  background: var(--ui-stage);
 }
+
+/* A real row in the flow rather than an absolutely positioned corner label:
+ * the stage is the one place in this app where an overlapping element would
+ * change what a screenshot — or the theming gate's single sampled pixel —
+ * reads back. */
+.demo-stage-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--ui-sp-2);
+  margin: calc(-1 * var(--ui-sp-5)) calc(-1 * var(--ui-sp-5)) var(--ui-sp-5);
+  padding: var(--ui-sp-3) var(--ui-sp-5);
+  border-bottom: 1px solid var(--ui-line);
+}
+
+.demo-stage-live {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-sp-2);
+  font-size: var(--ui-text-2xs);
+  line-height: var(--ui-leading-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ui-ink-2);
+}
+
+.demo-stage-live::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ui-accent);
+}
+
+.demo-stage-api {
+  font-family: var(--ui-font-mono);
+  font-size: var(--ui-text-2xs);
+  line-height: var(--ui-leading-2xs);
+  color: var(--ui-ink-3);
+}
+
+/* The cache-replay demo mounts and unmounts its panel, so the slot keeps a
+ * stable height and the page does not jump under the buttons. */
+.demo-stage-inner {
+  min-height: 92px;
+}
+
+/* ── Controls, readout, note ────────────────────────────────────────────── */
 
 .demo-controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 20px;
+  gap: var(--ui-sp-2);
+  margin-top: var(--ui-sp-3);
 }
 
-.demo-controls .counter {
+.counter {
+  padding: var(--ui-sp-2) var(--ui-sp-3);
+  border: 1px solid var(--ui-line-strong);
+  border-radius: var(--ui-r-pill);
+  background: var(--ui-surface);
+  font-family: var(--ui-font-mono);
+  font-size: var(--ui-text-sm);
+  line-height: 1.2;
+  color: var(--ui-ink);
   cursor: pointer;
-  font-size: 14px;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  background: var(--bg);
 }
 
-.demo-controls .counter:disabled {
+.counter:hover:not(:disabled) {
+  border-color: var(--ui-accent);
+  color: var(--ui-accent);
+}
+
+.counter:disabled {
   cursor: default;
-  opacity: 0.6;
+  color: var(--ui-ink-3);
+  border-color: var(--ui-line);
 }
 
 .demo-metrics,
-.demo-note,
 .demo-readout {
-  margin-top: 12px;
-  font-size: 14px;
-  line-height: 150%;
+  box-sizing: border-box;
+  margin-top: var(--ui-sp-3);
   max-width: 68ch;
-}
-
-.demo-metrics {
-  font-family: var(--mono);
+  padding: var(--ui-sp-2) var(--ui-sp-3);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-r-md);
+  background: var(--ui-code-bg);
+  font-family: var(--ui-font-mono);
+  font-size: var(--ui-text-xs);
+  line-height: var(--ui-leading-xs);
+  color: var(--ui-ink-2);
 }
 
 .demo-metrics-idle {
-  opacity: 0.65;
+  color: var(--ui-ink-3);
 }
 
+/* Already inside a code panel: a second border and background around the
+ * nested `<code>` would be two panels deep for one value. */
+.demo-metrics code,
+.demo-readout code {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 1em;
+  color: inherit;
+}
+
+.demo-note {
+  margin-top: var(--ui-sp-4);
+  max-width: 68ch;
+  font-size: var(--ui-text-sm);
+  line-height: var(--ui-leading-sm);
+  color: var(--ui-ink-2);
+}
+
+/* ── Source disclosure ──────────────────────────────────────────────────── */
+
 .demo-source {
-  margin-top: 20px;
-  font-size: 14px;
+  margin-top: var(--ui-sp-4);
 }
 
 .demo-source summary {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-sp-2);
+  padding: var(--ui-sp-2) var(--ui-sp-3);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-r-md);
+  background: var(--ui-surface);
+  font-size: var(--ui-text-sm);
+  line-height: var(--ui-leading-sm);
+  color: var(--ui-ink-2);
   cursor: pointer;
+  list-style: none;
+}
+
+.demo-source summary::-webkit-details-marker {
+  display: none;
+}
+
+.demo-source summary::before {
+  content: '+';
+  font-family: var(--ui-font-mono);
+  color: var(--ui-ink-3);
+}
+
+.demo-source[open] summary::before {
+  content: '\2212';
+}
+
+.demo-source summary:hover {
+  border-color: var(--ui-line-strong);
+  color: var(--ui-ink);
+}
+
+.demo-source summary code {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ui-ink);
 }
 
 .demo-source pre {
   overflow: auto;
   max-height: 420px;
-  margin: 12px 0 0;
-  padding: 16px;
-  border-radius: 8px;
-  background: var(--code-bg);
-  font: 12px/160% var(--mono);
-  color: var(--text-h);
+  margin: var(--ui-sp-2) 0 0;
+  padding: var(--ui-sp-4);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-r-md);
+  background: var(--ui-code-bg);
+  font-family: var(--ui-font-mono);
+  font-size: var(--ui-text-xs);
+  line-height: 1.6;
+  color: var(--ui-ink);
+}
+
+.demo-source pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 1em;
+}
+
+/* ── Footer ─────────────────────────────────────────────────────────────── */
+
+.app-footer {
+  margin-top: var(--ui-sp-8);
+  padding-top: var(--ui-sp-5);
+  border-top: 1px solid var(--ui-line);
+  font-size: var(--ui-text-sm);
+  line-height: var(--ui-leading-sm);
+  color: var(--ui-ink-2);
+}
+
+.app-footer p + p {
+  margin-top: var(--ui-sp-2);
+}
+
+/* ── Focus ──────────────────────────────────────────────────────────────── */
+
+a:focus-visible,
+button:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 2px;
 }
 
 /* ── Content shapes the demos reuse ─────────────────────────────────────── */
+/* GEOMETRY IS FROZEN BELOW. Every size, padding and radius here is a value
+ * the DOM sensor measures and turns into a skeleton shape; the borders added
+ * in the token rewrite are all `border-box`, so the measured boxes are the
+ * same boxes they were before. Change colours freely, sizes never. */
 
 .demo-card {
   display: flex;
@@ -158,16 +677,18 @@
   align-items: flex-start;
   max-width: 420px;
   padding: 16px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--ui-line-strong);
   border-radius: 12px;
 }
 
 .demo-avatar {
+  box-sizing: border-box;
   flex: none;
   width: 56px;
   height: 56px;
+  border: 1px solid var(--ui-line-strong);
   border-radius: 8px;
-  background: var(--code-bg);
+  background: var(--ui-code-bg);
 }
 
 .demo-card-body {
@@ -181,12 +702,13 @@
   margin: 0;
   font-size: 18px;
   line-height: 120%;
-  color: var(--text-h);
+  color: var(--ui-ink);
 }
 
 .demo-card-meta {
   font-size: 14px;
   line-height: 140%;
+  color: var(--ui-ink-2);
 }
 
 .demo-card-action {
@@ -194,8 +716,8 @@
   border-radius: 6px;
   font-size: 14px;
   line-height: 140%;
-  background: var(--accent-bg);
-  color: var(--text-h);
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent);
 }
 
 .demo-badges {
@@ -204,17 +726,20 @@
 }
 
 .demo-badge {
+  box-sizing: border-box;
   padding: 4px 10px;
   border-radius: 999px;
   font-size: 12px;
   line-height: 140%;
-  background: var(--code-bg);
+  background: var(--ui-code-bg);
+  color: var(--ui-ink-2);
 }
 
 .demo-prose {
   max-width: 44ch;
   font-size: 16px;
   line-height: 160%;
+  color: var(--ui-ink);
 }
 
 .demo-hero {
@@ -229,6 +754,13 @@
   gap: 32px;
 }
 
+/* The reduced-motion demo puts its readout ABOVE the live pair, so the two
+ * would otherwise touch. Scoped to that adjacency rather than given to
+ * `.demo-pair` outright, which is the first element in every other stage. */
+.demo-readout + .demo-pair {
+  margin-top: var(--ui-sp-4);
+}
+
 .demo-pair-item {
   margin: 0;
   display: flex;
@@ -238,21 +770,29 @@
 }
 
 .demo-pair-item figcaption {
-  font-size: 13px;
-  opacity: 0.8;
+  font-size: var(--ui-text-sm);
+  line-height: var(--ui-leading-sm);
+  color: var(--ui-ink-2);
 }
 
+/* `.demo-swatch`'s 4px radius is load-bearing: the hint demo's caption reads
+ * "No hint — measured radius (4 px)" and the skeleton next to it is supposed
+ * to agree with that number. */
 .demo-swatch {
+  box-sizing: border-box;
   width: 180px;
   height: 110px;
+  border: 1px solid var(--ui-line-strong);
   border-radius: 4px;
-  background: var(--code-bg);
+  background: var(--ui-code-bg);
 }
 
 /* The Tailwind theming demo. `.themed-card` keeps its explicit size because
  * `test/web/tailwind-app-theme.spec.ts` samples the painted pixel at the
  * centre of the overlay drawn over it, and a single opaque block is what
- * makes that sample unambiguous. */
+ * makes that sample unambiguous. No border here for the same reason: the
+ * sensor must resolve this to exactly ONE shape, and the corner radius must
+ * keep coming from the `rounded-xl` utility that gate asserts on. */
 .themed-demo {
   display: flex;
   flex-direction: column;
@@ -263,16 +803,14 @@
 .themed-card {
   width: 240px;
   height: 140px;
-  background: var(--code-bg);
+  background: var(--ui-code-bg);
+  scroll-margin-top: 72px;
 }
 
-.app-footer {
-  padding-top: 40px;
-  font-size: 14px;
-}
-
-/* The cache-replay demo mounts and unmounts its panel, so the slot keeps a
- * stable height and the page does not jump under the buttons. */
-.demo-stage-inner {
-  min-height: 92px;
+/* Degradation flags in the metrics readout. Danger-coloured because a
+ * truncated traversal is a wrong-looking skeleton, not a note: the shape
+ * count printed beside it is the count the sensor got to, not the count the
+ * screen has. */
+.demo-metrics-degraded {
+  color: var(--ui-danger);
 }

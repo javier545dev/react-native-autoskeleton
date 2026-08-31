@@ -20,12 +20,14 @@
 import { Image, StyleSheet, View } from 'react-native';
 import { AutoSkeleton } from 'autoskeleton';
 import { Button, useFakeLoad } from './controls';
-import { DEMO_COLORS, DemoPage, Panel, Row } from './ui';
+import { useDemoTheme } from './theme';
+import { DemoPage, Panel, Row } from './ui';
 
 const PHOTO = require('../assets/photo.png');
 const AVATAR = require('../assets/avatar.png');
 
 export function ImageDemo(): React.JSX.Element {
+  const t = useDemoTheme();
   const load = useFakeLoad(1800);
 
   return (
@@ -39,11 +41,15 @@ export function ImageDemo(): React.JSX.Element {
       >
         <AutoSkeleton key={load.coldKey} isLoading={load.isLoading} skeletonKey="demo-images">
           <View style={styles.gallery}>
-            <Image source={PHOTO} style={styles.hero} resizeMode="cover" />
+            <Image
+              source={PHOTO}
+              style={[styles.hero, { backgroundColor: t.color.codeBg }]}
+              resizeMode="cover"
+            />
             <View style={styles.thumbRow}>
-              <Image source={AVATAR} style={styles.thumb} />
-              <Image source={AVATAR} style={styles.thumb} />
-              <Image source={AVATAR} style={styles.thumb} />
+              <Image source={AVATAR} style={[styles.thumb, { backgroundColor: t.color.codeBg }]} />
+              <Image source={AVATAR} style={[styles.thumb, { backgroundColor: t.color.codeBg }]} />
+              <Image source={AVATAR} style={[styles.thumb, { backgroundColor: t.color.codeBg }]} />
             </View>
           </View>
         </AutoSkeleton>
@@ -63,7 +69,6 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 168,
     borderRadius: 12,
-    backgroundColor: DEMO_COLORS.code,
   },
   thumbRow: {
     flexDirection: 'row',
@@ -73,6 +78,5 @@ const styles = StyleSheet.create({
     width: 72,
     height: 72,
     borderRadius: 10,
-    backgroundColor: DEMO_COLORS.code,
   },
 });

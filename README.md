@@ -1,34 +1,131 @@
+<img src="docs/assets/autoskeleton-logo.svg" alt="" width="96" height="96">
+
 # autoskeleton
+
+<!-- At publish time, add the npm version badge as the first entry in this row:
+     [![npm](https://img.shields.io/npm/v/autoskeleton)](https://www.npmjs.com/package/autoskeleton)
+     It is deliberately absent until then, because an unpublished package renders
+     it as a broken "invalid" badge. -->
+<!-- The two workflow badges read live from GitHub Actions. Both workflows run on
+     every push to `main`; until the first such run they render "no status". -->
+[![Native build matrix](https://github.com/javier545dev/react-native-autoskeleton/actions/workflows/native-matrix.yml/badge.svg?branch=main)](https://github.com/javier545dev/react-native-autoskeleton/actions/workflows/native-matrix.yml)
+[![Playwright](https://github.com/javier545dev/react-native-autoskeleton/actions/workflows/playwright.yml/badge.svg?branch=main)](https://github.com/javier545dev/react-native-autoskeleton/actions/workflows/playwright.yml)
+[![License](https://img.shields.io/github/license/javier545dev/react-native-autoskeleton)](LICENSE)
+[![Runtime dependencies: 0](https://img.shields.io/badge/runtime%20dependencies-0-informational)](package.json)
+[![Web entry: under 8 kB gzip](https://img.shields.io/badge/web%20entry-%3C%208%20kB%20gzip-informational)](benchmarks/budgets.json)
 
 Automatic skeleton loaders for React Native and web. One sensor reads your
 existing layout and paints a skeleton over the geometry it actually measured —
 no hand-authored placeholder shapes, and no second component tree to keep in
 sync with the real one.
 
+<!-- VISUAL — recorded from the `examples/vite` `#/cold-load` demo: the cold
+     mount, the skeleton measured from the card's own laid-out geometry, then
+     the resolved "Ada Lovelace" article. Nothing in the frame is hand-drawn —
+     the four shapes line up with the avatar, title, meta line and Follow
+     action because they were measured from exactly those boxes.
+     To re-record: `npm --prefix examples/vite run dev`, open `#/cold-load`,
+     capture cold mount -> skeleton -> press Resolve -> content, and overwrite
+     `docs/assets/cold-load.gif`. -->
+<p align="center">
+  <img
+    src="docs/assets/cold-load.gif"
+    alt="The cold-load demo: a card beside the skeleton measured from its own geometry"
+    width="720">
+</p>
+
 ```tsx
 import { AutoSkeleton } from 'autoskeleton';
 
 function ProductCard({ product }: { product: Product | null }) {
   return (
-    <AutoSkeleton isLoading={product === null} skeletonKey="product-card">
-      {product !== null && <ProductContent product={product} />}
+    <AutoSkeleton skeletonKey="product-card" data={product}>
+      {(product) => (
+        <article className="card">
+          <img className="card-image" src={product.imageUrl} alt="" />
+          <h2 className="card-title">{product.name}</h2>
+          <p className="card-blurb">{product.blurb}</p>
+        </article>
+      )}
     </AutoSkeleton>
   );
 }
 ```
 
-That is the whole simple case. `autoskeleton` measures the real
-`ProductContent` the first time it renders, caches the result under
-`skeletonKey`, and replays a skeleton over the identical geometry on every
-later loading state — including on a fresh mount, before `ProductContent`
-exists at all.
+That is the whole simple case. `data` is the loading state: `null` or
+`undefined` means loading and **nothing else does** — `0`, `''` and `false` are
+ordinary values that mean loaded. The function child runs only when `data` is
+non-nullish, so `product` is a `Product` inside it and there is no second,
+inverted null check to drift out of sync with the first. Plain children still
+work unchanged, and `isLoading` is still there for a loading state `data`
+cannot express — an `isFetching` flag, or one derived from several sources.
+Pass both and `isLoading` wins.
+
+`autoskeleton` measures the real card, caches the result under `skeletonKey`,
+and replays a skeleton over the identical geometry on every later loading state
+— including on a fresh mount, before the card exists at all.
+
+**It measures what is inside the wrapper while the skeleton is up, and only
+then.** In the form above the card does not exist while `product` is `null`, so
+the *first* loading state of a session has nothing to measure and paints
+nothing. Two ways out, either is fine: render structure that does not depend on
+the data, which is measured and painted on that very first cycle — the
+`#/cold-load` demo in [`examples/vite`](examples/vite) is exactly that — or hand
+the wrapper a `fallback` for the cold case ([below](#the-cold-case-fallback)).
+
+---
+
+## Why not just draw one by hand?
+
+The established skeleton libraries — `react-content-loader`,
+`react-loading-skeleton`, and the rest of that category — hand you primitives
+and ask you to arrange them into something that resembles your UI. That works.
+It also means the skeleton is a second layout you now maintain: every padding
+change, every font swap, every added line of copy is a change you have to make
+twice, and nothing breaks when you only make it once.
+
+`autoskeleton` never asks you to describe the layout, because it reads it.
+
+- **Measured, not declared.** The shapes come from a traversal of the content's
+  own laid-out geometry — `getBoundingClientRect` / `getComputedStyle` on web,
+  a real post-layout `UIView` / `View` tree traversal on iOS and Android — taken
+  on the first frame of the loading state and cached under `skeletonKey`.
+- **Text resolves per line on web.** A wrapped paragraph is one element with one
+  box; the skeleton is one bar per *line box*, fragmented through
+  `Range.getClientRects()`, ragged last line included.
+
+<p align="center">
+  <img
+    src="docs/assets/text-lines.gif"
+    alt="Five skeleton bars resolving into a five-line paragraph, the last line short in both"
+    width="720">
+</p>
+
+<sub>The bar count is not a guess: the readout says <code>5 shapes</code> for the
+five line boxes the browser laid out, and the last bar is short because the last
+line is short.</sub>
+- **One package, three targets.** Native, web DOM, and server rendering
+  (`autoskeleton/ssr`, fed by a build-time capture CLI) resolve out of a single
+  `exports` map by condition — not three packages to keep in step.
+- **Zero runtime dependencies.** `package.json` has no `dependencies` field at
+  all. Skia, Reanimated and uniwind are optional peers you opt into.
+  `"sideEffects": false`.
+- **The bundle size is a gate, not a promise.**
+  `test/packaging/web-bundle.test.ts` builds a real consumer app, gzips the web
+  entry, and fails CI above the ceiling in
+  [`benchmarks/budgets.json`](benchmarks/budgets.json) — the single home of that
+  number. On this commit: 7733 B against a 7933 B ceiling.
+
+What it does **not** replace is a loading state you deliberately designed to
+look *unlike* the content it precedes. If that is what you want, draw it by
+hand — this library's whole premise is that the two should match.
 
 ---
 
 ## Is this for you?
 
-**Yes if** you are on React Native's New Architecture (0.83+) with a
-development build, or on the web, and you are tired of placeholder components
+**Yes if** you are on React Native 0.77+ with the New Architecture enabled and
+a development build, or on the web, and you are tired of placeholder components
 drifting away from the UI they are supposed to imitate.
 
 **Read [`docs/platform-support.md`](docs/platform-support.md) first if** you
@@ -45,7 +142,30 @@ v4 — [an explicit, evidence-backed exclusion](docs/theming.md), not a gap).
 
 ## Install
 
-### Bare React Native — RN 0.83+, New Architecture (Fabric) only
+<!-- PRE-PUBLISH BLOCK — delete this entire block, comment markers included, on
+     the day `autoskeleton` is published to npm. Nothing else in this README
+     needs to change: every command below it is already the post-publish truth. -->
+> **`autoskeleton` is not on npm yet.** The `npm install autoskeleton` lines
+> below describe the published package; they do not work today. Until the first
+> release, build the artifact and install it from the tarball — which is exactly
+> how the four example apps in this repository consume it:
+>
+> ```bash
+> git clone https://github.com/javier545dev/react-native-autoskeleton
+> cd react-native-autoskeleton
+> npm install
+> npm run pack:tarball    # npm pack into .tarball/
+> ```
+>
+> Then depend on it by path, as `examples/*/package.json` already do:
+> `"autoskeleton": "file:../../.tarball/autoskeleton-0.1.0.tgz"`. Re-packing
+> over an existing install has one sharp edge (npm trusts the lockfile
+> `integrity` hash and silently keeps the stale bytes) — the fix, and
+> `npm run examples:unpin`, are in
+> [`docs/development.md`](docs/development.md).
+<!-- END PRE-PUBLISH BLOCK -->
+
+### Bare React Native — RN 0.77+, New Architecture (Fabric) only
 
 ```bash
 npm install autoskeleton
@@ -55,13 +175,42 @@ cd ios && pod install
 Autolinking is automatic via `@react-native-community/cli`. No manual native
 project edits.
 
-### Expo — development build required
+There is no old-architecture code path here and no flag to fall back to one.
+
+**0.77 is the floor because that is where the registration this package needs
+landed** — two independent mechanisms, either one of which would set it alone.
+On iOS, `codegenConfig.ios.componentProvider` feeds
+`RCTThirdPartyComponentsProvider.mm`, which does not exist before 0.77.0. On
+Android, `AutoskeletonPackage.kt` builds `ReactModuleInfo` with Kotlin named
+arguments, whose parameter names were renamed in 0.77.0. Below 0.77 the package
+does not register at all — that is a missing module, not a degraded skeleton.
+
+**On RN 0.77–0.81, "New Architecture" is a requirement you have to satisfy.** It
+has been the default since 0.76, but `newArchEnabled=false` still works there,
+and with it off this library has nothing to run. From 0.82 React Native refuses
+that flag, so on 0.82+ the platform satisfies the requirement for you.
+
+Your React version comes from React Native, not from us: RN 0.77 requires React
+`^18.2.0`, 0.78 and 0.79 require `^19.0.0`, 0.80 and 0.81 require `^19.1.0`, and
+0.87 requires `^19.2.3` — each release's own `peerDependencies` on npm. Install
+what your RN release asks for; this package's `react: >=18.2.0` peer range is
+deliberately wide enough not to argue with it.
+
+The RN versions CI builds against live in
+[`.github/workflows/native-matrix.yml`](.github/workflows/native-matrix.yml),
+the single home of that list.
+
+### Expo — development build required, SDK 53+
 
 ```bash
 npx expo install autoskeleton
 npx expo prebuild
 npx expo run:ios     # or run:android, or an EAS development build
 ```
+
+The peer range starts at RN 0.77, but **the Expo path effectively starts at SDK
+53**, because no Expo SDK ships RN 0.77 or 0.78: SDK 52 is RN 0.76 and SDK 53 is
+RN 0.79. There is nothing to install in between.
 
 > **Expo Go does not work, and that is expected — not a bug to file.**
 > `autoskeleton` ships a custom native Turbo Module, and custom native modules
@@ -103,6 +252,17 @@ appears to do nothing.
 `onMetrics` also stays silent for a suppressed cycle, for the same reason: no
 skeleton-to-content lifecycle visually occurred.
 
+<p align="center">
+  <img
+    src="docs/assets/refresh-policy.gif"
+    alt="Two identical panels refreshed together: the default keeps its content, the skeletonOnRefresh one shows a skeleton"
+    width="720">
+</p>
+
+<sub>Both panels get the same prop sequence at the same instant; the only
+difference is <code>skeletonOnRefresh</code>. The suppressed one reports nothing
+at all — that silence is the contract, not a gap.</sub>
+
 ---
 
 ## What works where
@@ -139,6 +299,203 @@ Two of these bite hardest:
 
 ---
 
+## Examples
+
+Four real apps, each installing the library from a packed tarball rather than a
+workspace symlink, so what they exercise is the published artifact:
+
+- [`examples/bare-rn`](examples/bare-rn) — bare RN, the full demo gallery, the
+  on-device paint gates.
+- [`examples/expo`](examples/expo) — Expo autolinking, `autoskeleton/uniwind`,
+  `expo-image`, Expo Web.
+- [`examples/next`](examples/next) — server rendering.
+- [`examples/vite`](examples/vite) — an ordinary web SPA.
+
+The rest of this section is one worked example per surface.
+
+### React Native — the same component, unchanged
+
+```tsx
+import { Image, Text, View } from 'react-native';
+import { AutoSkeleton } from 'autoskeleton';
+
+function ProductCard({ product }: { product: Product | null }) {
+  return (
+    <AutoSkeleton skeletonKey="product-card" data={product}>
+      {(product) => (
+        <View style={styles.card}>
+          <Image style={styles.cardImage} source={{ uri: product.imageUrl }} />
+          <Text style={styles.cardTitle}>{product.name}</Text>
+          <Text style={styles.cardBlurb}>{product.blurb}</Text>
+        </View>
+      )}
+    </AutoSkeleton>
+  );
+}
+```
+
+Line for line the quickstart, with `article`/`img`/`h2` swapped for
+`View`/`Image`/`Text`. Same specifier, same props, same semantics: `exports`
+resolves `autoskeleton` to a different file per platform condition, so there is
+no native-flavoured API to learn. What changes underneath is the sensor — a
+real post-layout `UIView` / `View` tree traversal instead of
+`getBoundingClientRect`. Only three props are native-only
+([Theming](#theming)); the rest of [`docs/api.md`](docs/api.md) is both.
+
+### Server rendering — `autoskeleton/ssr`
+
+```tsx
+// app/dashboard/page.tsx
+import { Suspense } from 'react';
+import { AutoSkeletonSSR } from 'autoskeleton/ssr';
+import { manifest } from '../../generated/autoskeleton-ssr';
+import { DashboardContent } from './DashboardContent';
+
+export default function DashboardPage() {
+  return (
+    <Suspense fallback={<AutoSkeletonSSR skeletonKey="dashboard" manifest={manifest} direction="ltr" />}>
+      <DashboardContent />
+    </Suspense>
+  );
+}
+```
+
+A Suspense fallback renders *before* its children exist, so there is nothing to
+measure on the server — live detection is architecturally impossible there,
+rather than merely unimplemented. `<AutoSkeletonSSR>` replays a **build-time
+capture** instead, and one command produces it:
+
+```bash
+npx autoskeleton-capture ./autoskeleton.capture-registry.json http://127.0.0.1:3000 ./generated/autoskeleton-ssr
+```
+
+The registry is plain JSON mapping each `skeletonKey` to a route that renders
+the markup you want captured. The CLI drives headless Chromium (via
+`@playwright/test`, an optional peer) over each route, runs the *real* DOM
+sensor at every width bucket × direction, and writes `manifest.json` +
+`bundle.css`. Import the CSS once globally and mount
+`<AutoSkeletonSSRHydrate manifest={manifest} />` in your root layout: it renders
+`null` and imports the captured snapshots into the runtime store, so a
+client-side `<AutoSkeleton>` for the same key gets a cache hit instead of a cold
+traversal.
+
+Both are named exports from `autoskeleton/ssr` — there is no `AutoSkeleton.SSR`.
+An uncaptured key renders a neutral generic block, byte-identical on server and
+client, so a forgotten registry entry costs you a plainer skeleton and never a
+hydration mismatch. That hand-maintained registry is a real ergonomic tax, and
+[`docs/ssr-capture-cli.md`](docs/ssr-capture-cli.md) names it openly alongside
+the build token that stops the manifest and the CSS from drifting apart.
+
+### Virtualized lists — **native only**
+
+```tsx
+import { FlashList } from '@shopify/flash-list';
+import { SkeletonCell, SkeletonList } from 'autoskeleton';
+
+// The real row is also the template. One source of truth, so the placeholder
+// cannot drift from the content.
+const feedRowTemplate = () => <FeedRow title="" />;
+
+function Feed({ feed }: { feed: readonly FeedItem[] | null }) {
+  if (feed === null) {
+    return (
+      <SkeletonList itemType="feed-row" estimatedCount={6} renderTemplate={feedRowTemplate} rowSpacing={8} />
+    );
+  }
+  return (
+    <FlashList
+      data={feed}
+      renderItem={({ item }) =>
+        item.loaded ? (
+          <FeedRow title={item.title} />
+        ) : (
+          <SkeletonCell itemType="feed-row" renderTemplate={feedRowTemplate} />
+        )
+      }
+    />
+  );
+}
+```
+
+A list cannot measure itself the way a card does: on the initial load there are
+no cells yet, and a traversal on bind would stutter the recycler. So one
+invisible template cell is measured **once per `itemType` for the whole app
+session**, deferred until interactions settle, and every skeleton row after that
+is drawn from the cached snapshot. Binding a cell is one synchronous cache read
+— no sensor call is reachable from that path, and `templateTraversalCounter` is
+exported so you can prove it in your own app. `<SkeletonListFooter>` is the same
+component as a `ListFooterComponent` during pagination, and `useSkeletonCell()`
+is the hook underneath, for a cell you render yourself:
+
+```tsx
+const { snapshot, cacheHit, isFallback, cacheKey } = useSkeletonCell({ itemType: 'feed-row' });
+```
+
+**This API is native-only, and its absence on web is a runtime `undefined`, not
+a compile error** — [What works where](#what-works-where) above, and
+[`docs/platform-support.md` §3a](docs/platform-support.md), have the mechanism
+that keeps TypeScript quiet. An `itemType` you never give a `renderTemplate` also
+renders the generic fallback block forever; that is a documented v1 limitation,
+not a bug. [`docs/lists.md`](docs/lists.md).
+
+### Theming
+
+Web themes through the cascade — nothing to import, no props to pass:
+
+```css
+:root { --skl-base: #e2e8f0; --skl-highlight: #f8fafc; }
+.dark { --skl-base: #1e293b; --skl-highlight: #334155; }
+```
+
+While the theme is still the untouched default the renderer writes no inline
+colour at all and defers to your stylesheet, which is what makes a dark-mode
+class flip retheme every skeleton with no React state involved. Tailwind v4
+`@theme` tokens compile to exactly these two custom properties, so that path
+needs no interop either.
+
+Native has no cascade, so the same two colours come from a provider — which
+works on web too, and beats the CSS variables once you set it:
+
+```tsx
+import { SkeletonProvider } from 'autoskeleton';
+
+<SkeletonProvider theme={{ baseColor: '#1e293b', highlightColor: '#334155', defaultRadius: 12 }}>
+  <App />
+</SkeletonProvider>;
+```
+
+A single instance can override part of that with `shimmerBaseColor`,
+`shimmerHighlightColor` or `defaultRadius` — the three native-only props; the
+web `AutoSkeletonProps` does not declare them. `autoskeleton/uniwind` resolves
+one Tailwind `className` onto those same three, also native-only.
+[`docs/theming.md`](docs/theming.md) has the Android `defaultRadius` caveat and
+why NativeWind is an explicit exclusion rather than a gap.
+
+### The cold case: `fallback`
+
+```tsx
+<AutoSkeleton
+  skeletonKey="product-card"
+  data={product}
+  fallback={<ProductCardSkeleton />}
+>
+  {(product) => <ProductCard product={product} />}
+</AutoSkeleton>
+```
+
+`fallback` renders on a **cold miss only** — loading with no cached geometry for
+this key. It never replaces a measured skeleton and never renders once the
+geometry is known, so it is not a second layout you maintain forever: it covers
+the one cycle before there is anything to replay, and it is the migration ramp
+off the hand-authored skeleton you already own. Omit it and every existing
+render path behaves exactly as it did.
+
+This is the other half of the note under the quickstart: with a function child
+the wrapper has nothing inside it to measure while it is loading, so on a cold
+key the fallback is what paints.
+
+---
+
 ## Documentation
 
 **Getting things done**
@@ -151,6 +508,9 @@ Two of these bite hardest:
   including why a library change may not appear in an example app.
 - **[Virtualized lists](docs/lists.md)** — native-only, and the explicit-width
   constraint you will hit first.
+- **[TypeScript configuration](docs/typescript.md)** — the `moduleResolution`
+  and `customConditions` settings the per-platform types need, and the separate
+  one Jest needs.
 
 **Going deeper**
 
@@ -166,6 +526,8 @@ Two of these bite hardest:
   that is typechecked in CI against real types.
 - **[SSR capture CLI](docs/ssr-capture-cli.md)** — build-time snapshot capture
   for `<AutoSkeletonSSR>`, and the registry-maintenance cost named openly.
+- **[The Skia renderer (tier 2)](docs/tier2-skia.md)** — the opt-in second
+  native renderer, and what the two tiers do and do not share.
 
 **Contributing**
 
@@ -177,140 +539,30 @@ Two of these bite hardest:
 
 ---
 
-## Optional: the Skia renderer (tier 2)
+## Going further
 
-The default native renderer has **no dependencies** and is what every consumer
-gets. It draws on the platform's own compositor (`CAShapeLayer` + gradient on
-iOS, one clipped draw pass on Android), so the shimmer keeps running even when
-the JS thread is blocked.
+**[The Skia renderer (tier 2)](docs/tier2-skia.md).** The default native
+renderer has no dependencies and draws on the platform's own compositor, so the
+shimmer keeps running even when the JS thread is blocked. A second renderer
+draws the same skeleton with `@shopify/react-native-skia` and
+`react-native-reanimated`. It is strictly opt-in, and installing the two
+packages is deliberately *not* enough — you build the overlay from your own
+imports and hand it to `SkeletonProvider`, because Metro's dependency graph is
+static. The doc covers the wiring, the Babel plugin ordering, and the honest
+caveat: the two tiers share a shimmer period but not a phase origin, so there
+is a fixed arbitrary offset between tier-1 and tier-2 instances.
 
-A second renderer draws the same skeleton with
-[`@shopify/react-native-skia`](https://shopify.github.io/react-native-skia/)
-and [`react-native-reanimated`](https://docs.swmansion.com/react-native-reanimated/).
-It is strictly opt-in, and opting in is an explicit act — installing the two
-packages is **not** enough and deliberately does nothing on its own, because
-React Navigation requires Reanimated and "you happen to have it installed" says
-nothing about which renderer you want.
-
-```sh
-npm install @shopify/react-native-skia react-native-reanimated react-native-worklets
-```
-
-Reanimated's Babel plugin must be **last**:
-
-```js
-// babel.config.js
-module.exports = {
-  presets: ['module:@react-native/babel-preset'],
-  plugins: ['react-native-worklets/plugin'],
-};
-```
-
-Then build the overlay from **your own** imports and hand it to the provider:
-
-```tsx
-import * as Skia from '@shopify/react-native-skia';
-import {
-  Easing, cancelAnimation, useDerivedValue, useSharedValue,
-  withDelay, withRepeat, withSequence, withTiming,
-} from 'react-native-reanimated';
-import { SkeletonProvider } from 'autoskeleton';
-import { createSkiaOverlay } from 'autoskeleton/skia';
-
-// Call ONCE at module scope — a component identity that changes per render
-// remounts the whole Skia canvas.
-const overlay = createSkiaOverlay({
-  skia: Skia,
-  reanimated: {
-    useSharedValue, useDerivedValue, withRepeat, withTiming,
-    withSequence, withDelay, cancelAnimation, Easing,
-  },
-});
-
-export default function App() {
-  return (
-    <SkeletonProvider overlay={overlay}>
-      <YourApp />
-    </SkeletonProvider>
-  );
-}
-```
-
-`onMetrics.renderer` reports `'skia'` for every `<AutoSkeleton>` under that
-provider and `'native'` everywhere else, so you can confirm which renderer
-actually drew.
-
-You pass the modules in rather than letting the library import them because
-Metro builds a **static** dependency graph: an import written in your file is
-resolved and bundled, while an import the library only reaches conditionally
-either becomes a hard dependency for everyone or does not resolve at all.
-
-**What the two tiers do and do not share.** They share one shimmer *period*,
-arbitrated in JS. They do **not** share a phase *origin*: tier-1 reads the
-native shimmer clock's `startedAt`, and tier-2 runs entirely in JS with no
-route to that value, so it uses its own module-scope origin. Tier-2 instances
-are in phase with each other and tier-1 instances with each other, with an
-arbitrary fixed offset between the two groups. Per-shape stagger is not
-implemented on either tier. A working example lives on the `tier2` screen of
-`examples/bare-rn`.
+**[TypeScript configuration](docs/typescript.md).** This package publishes
+different type declarations per platform condition, so your `tsconfig.json`
+needs `"moduleResolution"` set to `bundler`/`node16`/`nodenext` — the classic
+`"node"` resolution ignores `package.json#exports` entirely. React Native
+consumers already get the `react-native` condition from
+`@react-native/typescript-config` or `expo/tsconfig.base`; web consumers need
+nothing. Jest is a separate problem: its resolver does not apply `exports`
+conditions at all, so a React Native test environment silently gets the web
+build without `customExportConditions`.
 
 ---
-
-## TypeScript configuration
-
-`autoskeleton` publishes **different type declarations per platform
-condition**, matching the different JS entry files bundlers already resolve
-per platform. For TypeScript to honour them your `tsconfig.json` must:
-
-1. Use `"moduleResolution": "bundler"` or `"node16"`/`"nodenext"` — the classic
-   `"node"` resolution ignores `package.json#exports` entirely.
-2. For a **React Native** consumer, resolve through the `react-native`
-   condition. In practice you rarely set this yourself:
-   `@react-native/typescript-config` (which every
-   `npx @react-native-community/cli init` project extends) and
-   `expo/tsconfig.base` both already ship
-   `"customConditions": ["react-native"]`.
-3. For a **web bundler** consumer (Vite, Next.js, webpack, plain `tsc`), no
-   `customConditions` entry is needed — `default` already resolves to the web
-   surface, and `SkeletonList` and friends correctly do **not** resolve there.
-
-> Point 2 is also the trap described above: in a **universal** app that single
-> `customConditions` setting makes the native declarations visible to your web
-> code too, with no way for TypeScript to know which platform a file will be
-> bundled for.
-
-### Jest
-
-Jest's module resolver does **not** apply `package.json#exports` conditions at
-all — a Jest limitation, independent of `moduleResolution`. A bare
-`require('autoskeleton')` under Jest falls through to `default` (the web build)
-even in a React Native test environment:
-
-```js
-module.exports = {
-  preset: '@react-native/jest-preset',
-  testEnvironmentOptions: {
-    customExportConditions: ['react-native'],
-  },
-};
-```
-
-See `examples/bare-rn/jest.config.js` for the exact configuration this
-repository's own React Native example app uses.
-
----
-
-## Examples
-
-Four real apps, each installing the library from a packed tarball rather than a
-workspace symlink, so what they exercise is the published artifact:
-
-- [`examples/bare-rn`](examples/bare-rn) — bare RN, the full demo gallery, the
-  on-device paint gates.
-- [`examples/expo`](examples/expo) — Expo autolinking, `autoskeleton/uniwind`,
-  `expo-image`, Expo Web.
-- [`examples/next`](examples/next) — server rendering.
-- [`examples/vite`](examples/vite) — an ordinary web SPA.
 
 ## License
 

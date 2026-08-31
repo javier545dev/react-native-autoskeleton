@@ -4,33 +4,67 @@
  * `useFakeLoad` is the whole "network" of this gallery: a timer that flips
  * `isLoading` to false after `ms`. Real enough to make the skeleton -> content
  * transition genuine, small enough that no demo is really about it.
+ *
+ * The controls are bordered, never filled grey, and their labels are
+ * monospaced: a control that says `delay={400}` is quoting an API, and quoting
+ * it in the same face as the readouts is what keeps the prop, the button and
+ * the measured result legible as one thing. See `theme.ts` for the rest.
+ *
+ * NOT shared with `examples/expo/demos/controls.tsx`, deliberately — see that
+ * file's header for what is shared and what is not.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { DEMO_COLORS } from './ui';
+import { useDemoTheme } from './theme';
 
 export function Button({
   label,
   onPress,
   testID,
   tone = 'accent',
+  disabled = false,
 }: {
-  label: string;
-  onPress: () => void;
-  testID?: string;
-  tone?: 'accent' | 'quiet';
+  readonly label: string;
+  readonly onPress: () => void;
+  readonly testID?: string;
+  readonly tone?: 'accent' | 'quiet';
+  /** Rendered visibly inert rather than hidden. A control that cannot work on
+   *  this platform is information; removing it is not. */
+  readonly disabled?: boolean;
 }): React.JSX.Element {
+  const t = useDemoTheme();
+  const accent = tone === 'accent' && !disabled;
+
   return (
     <Pressable
       accessible
       accessibilityRole="button"
       accessibilityLabel={testID}
+      accessibilityState={{ disabled }}
       testID={testID}
+      disabled={disabled}
       onPress={onPress}
-      style={[styles.button, tone === 'quiet' ? styles.buttonQuiet : styles.buttonAccent]}
+      style={[
+        disabled ? styles.inert : null,
+        {
+          paddingHorizontal: t.space.lg,
+          paddingVertical: t.space.md,
+          borderRadius: t.radius.md,
+          borderWidth: t.border.panel,
+          borderColor: accent ? t.color.accent : t.color.lineStrong,
+          backgroundColor: accent ? t.color.accent : t.color.surface,
+        },
+      ]}
     >
-      <Text style={tone === 'quiet' ? styles.buttonQuietLabel : styles.buttonAccentLabel}>{label}</Text>
+      <Text
+        style={[
+          t.type.label,
+          { fontFamily: t.mono, color: accent ? t.color.accentInk : t.color.ink },
+        ]}
+      >
+        {label}
+      </Text>
     </Pressable>
   );
 }
@@ -42,13 +76,25 @@ export function Segmented<T extends string | number>({
   onChange,
   testIDPrefix,
 }: {
-  options: ReadonlyArray<{ readonly value: T; readonly label: string }>;
-  value: T;
-  onChange: (next: T) => void;
-  testIDPrefix?: string;
+  readonly options: ReadonlyArray<{ readonly value: T; readonly label: string }>;
+  readonly value: T;
+  readonly onChange: (next: T) => void;
+  readonly testIDPrefix?: string;
 }): React.JSX.Element {
+  const t = useDemoTheme();
+
   return (
-    <View style={styles.segmented}>
+    <View
+      style={[
+        styles.segmented,
+        {
+          borderWidth: t.border.panel,
+          borderColor: t.color.lineStrong,
+          borderRadius: t.radius.sm,
+          backgroundColor: t.color.surface,
+        },
+      ]}
+    >
       {options.map((option) => {
         const selected = option.value === value;
         return (
@@ -60,9 +106,18 @@ export function Segmented<T extends string | number>({
             accessibilityLabel={testIDPrefix === undefined ? undefined : `${testIDPrefix}-${option.value}`}
             testID={testIDPrefix === undefined ? undefined : `${testIDPrefix}-${option.value}`}
             onPress={() => onChange(option.value)}
-            style={[styles.segment, selected ? styles.segmentSelected : null]}
+            style={{
+              paddingHorizontal: t.space.md,
+              paddingVertical: t.space.sm,
+              backgroundColor: selected ? t.color.accentSoft : t.color.surface,
+            }}
           >
-            <Text style={[styles.segmentLabel, selected ? styles.segmentLabelSelected : null]}>
+            <Text
+              style={[
+                t.type.label,
+                { fontFamily: t.mono, color: selected ? t.color.accent : t.color.muted },
+              ]}
+            >
               {option.label}
             </Text>
           </Pressable>
@@ -112,51 +167,12 @@ export function useFakeLoad(ms: number, options?: { readonly autoStart?: boolean
 }
 
 const styles = StyleSheet.create({
-  button: {
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 8,
-  },
-  buttonAccent: {
-    backgroundColor: DEMO_COLORS.accent,
-  },
-  buttonQuiet: {
-    backgroundColor: DEMO_COLORS.surface,
-    borderWidth: 1,
-    borderColor: DEMO_COLORS.line,
-  },
-  buttonAccentLabel: {
-    color: '#ffffff',
-    fontWeight: '600',
-    fontSize: 13,
-  },
-  buttonQuietLabel: {
-    color: DEMO_COLORS.ink,
-    fontWeight: '600',
-    fontSize: 13,
+  inert: {
+    opacity: 0.55,
   },
   segmented: {
     flexDirection: 'row',
-    borderWidth: 1,
-    borderColor: DEMO_COLORS.line,
-    borderRadius: 8,
     overflow: 'hidden',
     alignSelf: 'flex-start',
-  },
-  segment: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    backgroundColor: DEMO_COLORS.surface,
-  },
-  segmentSelected: {
-    backgroundColor: DEMO_COLORS.accent,
-  },
-  segmentLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: DEMO_COLORS.ink,
-  },
-  segmentLabelSelected: {
-    color: '#ffffff',
   },
 });

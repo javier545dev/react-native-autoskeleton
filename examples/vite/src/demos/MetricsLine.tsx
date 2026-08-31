@@ -23,6 +23,20 @@ export function MetricsLine({
       <strong>{metrics.traversalMs.toFixed(2)} ms</strong> traversal ·{' '}
       <strong>{metrics.cacheHit ? 'cache HIT' : 'cache MISS'}</strong> ·{' '}
       {metrics.renderer} renderer
+      {/* The degradation flags, printed rather than dropped (2026-08-31).
+          Without them this line is actively misleading: a traversal that
+          overruns `budgetMs` (2 ms by default) stops mid-tree and reports the
+          shapes it managed to collect as if that were the whole answer. On a
+          busy tab or a slow device this card measures 4 shapes; under enough
+          CPU contention it reports 1, with no hint that the other three were
+          never looked at. `degraded` is the only thing that tells the two
+          apart, and the library has always returned it. */}
+      {metrics.degraded.length > 0 ? (
+        <>
+          {' · '}
+          <strong className="demo-metrics-degraded">degraded: {metrics.degraded.join(', ')}</strong>
+        </>
+      ) : null}
     </p>
   )
 }

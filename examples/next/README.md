@@ -1,3 +1,5 @@
+<img src="../../docs/assets/autoskeleton-logo.svg" alt="" width="64" height="64">
+
 # autoskeleton — SSR demos (Next.js)
 
 A Next.js App Router app that installs `autoskeleton` from the packed tarball
@@ -13,30 +15,106 @@ npm run build    # next build
 npm run start    # next start
 ```
 
-Start at `/`, which indexes the routes below and says what to look for in each.
-Nine demos, one per route, all rendered by the same list in
-`app/_demo/registry.ts` so the sentence on the index is the sentence on the
-page.
+Start at `/`. It opens with the one action worth taking first — *Watch it
+live*, which is `/dashboard?delay=8000` — and then indexes every route as a
+card, grouped by what the demo is about. Nine demos, one per route, all
+rendered from the same list in `app/_demo/registry.ts`, so the sentence on the
+index is literally the sentence on the page.
 
-## Routes
+## Routes, by group
+
+The group taxonomy is shared by all four example apps (`examples/vite`,
+`examples/next`, `examples/bare-rn`, `examples/expo`), so a reader who learns
+the shape of one gallery already knows the shape of the others. This app has
+demos in five of the nine groups.
+
+### Start here
 
 | Route | What it makes obvious |
 | --- | --- |
 | `/dashboard` | A `<Suspense>` fallback of `<AutoSkeletonSSR skeletonKey="dashboard">`, replaying geometry captured at build time. `?delay=8000` holds it on screen. |
-| `/widths` | REQ-SSR-3 live: one served payload, and the browser picks the `@media` block for its own width bucket. Resize and the computed width, height and `clip-path` change with no request. |
 | `/streaming` | Three `<Suspense>` boundaries in one response, resolving at 0.8 s / 2.6 s / 4.4 s. The third uses an uncaptured key, so both ADR-12 branches are on screen at once. |
-| `/drift` | The manifest ↔ CSS integrity binding. Two identical elements; the one stamped with a token the served `bundle.css` was not generated from cannot select a geometry rule and degrades to the neutral block. |
+
+### What gets detected
+
+| Route | What it makes obvious |
+| --- | --- |
+| `/widths` | REQ-SSR-3 live: one served payload, and the browser picks the `@media` block for its own width bucket. Resize and the computed width, height and `clip-path` change with no request. |
 | `/dashboard-rtl` | The same key captured with `direction: 'rtl'` — the replay side of the both-directions capture. |
-| `/uncaptured` | ADR-12: a key that is not in the registry renders a neutral generic block, identical on server and client, so there is no hydration mismatch. |
+
+### Lifecycle
+
+| Route | What it makes obvious |
+| --- | --- |
 | `/client-cache` | `<AutoSkeletonSSRHydrate>` imports the captured snapshots into the runtime store, so a live `<AutoSkeleton>` mounted afterwards reports `cache HIT` with a `0.00 ms` traversal. |
+
+### Control & opt-out
+
+| Route | What it makes obvious |
+| --- | --- |
 | `/hydration` | Zero hydration mismatch, with a control that fires: React's complaints are recorded on both channels it uses, and `?mismatch=1` adds a deliberately broken sibling so the instrument is visibly working. |
+| `/uncaptured` | ADR-12: a key that is not in the registry renders a neutral generic block, identical on server and client, so there is no hydration mismatch. |
+| `/drift` | The manifest ↔ CSS integrity binding. Two identical elements; the one stamped with a token the served `bundle.css` was not generated from cannot select a geometry rule and degrades to the neutral block. |
+
+### Diagnostics
+
+| Route | What it makes obvious |
+| --- | --- |
 | `/manifest` | The committed capture read back — schema version, build token, buckets, keys, and one row per captured entry — plus the registry and the command that produced it. |
-| `/dashboard-capture` | Build-time tooling, not a demo: the route the capture CLI measures, wrapped in `#autoskeleton-capture-root`. |
+
+### Not a demo
+
+| Route | What it is |
+| --- | --- |
+| `/dashboard-capture` | Build-time tooling: the route the capture CLI measures, wrapped in `#autoskeleton-capture-root`. Unlisted in the app's own navigation. |
 
 There is no button to bring an SSR skeleton back. The fallback is resolved on
 the SERVER, before the browser has any JavaScript, so the only honest control
 is how long the server takes — hence `?delay=`. Where a route has no such
 control, the index does not pretend it has one.
+
+## Navigation, and the routes that deliberately have none
+
+The chrome — identity band, grouped sidebar, demo anatomy — lives in
+`app/_demo/DemoShell.tsx`, **not** in `app/layout.tsx`. That is what lets
+`/dashboard`, `/dashboard-rtl`, `/uncaptured` and `/dashboard-capture` stay
+bare specimens: they do not import `DemoShell`, so nothing added to it can
+reach the four documents `test/ssr/dashboard.spec.ts` asserts against. Landing
+on one of them and finding no navigation is the design, and the index says so
+before you click.
+
+Navigation is plain `<a>` full page loads, never `next/link`. A client-side
+navigation would arrive after React is already running, and the whole subject
+of this app is the document the SERVER sent.
+
+At 880 px and above the sidebar is a fixed column with the grouped list and an
+accent bar on the current entry. Below it the sidebar is gone, the identity
+band becomes sticky, and a `Demos` control opens the same list in an overlay.
+That control is a bare `<details>` element: this app ships no client component
+for navigation, so open/closed is a state the browser owns and the stylesheet
+can see.
+
+Every demo page ends with a `<details>` holding its own `page.tsx`, read off
+disk at request time rather than transcribed — a copied snippet is free to
+drift from the file it claims to show.
+
+## Design tokens
+
+`app/globals.css` carries the `--ui-*` token system (colour, type scale,
+spacing, radii) and maps Tailwind's own scale onto it, so the utilities the
+demo routes already use land on the shared values. The same block is duplicated
+by hand in `examples/vite/src/styles/tokens.css`: the two apps have separate
+lockfiles and share no package, and twelve colours do not justify growing one
+— but they are one design system, so a value changed in one must be changed
+in the other in the same commit. Each file names the other as its sync pair.
+
+The one rule the tokens exist to serve: **the skeleton is the subject, so the
+chrome must never be mistaken for it.** The library paints borderless, filled,
+grey, shimmering rectangles, so this app's chrome paints none — every surface
+is text, a hairline-bordered panel, or a small violet accent, and nothing but
+the skeleton animates. Every live demo sits inside a bordered stage whose
+corner label names the API under demonstration, so a screenshot always says
+where the app stops and the library's output starts.
 
 ## Reduced motion on the pre-hydration path
 
@@ -99,8 +177,10 @@ depends on the four route paths `/dashboard`, `/dashboard-rtl`, `/uncaptured`
 and `/dashboard-capture`, on `DashboardContent`'s `Q3 Revenue Dashboard`
 heading and its 1200 ms default fetch, and on the `data-askl-ssr-*` attributes
 in the served markup. None of those are touched by the demos added around
-them — every demo is a new route. That spec's `next build` is also what keeps
-the new routes honest structurally: a demo route that stops compiling fails it.
+them — every demo is a new route, and the app's chrome lives in
+`app/_demo/DemoShell.tsx`, which those four routes do not import. That spec's
+`next build` is also what keeps the new routes honest structurally: a demo
+route that stops compiling fails it.
 
 `test/web/ssr-hydrate.spec.ts` gates the claim `/client-cache` makes, in a real
 browser and without a Next build: bridge first, live `<AutoSkeleton>` second,

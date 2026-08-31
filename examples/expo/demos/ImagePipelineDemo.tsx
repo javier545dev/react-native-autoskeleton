@@ -60,11 +60,12 @@
 
 import { useState } from 'react';
 import { Image } from 'expo-image';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { AutoSkeleton, SkeletonProvider } from 'autoskeleton';
 import type { SkeletonMetrics } from 'autoskeleton';
 import { Button, useFakeLoad } from './controls';
-import { DEMO_COLORS, DemoPage, Panel, Readout, Row } from './ui';
+import { useDemoTheme } from './theme';
+import { Caption, DemoPage, Panel, Readout, ReadoutRows, Row } from './ui';
 
 /** Bundled rather than fetched, so the demo does not depend on the emulator
  *  having a network. The blurhash is a real one for a similar gradient. */
@@ -72,6 +73,7 @@ const PRODUCT = require('../assets/product.png');
 const BLURHASH = 'L6PZfSi_.AyE_3t7t7R**0o#DgR4';
 
 export function ImagePipelineDemo(): React.JSX.Element {
+  const t = useDemoTheme();
   const load = useFakeLoad(2200);
   const [metrics, setMetrics] = useState<SkeletonMetrics | null>(null);
 
@@ -100,7 +102,7 @@ export function ImagePipelineDemo(): React.JSX.Element {
                 to measure. This is the documented pattern, not boilerplate —
                 see the second gotcha in this file's header for why the rule
                 that requires it is correct. */}
-            <View style={styles.imageSlot}>
+            <View style={[styles.imageSlot, { backgroundColor: t.color.codeBg }]}>
               {load.isLoading ? null : (
                 <Image
                   source={PRODUCT}
@@ -116,21 +118,23 @@ export function ImagePipelineDemo(): React.JSX.Element {
         </Panel>
       </SkeletonProvider>
 
-      <Panel label="what the handoff reported">
-        <Readout>
-          {metrics === null
-            ? 'onMetrics has not fired yet.'
-            : [
-                `handoffReason:     ${metrics.handoffReason}`,
-                `renderer:          ${metrics.renderer}`,
-                `shapeCount:        ${metrics.shapeCount}`,
-                `displayDurationMs: ${metrics.displayDurationMs.toFixed(0)}`,
-              ].join('\n')}
-        </Readout>
-        <Text style={styles.footnote}>
+      <Panel label="what the handoff reported" live={false}>
+        {metrics === null ? (
+          <Readout>onMetrics has not fired yet.</Readout>
+        ) : (
+          <ReadoutRows
+            rows={[
+              ['handoffReason', metrics.handoffReason],
+              ['renderer', metrics.renderer],
+              ['shapeCount', String(metrics.shapeCount)],
+              ['displayDurationMs', metrics.displayDurationMs.toFixed(0)],
+            ]}
+          />
+        )}
+        <Caption>
           `timeout` here is expected on native today — native paint detection is not wired yet, only
           the web path is. `displayDurationMs` still measures phase 1 only.
-        </Text>
+        </Caption>
       </Panel>
     </DemoPage>
   );
@@ -142,15 +146,9 @@ const styles = StyleSheet.create({
     height: 180,
     borderRadius: 12,
     overflow: 'hidden',
-    backgroundColor: DEMO_COLORS.code,
   },
   image: {
     width: '100%',
     height: '100%',
-  },
-  footnote: {
-    fontSize: 11,
-    lineHeight: 16,
-    color: DEMO_COLORS.muted,
   },
 });

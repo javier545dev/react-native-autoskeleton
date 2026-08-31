@@ -17,7 +17,7 @@
 
 import { useState } from 'react';
 import { AutoSkeleton, type OnMetrics, type SkeletonMetrics } from 'autoskeleton';
-import { DemoReadout, DemoReadoutRow } from '../_demo/DemoShell';
+import { DemoReadout, DemoReadoutRow } from '../_demo/ui';
 
 const FETCH_MS = 2500;
 
@@ -62,7 +62,7 @@ export function ClientCachePanel({
             <CapturedShapeContent />
           </AutoSkeleton>
         ) : (
-          <p className="text-sm text-zinc-500">The panel is unmounted. Nothing has read the store yet.</p>
+          <p className="text-sm text-ui-ink-3">The panel is unmounted. Nothing has read the store yet.</p>
         )}
       </div>
 
@@ -72,7 +72,7 @@ export function ClientCachePanel({
           data-testid="client-cache-mount"
           disabled={mounted}
           onClick={mountPanel}
-          className="rounded-full border border-black/[.145] px-4 py-2 text-sm disabled:opacity-40 dark:border-white/[.2]"
+          className="rounded-full border border-ui-line-strong px-4 py-2 font-mono text-xs text-ui-ink hover:border-ui-accent hover:text-ui-accent disabled:opacity-40"
         >
           Mount the live panel
         </button>
@@ -81,13 +81,13 @@ export function ClientCachePanel({
           data-testid="client-cache-unmount"
           disabled={!mounted}
           onClick={() => setMounted(false)}
-          className="rounded-full border border-black/[.145] px-4 py-2 text-sm disabled:opacity-40 dark:border-white/[.2]"
+          className="rounded-full border border-ui-line-strong px-4 py-2 font-mono text-xs text-ui-ink hover:border-ui-accent hover:text-ui-accent disabled:opacity-40"
         >
           Unmount it
         </button>
       </div>
 
-      <p className="mt-6 text-sm text-zinc-500">
+      <p className="ui-note">
         {mounted && metrics === null
           ? `Waiting for the ${FETCH_MS} ms cycle to finish — onMetrics reports displayDurationMs, so it fires once, when the skeleton is done, never at mount.`
           : 'onMetrics, as reported by the live panel above.'}
@@ -109,7 +109,7 @@ export function ClientCachePanel({
         <DemoReadoutRow label="captured width buckets" value={capturedBuckets.join(', ')} />
       </DemoReadout>
 
-      <p className="mt-6 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+      <p className="ui-note">
         A <strong>MISS</strong> here is a correct answer, not a broken demo. The store is keyed by{' '}
         <code className="font-mono">skeletonKey</code> plus width bucket, font scale, direction and platform,
         and this app&apos;s committed capture only covers the buckets listed above. A window whose width rounds
@@ -117,7 +117,7 @@ export function ClientCachePanel({
         somebody else&apos;s — which is the whole reason the key is composite. Narrow or widen the window until
         it lands on a captured bucket, reload, and mount the panel again to see the hit.
       </p>
-      <p className="mt-4 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+      <p className="ui-note">
         Note also that <code className="font-mono">onMetrics</code> reports{' '}
         <code className="font-mono">renderer: &quot;css&quot;</code>. The runtime path and the SSR path share
         one stylesheet and one shimmer implementation; the hydration bridge moves data between them, never a

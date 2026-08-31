@@ -19,7 +19,8 @@
 import { Suspense } from 'react';
 import { AutoSkeletonSSR } from 'autoskeleton/ssr';
 import { manifest } from '../../generated/autoskeleton-ssr';
-import { DemoShell, DemoStage } from '../_demo/DemoShell';
+import { DemoShell } from '../_demo/DemoShell';
+import { DemoStage } from '../_demo/ui';
 
 // Without this Next resolves every boundary AT BUILD TIME and serves finished
 // HTML, which would make this route unable to show a single thing it claims.
@@ -45,9 +46,9 @@ function resolveExtraDelayMs(raw: string | string[] | undefined): number {
 async function StreamedPanel({ label, delayMs }: { label: string; delayMs: number }) {
   await new Promise((resolve) => setTimeout(resolve, delayMs));
   return (
-    <div className="rounded-lg border border-black/[.08] p-4 dark:border-white/[.145]">
+    <div className="rounded-lg border border-ui-line p-4">
       <h3 className="text-base font-medium">{label}</h3>
-      <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+      <p className="mt-1 text-sm text-ui-ink-2">
         This chunk finished on the server after {delayMs} ms and was streamed into the boundary above.
       </p>
     </div>
@@ -67,6 +68,7 @@ export default async function StreamingPage({
         <DemoStage
           key={boundary.label}
           label={boundary.label}
+          live="<AutoSkeleton.SSR>"
           note={`Resolves after ${boundary.delayMs + extraMs} ms · skeletonKey="${boundary.skeletonKey}"`}
         >
           <Suspense
@@ -77,7 +79,7 @@ export default async function StreamingPage({
         </DemoStage>
       ))}
 
-      <p className="mt-10 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+      <p className="ui-note">
         Every skeleton above arrived in the first flush of the response and was replaced by a later flush of the
         same response. Nothing on this page decides when to show a skeleton — the boundary does, and the
         boundary is resolved by the server.

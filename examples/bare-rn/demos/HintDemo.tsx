@@ -18,10 +18,10 @@
  */
 
 import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { AutoSkeleton } from 'autoskeleton';
 import { Button, Segmented } from './controls';
-import { DEMO_COLORS, DemoPage, Panel, Row } from './ui';
+import { Caption, DemoPage, Panel, Row } from './ui';
 
 const RADII = [
   { value: 0, label: '0' },
@@ -61,14 +61,14 @@ export function HintDemo(): React.JSX.Element {
                 <View style={styles.square} />
               </AutoSkeleton.Hint>
             </AutoSkeleton>
-            <Text style={styles.caption}>{`radius=${radius}`}</Text>
+            <Caption>{`radius=${radius}`}</Caption>
           </View>
 
           <View style={styles.cell}>
             <AutoSkeleton key={`plain-${cycle}`} isLoading={isLoading} skeletonKey="demo-hint-none">
               <View style={styles.square} />
             </AutoSkeleton>
-            <Text style={styles.caption}>no hint</Text>
+            <Caption>no hint</Caption>
           </View>
         </View>
       </Panel>
@@ -102,12 +102,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   square: {
+    // Opaque and saturated on purpose: the container rule only emits a shape
+    // for a view with a non-transparent background, and this square IS the
+    // shape the hint is rounding.
     width: 96,
     height: 96,
     backgroundColor: '#f59e0b',
-  },
-  caption: {
-    fontSize: 12,
-    color: DEMO_COLORS.muted,
   },
 });

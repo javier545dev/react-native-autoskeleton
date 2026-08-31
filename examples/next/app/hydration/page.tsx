@@ -18,7 +18,8 @@
 import { Suspense } from 'react';
 import { AutoSkeletonSSR } from 'autoskeleton/ssr';
 import { manifest } from '../../generated/autoskeleton-ssr';
-import { DemoShell, DemoStage } from '../_demo/DemoShell';
+import { DemoShell } from '../_demo/DemoShell';
+import { DemoStage } from '../_demo/ui';
 import { DeliberateMismatch } from './DeliberateMismatch';
 import { HydrationConsole } from './HydrationConsole';
 
@@ -31,9 +32,9 @@ const FALLBACK_WINDOW_MS = 6000;
 async function SettledContent() {
   await new Promise((resolve) => setTimeout(resolve, FALLBACK_WINDOW_MS));
   return (
-    <div className="rounded-lg border border-black/[.08] p-4 dark:border-white/[.145]">
+    <div className="rounded-lg border border-ui-line p-4">
       <h3 className="text-base font-medium">Content, finally</h3>
-      <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+      <p className="mt-1 text-sm text-ui-ink-2">
         The boundary resolved on the server and this replaced the skeleton above.
       </p>
     </div>
@@ -52,6 +53,7 @@ export default async function HydrationPage({
     <DemoShell href="/hydration">
       <DemoStage
         label="What React said"
+        live="console + window.onerror"
         note="Recorded from a client chunk that runs before hydrateRoot, and kept at module scope so a hydration failure cannot erase its own evidence."
       >
         <HydrationConsole />
@@ -60,6 +62,7 @@ export default async function HydrationPage({
       {showMismatch ? (
         <DemoStage
           label="The control (deliberately broken)"
+          live="not the library"
           note="A component that renders different text on the server and the client. Not the library — the point is that the recorder catches it."
         >
           <DeliberateMismatch />
@@ -67,14 +70,16 @@ export default async function HydrationPage({
       ) : (
         <DemoStage
           label="The control"
+          live="not mounted"
           note="Not currently mounted. Append ?mismatch=1 to add a component that genuinely mismatches, and watch the recorder above fill up."
         >
-          <p className="text-sm text-zinc-500">No control mounted.</p>
+          <p className="text-sm text-ui-ink-3">No control mounted.</p>
         </DemoStage>
       )}
 
       <DemoStage
         label="A real server-rendered skeleton, hydrating"
+        live="<AutoSkeleton.SSR>"
         note={`<AutoSkeleton.SSR skeletonKey="dashboard"> as a Suspense fallback, held for ${FALLBACK_WINDOW_MS} ms.`}
       >
         <Suspense fallback={<AutoSkeletonSSR skeletonKey="dashboard" manifest={manifest} direction="ltr" />}>
@@ -82,7 +87,7 @@ export default async function HydrationPage({
         </Suspense>
       </DemoStage>
 
-      <p className="mt-10 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+      <p className="ui-note">
         The reason the skeleton contributes nothing to that list is structural rather than careful:{' '}
         <code className="font-mono">&lt;AutoSkeleton.SSR&gt;</code> has no hooks, no effects and reads nothing
         from the DOM or the environment. It is a pure function of its props, so the server render and the

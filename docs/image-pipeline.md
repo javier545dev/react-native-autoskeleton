@@ -6,6 +6,19 @@ boundary autoskeleton stops at, and a worked example wiring `expo-image`.
 See `plan.md` ADR-16 and `docs/product-brief.md` §9b for the design
 rationale; this file is the consumer-facing version of that decision.
 
+<p align="center">
+  <img
+    src="assets/image-handoff.gif"
+    alt="A skeleton block held on screen until the image behind it has actually painted, then removed"
+    width="720">
+</p>
+
+<sub>Reveal-before-hide, recorded from the `examples/vite` `#/image-handoff`
+demo. The skeleton is not removed when `isLoading` flips — it is removed once
+the successor has painted, which is why no frame shows an empty slot. The
+readout prints which of the two guards ended the cycle:
+`successor-painted` here, `timeout` if the image never paints.</sub>
+
 ## 1. The three phases
 
 | Phase | What's happening | Who owns it |

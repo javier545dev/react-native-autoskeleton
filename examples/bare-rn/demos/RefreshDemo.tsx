@@ -11,11 +11,11 @@
  */
 
 import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { View } from 'react-native';
 import { AutoSkeleton } from 'autoskeleton';
 import { Button, useFakeLoad } from './controls';
 import { SampleCard } from './SampleCard';
-import { DEMO_COLORS, DemoPage, Panel, Row } from './ui';
+import { Caption, DemoPage, Panel, Row } from './ui';
 
 export function RefreshDemo(): React.JSX.Element {
   const load = useFakeLoad(1800);
@@ -45,7 +45,7 @@ export function RefreshDemo(): React.JSX.Element {
           }}
         />
       </Row>
-      <Text style={styles.counter}>{`refreshes since cold start: ${refreshes}`}</Text>
+      <Caption>{`refreshes since cold start: ${refreshes}`}</Caption>
 
       <Panel
         label="default — stale-while-revalidate"
@@ -72,9 +72,3 @@ export function RefreshDemo(): React.JSX.Element {
   );
 }
 
-const styles = StyleSheet.create({
-  counter: {
-    fontSize: 12,
-    color: DEMO_COLORS.muted,
-  },
-});

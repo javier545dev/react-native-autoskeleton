@@ -29,7 +29,8 @@ import { StyleSheet, Text, View } from 'react-native';
 import { AutoSkeleton } from 'autoskeleton';
 import type { SkeletonMetrics } from 'autoskeleton';
 import { Button, useFakeLoad } from './controls';
-import { DEMO_COLORS, DemoPage, Panel, Readout, Row } from './ui';
+import { useDemoTheme } from './theme';
+import { DemoPage, Panel, Readout, Row } from './ui';
 
 function useShapeCount(): [string, (m: SkeletonMetrics) => void] {
   const [text, setText] = useState('shapeCount: pending');
@@ -40,6 +41,7 @@ function useShapeCount(): [string, (m: SkeletonMetrics) => void] {
 }
 
 export function TextDemo(): React.JSX.Element {
+  const t = useDemoTheme();
   const load = useFakeLoad(2200);
   const [aText, onA] = useShapeCount();
   const [bText, onB] = useShapeCount();
@@ -64,7 +66,7 @@ export function TextDemo(): React.JSX.Element {
           onMetrics={onA}
         >
           <View style={styles.block}>
-            <Text style={styles.body}>
+            <Text style={[t.type.body, { color: t.color.ink }]}>
               The Analytical Engine weaves algebraic patterns just as the Jacquard loom weaves
               flowers and leaves.
             </Text>
@@ -84,15 +86,16 @@ export function TextDemo(): React.JSX.Element {
           onMetrics={onB}
         >
           <View style={styles.block}>
-            <Text style={styles.title}>Ada Lovelace</Text>
-            <Text style={styles.body}>Note G, on the Analytical Engine</Text>
-            <Text style={styles.meta}>1843 · 8 min read</Text>
+            <Text style={[styles.title, { color: t.color.ink }]}>Ada Lovelace</Text>
+            <Text style={[t.type.body, { color: t.color.ink }]}>Note G, on the Analytical Engine</Text>
+            <Text style={[t.type.caption, { color: t.color.muted }]}>1843 · 8 min read</Text>
           </View>
         </AutoSkeleton>
         <Readout>{bText}</Readout>
       </Panel>
 
       <Panel
+        live={false}
         label="C. why there is no lines-hint panel here"
         note={
           'The typed `lines` hint synthesises N line rects, but only for a text leaf that ' +
@@ -116,16 +119,5 @@ const styles = StyleSheet.create({
     fontSize: 20,
     lineHeight: 28,
     fontWeight: '700',
-    color: DEMO_COLORS.ink,
-  },
-  body: {
-    fontSize: 14,
-    lineHeight: 22,
-    color: DEMO_COLORS.ink,
-  },
-  meta: {
-    fontSize: 12,
-    lineHeight: 18,
-    color: DEMO_COLORS.muted,
   },
 });

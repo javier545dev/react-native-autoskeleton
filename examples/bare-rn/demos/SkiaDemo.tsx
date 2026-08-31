@@ -26,12 +26,19 @@ import { StyleSheet, View } from 'react-native';
 import { AutoSkeleton, SkeletonProvider } from 'autoskeleton';
 import { SKIA_OVERLAY } from '../skiaOverlay';
 import { Button } from './controls';
-import { DEMO_COLORS, DemoPage, Panel, Readout, Row } from './ui';
+import { useDemoTheme } from './theme';
+import { DemoPage, Panel, Readout, Row } from './ui';
 
 const THEME = { baseColor: '#3A3A3A', highlightColor: '#E8E8E8' };
 
 export function SkiaDemo(): React.JSX.Element {
-  const [tier2, setTier2] = useState(true);
+  const theme = useDemoTheme();
+  // Named `skiaOverlayOn` rather than `tier2`: `demos/ui.tsx`'s naming rule
+  // forbids any identifier in this folder from starting with `tier2`, because
+  // the on-device gates locate their fixtures with `By.descStartsWith("tier2-…")`.
+  // A local variable never reaches the accessibility tree, but a rule with one
+  // grandfathered exception is a rule nobody greps for.
+  const [skiaOverlayOn, setSkiaOverlayOn] = useState(true);
   const [cycle, setCycle] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [renderer, setRenderer] = useState('pending — reveal to read it');
@@ -42,7 +49,7 @@ export function SkiaDemo(): React.JSX.Element {
     setRenderer('pending — reveal to read it');
     const t = setTimeout(() => setLateMounted(true), 700);
     return () => clearTimeout(t);
-  }, [cycle, tier2]);
+  }, [cycle, skiaOverlayOn]);
 
   const restart = (): void => {
     setCycle((c) => c + 1);
@@ -53,21 +60,21 @@ export function SkiaDemo(): React.JSX.Element {
     <>
       <Panel label="mounted immediately">
         <AutoSkeleton
-          key={`early-${cycle}-${tier2}`}
+          key={`early-${cycle}-${skiaOverlayOn}`}
           isLoading={isLoading}
           skeletonKey="demo-skia-early"
           onMetrics={(m) => setRenderer(m.renderer)}
         >
-          <View style={styles.block} />
+          <View style={[styles.block, { backgroundColor: theme.color.ink }]} />
         </AutoSkeleton>
       </Panel>
       <Panel label="mounted 700 ms later — same clock, same phase">
         {lateMounted ? (
-          <AutoSkeleton key={`late-${cycle}-${tier2}`} isLoading={isLoading} skeletonKey="demo-skia-late">
-            <View style={styles.block} />
+          <AutoSkeleton key={`late-${cycle}-${skiaOverlayOn}`} isLoading={isLoading} skeletonKey="demo-skia-late">
+            <View style={[styles.block, { backgroundColor: theme.color.ink }]} />
           </AutoSkeleton>
         ) : (
-          <View style={styles.block} />
+          <View style={[styles.block, { backgroundColor: theme.color.ink }]} />
         )}
       </Panel>
     </>
@@ -80,10 +87,10 @@ export function SkiaDemo(): React.JSX.Element {
     >
       <Row>
         <Button
-          label={tier2 ? 'overlay: Skia (tap for default)' : 'overlay: none (tap for Skia)'}
+          label={skiaOverlayOn ? 'overlay: Skia (tap for default)' : 'overlay: none (tap for Skia)'}
           testID="demo-skia-toggle"
           onPress={() => {
-            setTier2((v) => !v);
+            setSkiaOverlayOn((v) => !v);
             restart();
           }}
         />
@@ -96,7 +103,7 @@ export function SkiaDemo(): React.JSX.Element {
       </Row>
       <Readout>{`onMetrics.renderer: ${renderer}`}</Readout>
 
-      {tier2 ? (
+      {skiaOverlayOn ? (
         <SkeletonProvider overlay={SKIA_OVERLAY} theme={THEME}>
           {body}
         </SkeletonProvider>
@@ -112,6 +119,5 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 110,
     borderRadius: 10,
-    backgroundColor: DEMO_COLORS.ink,
   },
 });

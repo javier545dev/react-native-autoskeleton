@@ -23,11 +23,14 @@ import { StyleSheet, Text, View } from 'react-native';
 import { AutoSkeleton } from 'autoskeleton';
 import type { SkeletonMetrics } from 'autoskeleton';
 import { Button, useFakeLoad } from './controls';
-import { DEMO_COLORS, DemoPage, Panel, Readout, Row } from './ui';
+import { useDemoTheme } from './theme';
+import { DemoPage, Panel, Readout, ReadoutRows, Row } from './ui';
 
 export function BasicsDemo(): React.JSX.Element {
+  const t = useDemoTheme();
   const load = useFakeLoad(1800);
   const [metrics, setMetrics] = useState<SkeletonMetrics | null>(null);
+  const chip = t.scheme === 'dark' ? '#1d2b45' : '#dbeafe';
 
   return (
     <DemoPage
@@ -48,26 +51,35 @@ export function BasicsDemo(): React.JSX.Element {
         >
           <View style={styles.card}>
             <View style={styles.headRow}>
-              <View style={styles.avatar} />
+              <View style={[styles.avatar, { backgroundColor: t.color.accent }]} />
               <View style={styles.headText}>
-                <Text style={styles.title}>Ada Lovelace</Text>
-                <Text style={styles.subtitle}>Analytical Engine</Text>
+                <Text style={[styles.title, { color: t.color.ink }]}>Ada Lovelace</Text>
+                <Text style={[styles.subtitle, { color: t.color.muted }]}>Analytical Engine</Text>
               </View>
             </View>
-            <Text style={styles.body}>Note G, on the Analytical Engine</Text>
+            <Text style={[t.type.body, { color: t.color.ink }]}>Note G, on the Analytical Engine</Text>
             <View style={styles.tagRow}>
-              <View style={styles.tag} />
-              <View style={styles.tag} />
+              {/* Opaque, so the container rule counts each chip as its own
+                  detected shape. A transparent sized box is a spacer. */}
+              <View style={[styles.tag, { backgroundColor: chip }]} />
+              <View style={[styles.tag, { backgroundColor: chip }]} />
             </View>
           </View>
         </AutoSkeleton>
       </Panel>
 
-      <Readout>
-        {metrics === null
-          ? 'onMetrics has not fired yet.'
-          : `platform: ${metrics.platform}   renderer: ${metrics.renderer}   shapeCount: ${metrics.shapeCount}   cacheHit: ${metrics.cacheHit}`}
-      </Readout>
+      {metrics === null ? (
+        <Readout>onMetrics has not fired yet.</Readout>
+      ) : (
+        <ReadoutRows
+          rows={[
+            ['platform', metrics.platform],
+            ['renderer', metrics.renderer],
+            ['shapeCount', String(metrics.shapeCount)],
+            ['cacheHit', String(metrics.cacheHit)],
+          ]}
+        />
+      )}
     </DemoPage>
   );
 }
@@ -85,28 +97,23 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: '#2563eb',
   },
   headText: {
     gap: 6,
   },
   title: {
+    // Fixed widths on purpose: they make the two text leaves' measured frames
+    // deterministic, which is what makes the skeleton reproducible in a
+    // screenshot from one run to the next.
     fontSize: 17,
     lineHeight: 24,
     fontWeight: '700',
-    color: DEMO_COLORS.ink,
     width: 180,
   },
   subtitle: {
     fontSize: 13,
     lineHeight: 20,
-    color: DEMO_COLORS.muted,
     width: 140,
-  },
-  body: {
-    fontSize: 14,
-    lineHeight: 22,
-    color: DEMO_COLORS.ink,
   },
   tagRow: {
     flexDirection: 'row',
@@ -116,6 +123,5 @@ const styles = StyleSheet.create({
     width: 72,
     height: 26,
     borderRadius: 13,
-    backgroundColor: '#dbeafe',
   },
 });

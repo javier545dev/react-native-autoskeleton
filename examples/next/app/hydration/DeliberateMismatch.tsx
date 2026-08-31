@@ -19,7 +19,7 @@ export function DeliberateMismatch() {
   return (
     <p
       data-testid="deliberate-mismatch"
-      className="rounded-lg border border-red-500/40 bg-red-500/[.08] p-4 text-sm"
+      className="rounded-lg border border-ui-danger/40 bg-ui-danger/10 p-4 text-sm"
     >
       This sentence was rendered on <strong>{renderedOn}</strong>. It is a deliberately broken control, not
       library behaviour — the recorder above should be reporting it.

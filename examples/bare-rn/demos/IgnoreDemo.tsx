@@ -30,7 +30,8 @@ import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { AutoSkeleton } from 'autoskeleton';
 import { Button, useFakeLoad } from './controls';
-import { DEMO_COLORS, DemoPage, Panel, Row } from './ui';
+import { useDemoTheme } from './theme';
+import { DemoPage, Panel, Row } from './ui';
 
 function useClock(): string {
   const [now, setNow] = useState(() => new Date().toLocaleTimeString());
@@ -42,6 +43,7 @@ function useClock(): string {
 }
 
 export function IgnoreDemo(): React.JSX.Element {
+  const t = useDemoTheme();
   const load = useFakeLoad(60_000);
   const now = useClock();
 
@@ -69,8 +71,8 @@ export function IgnoreDemo(): React.JSX.Element {
                 <Text style={styles.badgeText}>not ignored</Text>
               </View>
             </View>
-            <View style={styles.headline} />
-            <View style={styles.paragraph} />
+            <View style={[styles.headline, { backgroundColor: t.color.ink }]} />
+            <View style={[styles.paragraph, { backgroundColor: t.color.lineStrong }]} />
           </View>
         </AutoSkeleton>
       </Panel>
@@ -111,13 +113,11 @@ const styles = StyleSheet.create({
   headline: {
     width: '80%',
     height: 22,
-    backgroundColor: DEMO_COLORS.ink,
     borderRadius: 4,
   },
   paragraph: {
     width: '100%',
     height: 64,
-    backgroundColor: '#334155',
     borderRadius: 4,
   },
 });

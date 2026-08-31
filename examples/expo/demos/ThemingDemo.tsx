@@ -32,7 +32,8 @@ import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { ThemedAutoSkeleton } from 'autoskeleton/uniwind';
 import { Button, Segmented, useFakeLoad } from './controls';
-import { DEMO_COLORS, DemoPage, Panel, Readout, Row } from './ui';
+import { useDemoTheme } from './theme';
+import { Caption, DemoPage, Panel, Readout, Row } from './ui';
 
 /** `className` is transformed at build time, so these must be complete literal
  *  class strings — not composed from fragments at runtime. */
@@ -66,6 +67,7 @@ const OPTIONS = [
 ];
 
 export function ThemingDemo(): React.JSX.Element {
+  const t = useDemoTheme();
   const [palette, setPalette] = useState<PaletteName>('slate');
   const load = useFakeLoad(60_000);
   const p = PALETTES[palette];
@@ -87,7 +89,7 @@ export function ThemingDemo(): React.JSX.Element {
         <View style={styles.compareRow}>
           <View style={styles.swatchColumn}>
             <View className={p.base} style={styles.swatch} />
-            <Text style={styles.swatchLabel}>base</Text>
+            <Caption>base</Caption>
           </View>
 
           <View style={styles.skeletonHost}>
@@ -97,15 +99,15 @@ export function ThemingDemo(): React.JSX.Element {
               skeletonKey={`demo-uniwind-${palette}`}
               className={p.skeleton}
             >
-              <View style={styles.card}>
-                <Text style={styles.cardTitle}>Loaded content</Text>
+              <View style={[styles.card, { backgroundColor: t.color.ink }]}>
+                <Text style={[t.type.label, { color: t.color.canvas }]}>Loaded content</Text>
               </View>
             </ThemedAutoSkeleton>
           </View>
 
           <View style={styles.swatchColumn}>
             <View className={p.highlight} style={styles.swatch} />
-            <Text style={styles.swatchLabel}>highlight</Text>
+            <Caption>highlight</Caption>
           </View>
         </View>
       </Panel>
@@ -133,23 +135,15 @@ const styles = StyleSheet.create({
     height: 72,
     borderRadius: 6,
   },
-  swatchLabel: {
-    fontSize: 10,
-    color: DEMO_COLORS.muted,
-  },
   skeletonHost: {
     flex: 1,
   },
   card: {
+    // Opaque and high-contrast against every palette above, so the skeleton
+    // that replaces it is unmistakably the skeleton and not the card.
     height: 72,
     borderRadius: 12,
-    backgroundColor: '#111827',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  cardTitle: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '600',
   },
 });

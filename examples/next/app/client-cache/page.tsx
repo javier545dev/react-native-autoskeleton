@@ -18,6 +18,7 @@
 
 import { manifest } from '../../generated/autoskeleton-ssr';
 import { DemoShell } from '../_demo/DemoShell';
+import { DemoStage } from '../_demo/ui';
 import { ClientCachePanel } from './ClientCachePanel';
 
 export const dynamic = 'force-dynamic';
@@ -29,7 +30,13 @@ export default function ClientCachePage() {
 
   return (
     <DemoShell href="/client-cache">
-      <ClientCachePanel capturedBuckets={capturedBuckets} capturedKeys={[...manifest.capturedKeys]} />
+      <DemoStage
+        label="A live AutoSkeleton, mounted after hydration"
+        live="<AutoSkeleton>"
+        note="The runtime component, not the SSR one — same skeletonKey, reading the store the hydration bridge already filled."
+      >
+        <ClientCachePanel capturedBuckets={capturedBuckets} capturedKeys={[...manifest.capturedKeys]} />
+      </DemoStage>
     </DemoShell>
   );
 }

@@ -6,123 +6,226 @@
  * its fixture in a raw device framebuffer by EXACT colour match and derives
  * the sample point from the matching pixels' bounding box, so a second region
  * in any of those three colours would silently widen the box and move the
- * sample off the target. The palette below is deliberately nowhere near them.
+ * sample off the target. The palettes in `theme.ts` are deliberately nowhere
+ * near them, and that file's header restates this rule for whoever adds the
+ * next colour.
+ *
+ * Everything visual comes from `theme.ts`, whose header carries the five rules
+ * this file implements — the load-bearing one being that chrome must never
+ * paint a borderless filled grey block, because that is exactly what the
+ * library paints. Nothing here imports `autoskeleton`.
+ *
+ * PAGE ANATOMY, in this order and no other:
+ *   kicker (the group)  ·  title  ·  claim  ·  stage  ·  controls  ·  readout
+ *   ·  note  ·  source pointer
  */
 
+import { createContext, useContext } from 'react';
 import type { ReactNode } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useDemoTheme } from './theme';
 
-export const DEMO_COLORS = {
-  ink: '#0f172a',
-  muted: '#64748b',
-  line: '#e2e8f0',
-  accent: '#2563eb',
-  surface: '#ffffff',
-  canvas: '#f8fafc',
-  code: '#f1f5f9',
-} as const;
+/** What the gallery knows about a demo that the demo file does not know about
+ *  itself: its group, and where its source lives. Passed by context so a demo
+ *  file never restates what `registry.ts` already says. */
+export interface DemoMeta {
+  readonly kicker: string;
+  readonly source: string;
+}
+
+const DemoMetaContext = createContext<DemoMeta | null>(null);
+
+export function DemoMetaProvider({
+  meta,
+  children,
+}: {
+  readonly meta: DemoMeta;
+  readonly children: ReactNode;
+}): React.JSX.Element {
+  return <DemoMetaContext.Provider value={meta}>{children}</DemoMetaContext.Provider>;
+}
 
 export function DemoPage({
   title,
   claim,
   children,
 }: {
-  title: string;
-  claim: string;
-  children: ReactNode;
+  readonly title: string;
+  readonly claim: string;
+  readonly children: ReactNode;
 }): React.JSX.Element {
+  const t = useDemoTheme();
+  const meta = useContext(DemoMetaContext);
+
   return (
-    <ScrollView style={styles.page} contentContainerStyle={styles.pageBody}>
-      <Text style={styles.pageTitle}>{title}</Text>
-      <Text style={styles.pageClaim}>{claim}</Text>
+    <ScrollView
+      style={[styles.page, { backgroundColor: t.color.canvas }]}
+      contentContainerStyle={{ padding: t.space.lg, gap: t.space.lg, paddingBottom: t.space.xxl }}
+    >
+      <View style={{ gap: t.space.xs }}>
+        {meta === null ? null : (
+          <Text style={[t.type.caption, styles.kicker, { color: t.color.faint }]}>
+            {meta.kicker.toUpperCase()}
+          </Text>
+        )}
+        <Text style={[t.type.title, { color: t.color.ink }]}>{title}</Text>
+        <Text style={[t.type.body, { color: t.color.muted }]}>{claim}</Text>
+      </View>
       {children}
+      {meta === null ? null : <SourcePointer source={meta.source} />}
     </ScrollView>
   );
 }
 
+/**
+ * The STAGE: one live example inside a bordered panel labelled with the API it
+ * demonstrates. The border and the `LIVE` tag are the point — everything
+ * inside the frame may be the library's output, everything outside it is this
+ * app, and a screenshot of one panel is self-explanatory without the page
+ * around it.
+ */
 export function Panel({
   label,
   note,
+  live = true,
   children,
 }: {
-  label: string;
-  note?: string;
-  children: ReactNode;
+  readonly label: string;
+  readonly note?: string;
+  readonly live?: boolean;
+  readonly children: ReactNode;
 }): React.JSX.Element {
+  const t = useDemoTheme();
+
   return (
-    <View style={styles.panel}>
-      <Text style={styles.panelLabel}>{label}</Text>
-      {note === undefined ? null : <Text style={styles.panelNote}>{note}</Text>}
+    <View
+      style={{
+        backgroundColor: t.color.stage,
+        borderColor: t.color.line,
+        borderWidth: t.border.panel,
+        borderRadius: t.radius.lg,
+        padding: t.space.lg,
+        gap: t.space.md,
+      }}
+    >
+      <View style={styles.panelHead}>
+        <Text style={[t.type.heading, styles.grow, { color: t.color.ink }]}>{label}</Text>
+        {live ? (
+          <Text style={[t.type.caption, styles.tag, { color: t.color.faint }]}>LIVE</Text>
+        ) : null}
+      </View>
+      {note === undefined ? null : (
+        <Text style={[t.type.caption, styles.note, { color: t.color.muted }]}>{note}</Text>
+      )}
       {children}
     </View>
   );
 }
 
-export function Readout({ children }: { children: ReactNode }): React.JSX.Element {
+export function Readout({ children }: { readonly children: ReactNode }): React.JSX.Element {
+  const t = useDemoTheme();
   return (
-    <View style={styles.readout}>
-      <Text style={styles.readoutText}>{children}</Text>
+    <View
+      style={{ backgroundColor: t.color.codeBg, borderRadius: t.radius.md, padding: t.space.md }}
+    >
+      <Text style={[t.type.code, { fontFamily: t.mono, color: t.color.ink }]}>{children}</Text>
     </View>
   );
 }
 
-export function Row({ children }: { children: ReactNode }): React.JSX.Element {
-  return <View style={styles.row}>{children}</View>;
+/** A readout with a real label column — `faint`, so the eye lands on the
+ *  values, which are the part that changes. */
+export function ReadoutRows({
+  rows,
+}: {
+  readonly rows: ReadonlyArray<readonly [string, string]>;
+}): React.JSX.Element {
+  const t = useDemoTheme();
+  return (
+    <View
+      style={{
+        backgroundColor: t.color.codeBg,
+        borderRadius: t.radius.md,
+        padding: t.space.md,
+        gap: t.space.xs,
+      }}
+    >
+      {rows.map(([label, value]) => (
+        <View key={label} style={[styles.readoutRow, { gap: t.space.sm }]}>
+          <Text style={[t.type.code, styles.readoutLabel, { fontFamily: t.mono, color: t.color.faint }]}>
+            {label}
+          </Text>
+          <Text style={[t.type.code, styles.grow, { fontFamily: t.mono, color: t.color.ink }]}>
+            {value}
+          </Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** Prose that qualifies what you just saw. */
+export function Note({ children }: { readonly children: ReactNode }): React.JSX.Element {
+  const t = useDemoTheme();
+  return <Text style={[t.type.body, { color: t.color.muted }]}>{children}</Text>;
+}
+
+/** Small print inside a panel. */
+export function Caption({ children }: { readonly children: ReactNode }): React.JSX.Element {
+  const t = useDemoTheme();
+  return <Text style={[t.type.caption, { color: t.color.muted }]}>{children}</Text>;
+}
+
+/** The last line of every demo: where to read the code that made it. */
+export function SourcePointer({ source }: { readonly source: string }): React.JSX.Element {
+  const t = useDemoTheme();
+  return (
+    <View style={[styles.sourceRow, { gap: t.space.sm }]}>
+      <Text style={[t.type.caption, { color: t.color.faint }]}>source</Text>
+      <Text style={[t.type.caption, { fontFamily: t.mono, color: t.color.muted }]}>{source}</Text>
+    </View>
+  );
+}
+
+export function Row({ children }: { readonly children: ReactNode }): React.JSX.Element {
+  const t = useDemoTheme();
+  return <View style={[styles.row, { gap: t.space.sm }]}>{children}</View>;
 }
 
 const styles = StyleSheet.create({
   page: {
     flex: 1,
-    backgroundColor: DEMO_COLORS.canvas,
   },
-  pageBody: {
-    padding: 16,
-    gap: 14,
-    paddingBottom: 48,
+  kicker: {
+    letterSpacing: 0.8,
   },
-  pageTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: DEMO_COLORS.ink,
+  panelHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
-  pageClaim: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: DEMO_COLORS.muted,
-  },
-  panel: {
-    backgroundColor: DEMO_COLORS.surface,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: DEMO_COLORS.line,
-    padding: 12,
-    gap: 10,
-  },
-  panelLabel: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: DEMO_COLORS.ink,
-  },
-  panelNote: {
-    fontSize: 12,
+  note: {
     lineHeight: 17,
-    color: DEMO_COLORS.muted,
   },
-  readout: {
-    backgroundColor: DEMO_COLORS.code,
-    borderRadius: 8,
-    padding: 8,
+  tag: {
+    letterSpacing: 0.8,
   },
-  readoutText: {
-    fontFamily: 'Courier',
-    fontSize: 11,
-    lineHeight: 16,
-    color: DEMO_COLORS.ink,
+  grow: {
+    flex: 1,
+  },
+  readoutRow: {
+    flexDirection: 'row',
+  },
+  readoutLabel: {
+    width: 132,
+  },
+  sourceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
   },
   row: {
     flexDirection: 'row',
-    gap: 10,
-    flexWrap: 'wrap',
     alignItems: 'center',
+    flexWrap: 'wrap',
   },
 });

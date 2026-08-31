@@ -15,7 +15,7 @@
 // precisely the mistake this whole mechanism exists to avoid.
 
 import { useSyncExternalStore } from 'react';
-import { DemoReadout, DemoReadoutRow } from '../_demo/DemoShell';
+import { DemoReadout, DemoReadoutRow } from '../_demo/ui';
 
 interface Measurement {
   readonly viewportWidth: number;

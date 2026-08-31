@@ -33,6 +33,14 @@
  * parent's content width — and its parent is the list, which has always known
  * the real width. The workaround is gone because the reason for it is gone,
  * not because it was tidied away.
+ *
+ * LAYOUT NOTE (2026-08-30): this screen used to hand-roll its own title,
+ * claim and page padding instead of using `DemoPage`, and the two gutters
+ * stacked — the first section label sat 32pt in while everything above it sat
+ * at 16pt, which read as a rendering bug. There is now exactly ONE horizontal
+ * gutter on this screen, `DemoPage`'s, and every row below inherits it. Rows
+ * carry no horizontal padding of their own, which is also why the template
+ * they are measured from inherits the full row width.
  */
 
 import { useEffect, useState } from 'react';
@@ -46,7 +54,8 @@ import {
   useSkeletonCell,
 } from 'autoskeleton';
 import { Button } from './controls';
-import { DEMO_COLORS, Readout } from './ui';
+import { useDemoTheme } from './theme';
+import { DemoPage, Readout, Row } from './ui';
 
 const ROW_TYPE = 'demo-feed-row';
 const EMPTY_TYPE = 'demo-feed-empty';
@@ -66,19 +75,27 @@ function makeFeed(seed: number): readonly FeedItem[] {
   }));
 }
 
+/** A section label inside the list body. Same type role as a panel label, so
+ *  the four APIs read as four labelled stages rather than four paragraphs. */
+function SectionLabel({ children }: { readonly children: string }): React.JSX.Element {
+  const t = useDemoTheme();
+  return <Text style={[t.type.heading, { color: t.color.ink }]}>{children}</Text>;
+}
+
 /** The real, loaded row. Also the template the skeleton is measured from —
  *  one source of truth, so the placeholder can never drift from the content.
  *  Not one width in here is hand-computed: the text column takes what the row
  *  gives it, which is what makes this the same component in both roles. */
 function FeedRow({ title }: { title: string }): React.JSX.Element {
+  const t = useDemoTheme();
   return (
     <View style={styles.row}>
-      <View style={styles.rowAvatar} />
+      <View style={[styles.rowAvatar, { backgroundColor: t.color.accent }]} />
       <View style={styles.rowText}>
-        <Text style={styles.rowTitle} numberOfLines={1}>
+        <Text style={[styles.rowTitle, { color: t.color.ink }]} numberOfLines={1}>
           {title}
         </Text>
-        <View style={styles.rowLine} />
+        <View style={[styles.rowLine, { backgroundColor: t.color.lineStrong }]} />
       </View>
     </View>
   );
@@ -89,10 +106,14 @@ function FeedRow({ title }: { title: string }): React.JSX.Element {
  *  `SkeletonCell` but labels itself with the cache state the hook reported —
  *  the escape hatch for a cell that needs to branch on it. */
 function InspectedRow(): React.JSX.Element {
+  const t = useDemoTheme();
   const cell = useSkeletonCell({ itemType: ROW_TYPE, skeletonKey: ROW_TYPE });
   return (
     <View style={styles.inspected}>
-      <Text style={styles.inspectedLabel} numberOfLines={1}>
+      <Text
+        style={[t.type.code, styles.inspectedLabel, { fontFamily: t.mono, color: t.color.faint }]}
+        numberOfLines={1}
+      >
         {`useSkeletonCell → cacheHit: ${cell.cacheHit}  isFallback: ${cell.isFallback}  snapshot: ${
           cell.snapshot === null ? 'null' : `${cell.snapshot.frameWidth}x${cell.snapshot.frameHeight}`
         }`}
@@ -120,28 +141,25 @@ export function ListDemo(): React.JSX.Element {
   const feed = makeFeed(seed);
 
   return (
-    <View style={styles.page}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Virtualized lists</Text>
-        <Text style={styles.claim}>
-          One template measurement per itemType, ever. Scroll as hard as you like — the counter must
-          not move.
-        </Text>
-        <Readout>{`templateTraversalCounter.count: ${traversals}`}</Readout>
-        <View style={styles.headerButtons}>
-          <Button
-            label={showEmpty ? 'Hide empty state' : 'Show empty state'}
-            tone="quiet"
-            testID="demo-list-empty-toggle"
-            onPress={() => setShowEmpty((v) => !v)}
-          />
-          <Button label="Shuffle rows" testID="demo-list-shuffle" onPress={() => setSeed((s) => s + 1)} />
-        </View>
-      </View>
+    <DemoPage
+      scroll={false}
+      title="Virtualized lists"
+      claim="One template measurement per itemType, ever. Scroll as hard as you like — the counter must not move."
+    >
+      <Readout>{`templateTraversalCounter.count: ${traversals}`}</Readout>
+      <Row>
+        <Button
+          label={showEmpty ? 'Hide empty state' : 'Show empty state'}
+          tone="quiet"
+          testID="demo-list-empty-toggle"
+          onPress={() => setShowEmpty((v) => !v)}
+        />
+        <Button label="Shuffle rows" testID="demo-list-shuffle" onPress={() => setSeed((s) => s + 1)} />
+      </Row>
 
       {showEmpty ? (
         <View style={styles.section}>
-          <Text style={styles.sectionLabel}>SkeletonList — nothing loaded yet</Text>
+          <SectionLabel>SkeletonList — nothing loaded yet</SectionLabel>
           <SkeletonList
             itemType={EMPTY_TYPE}
             skeletonKey={EMPTY_TYPE}
@@ -152,7 +170,7 @@ export function ListDemo(): React.JSX.Element {
         </View>
       ) : null}
 
-      <Text style={styles.sectionLabel}>SkeletonCell — per-cell loading in a live FlashList</Text>
+      <SectionLabel>SkeletonCell — per-cell loading in a live FlashList</SectionLabel>
       <FlashList
         style={styles.list}
         data={feed}
@@ -176,60 +194,30 @@ export function ListDemo(): React.JSX.Element {
         }}
         ListFooterComponent={
           <View style={styles.section}>
-            <Text style={styles.sectionLabel}>SkeletonListFooter — loading the next page</Text>
+            <SectionLabel>SkeletonListFooter — loading the next page</SectionLabel>
             <SkeletonListFooter itemType={ROW_TYPE} skeletonKey={ROW_TYPE} estimatedCount={3} rowSpacing={8} />
           </View>
         }
       />
-    </View>
+    </DemoPage>
   );
 }
 
 const styles = StyleSheet.create({
-  page: {
-    flex: 1,
-    backgroundColor: DEMO_COLORS.canvas,
-  },
-  header: {
-    padding: 16,
-    gap: 8,
-  },
-  headerButtons: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: DEMO_COLORS.ink,
-  },
-  claim: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: DEMO_COLORS.muted,
-  },
   section: {
-    paddingHorizontal: 16,
     paddingBottom: 12,
     gap: 8,
-  },
-  sectionLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: DEMO_COLORS.muted,
-    paddingHorizontal: 16,
-    paddingBottom: 6,
   },
   list: {
     flex: 1,
   },
   rowHost: {
     height: ROW_HEIGHT,
-    paddingHorizontal: 16,
   },
   row: {
+    // No horizontal padding: the page's single gutter already positions this,
+    // and the template must inherit the row's full width. See the header.
     height: ROW_HEIGHT,
-    paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
@@ -238,7 +226,6 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: '#2f6fed',
   },
   rowText: {
     // Inherited, never computed. See this file's header.
@@ -249,22 +236,17 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
     fontWeight: '600',
-    color: DEMO_COLORS.ink,
   },
   rowLine: {
     width: '70%',
     height: 14,
     borderRadius: 4,
-    backgroundColor: '#cbd5e1',
   },
   inspected: {
     height: ROW_HEIGHT,
     gap: 2,
   },
   inspectedLabel: {
-    fontFamily: 'Courier',
     fontSize: 10,
-    color: DEMO_COLORS.muted,
-    paddingHorizontal: 16,
   },
 });

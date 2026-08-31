@@ -599,7 +599,6 @@ function PaintGateTier2Screen() {
 }
 
 function App() {
-  const isDarkMode = useColorScheme() === 'dark';
   const [screen, setScreen] = useState<Screen>('card');
   // The gallery is a SEPARATE route, never a fourth entry in the `Screen`
   // cycle: the on-device gates reach the list and tier-2 fixtures by tapping
@@ -609,7 +608,9 @@ function App() {
 
   return (
     <SafeAreaProvider>
-      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
+      {/* `StatusBar` moved down into `AppContent` (2026-08-30): the two
+          branches paint different backgrounds, and one app-wide bar style
+          could only ever be right for one of them. See the comments there. */}
       <AppContent
         screen={screen}
         onToggleScreen={() => setScreen(nextScreen)}
@@ -645,10 +646,21 @@ function AppContent({
   onCloseGallery: () => void;
 }) {
   const safeAreaInsets = useSafeAreaInsets();
+  const isDarkMode = useColorScheme() === 'dark';
+  const galleryCanvas = isDarkMode ? GALLERY_DARK_CANVAS : GALLERY_LIGHT_CANVAS;
 
   if (galleryOpen) {
+    // The gallery is the only branch that HAS a dark mode, so it is the only
+    // branch whose status bar follows the colour scheme. Before this the bar
+    // style followed the scheme app-wide while `styles.container` was always
+    // `#ffffff`, so in dark mode the OS painted white-on-white: the clock,
+    // battery and signal simply vanished on both platforms.
     return (
-      <View style={[styles.container, { paddingTop: safeAreaInsets.top }]}>
+      <View style={[styles.container, { backgroundColor: galleryCanvas, paddingTop: safeAreaInsets.top }]}>
+        {/* `backgroundColor` is gone from RN 0.87's `StatusBar` props, so the
+            bar's own fill follows the theme via the container behind it and
+            only the CONTENT style is set here. */}
+        <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
         <DemoGallery onExit={onCloseGallery} />
       </View>
     );
@@ -656,6 +668,11 @@ function AppContent({
 
   return (
     <View style={[styles.container, { paddingTop: safeAreaInsets.top }]}>
+      {/* The fixture branch's background is ALWAYS `#ffffff` — the pixel gates
+          sample it, so it is not themed and must not become themed. A constant
+          background needs a constant bar style; `dark-content` is the one that
+          is legible on it. */}
+      <StatusBar barStyle="dark-content" />
       {/* One 40pt row, exactly the height `screenToggle` occupied on its own
           before the gallery existed — so every fixture below keeps its
           previous vertical position and the pixel gates keep their framing.
@@ -689,6 +706,14 @@ function AppContent({
     </View>
   );
 }
+
+/** `demos/theme.ts`'s `canvas` token, duplicated as two literals rather than
+ *  imported. This file is the fixture app: it must keep building and running
+ *  even if `demos/` is deleted wholesale, and the gallery-only import surface
+ *  is deliberately one module (`DemoGallery`). Two colours are cheaper than a
+ *  second coupling. */
+const GALLERY_LIGHT_CANVAS = '#f8fafc';
+const GALLERY_DARK_CANVAS = '#0b1220';
 
 const styles = StyleSheet.create({
   flashList: {

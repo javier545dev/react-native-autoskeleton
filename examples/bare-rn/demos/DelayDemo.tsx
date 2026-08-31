@@ -15,7 +15,8 @@ import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { AutoSkeleton } from 'autoskeleton';
 import { Button, Segmented, useFakeLoad } from './controls';
-import { DEMO_COLORS, DemoPage, Panel, Readout, Row } from './ui';
+import { useDemoTheme } from './theme';
+import { DemoPage, Panel, Readout, Row } from './ui';
 
 const DURATIONS = [
   { value: 120, label: 'fast (120 ms)' },
@@ -66,10 +67,11 @@ export function DelayDemo(): React.JSX.Element {
 }
 
 function Card(): React.JSX.Element {
+  const t = useDemoTheme();
   return (
     <View style={styles.card}>
-      <View style={styles.line} />
-      <View style={[styles.line, styles.lineShort]} />
+      <View style={[styles.line, { backgroundColor: t.color.ink }]} />
+      <View style={[styles.line, styles.lineShort, { backgroundColor: t.color.ink }]} />
     </View>
   );
 }
@@ -82,7 +84,6 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 24,
     borderRadius: 4,
-    backgroundColor: DEMO_COLORS.ink,
   },
   lineShort: {
     width: '55%',

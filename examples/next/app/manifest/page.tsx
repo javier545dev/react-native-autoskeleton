@@ -13,7 +13,8 @@
 // team discovers it at the worst possible moment.
 
 import { manifest } from '../../generated/autoskeleton-ssr';
-import { DemoShell, DemoStage, DemoReadout, DemoReadoutRow } from '../_demo/DemoShell';
+import { DemoShell } from '../_demo/DemoShell';
+import { DemoStage, DemoReadout, DemoReadoutRow } from '../_demo/ui';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,7 +39,7 @@ export default function ManifestPage() {
 
   return (
     <DemoShell href="/manifest">
-      <DemoStage label="The artifact">
+      <DemoStage label="The artifact" live="manifest.json">
         <DemoReadout>
           <DemoReadoutRow label="schema version" value={String(manifest.v)} />
           <DemoReadoutRow label="build token" value={manifest.integrity} />
@@ -50,23 +51,24 @@ export default function ManifestPage() {
 
       <DemoStage
         label="Every captured entry"
+        live="manifest.entries"
         note="One row per skeletonKey × width bucket × direction. The frame and the shapes were measured by the real production DOM sensor in headless Chromium, not synthesised."
       >
         <table className="mt-3 w-full border-collapse text-left font-mono text-xs">
           <thead>
-            <tr className="border-b border-black/[.08] dark:border-white/[.145]">
-              <th className="py-2 pr-4 font-medium text-zinc-500">key</th>
-              <th className="py-2 pr-4 font-medium text-zinc-500">bucket</th>
-              <th className="py-2 pr-4 font-medium text-zinc-500">dir</th>
-              <th className="py-2 pr-4 font-medium text-zinc-500">frame</th>
-              <th className="py-2 font-medium text-zinc-500">shapes</th>
+            <tr className="border-b border-ui-line">
+              <th className="py-2 pr-4 font-medium text-ui-ink-3">key</th>
+              <th className="py-2 pr-4 font-medium text-ui-ink-3">bucket</th>
+              <th className="py-2 pr-4 font-medium text-ui-ink-3">dir</th>
+              <th className="py-2 pr-4 font-medium text-ui-ink-3">frame</th>
+              <th className="py-2 font-medium text-ui-ink-3">shapes</th>
             </tr>
           </thead>
           <tbody>
             {entries.map((entry) => (
               <tr
                 key={`${entry.skeletonKey}-${entry.widthBucket}-${entry.direction}`}
-                className="border-b border-black/[.04] dark:border-white/[.08]"
+                className="border-b border-ui-line"
               >
                 <td className="py-2 pr-4">{entry.skeletonKey}</td>
                 <td className="py-2 pr-4">{entry.widthBucket}</td>
@@ -83,16 +85,17 @@ export default function ManifestPage() {
 
       <DemoStage
         label="How it was produced"
+        live="npm run capture"
         note="The registry is committed next to this app as autoskeleton.capture-registry.json, and npm run capture is the command."
       >
-        <pre className="mt-3 overflow-x-auto rounded-lg bg-black/[.04] p-4 font-mono text-xs leading-6 dark:bg-white/[.06]">
+        <pre className="mt-3 overflow-x-auto rounded-lg bg-ui-code-bg p-4 font-mono text-xs leading-6">
           {`# examples/next/autoskeleton.capture-registry.json
 { "dashboard": "/dashboard-capture" }
 
 # with the dev server up on :3000 (npm run dev)
 npm run capture`}
         </pre>
-        <p className="mt-4 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+        <p className="ui-note">
           The CLI drives real headless Chromium, so it needs the optional peer{' '}
           <code className="font-mono">@playwright/test</code> and its browser binary. It writes{' '}
           <code className="font-mono">manifest.json</code> and <code className="font-mono">bundle.css</code>{' '}
@@ -102,7 +105,7 @@ npm run capture`}
           </a>{' '}
           is a case the library handles rather than a case it trusts you to avoid.
         </p>
-        <p className="mt-4 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+        <p className="ui-note">
           The ergonomic cost is the registry itself: one declared route per key, and that route has to render
           the loading shape you want measured (see{' '}
           <a href="/dashboard-capture" className="underline underline-offset-4">

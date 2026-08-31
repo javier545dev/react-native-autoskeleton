@@ -21,7 +21,8 @@
 
 import { AutoSkeletonSSR, computeSsrManifestIntegrity, type AutoSkeletonSSRManifest } from 'autoskeleton/ssr';
 import { manifest } from '../../generated/autoskeleton-ssr';
-import { DemoShell, DemoStage } from '../_demo/DemoShell';
+import { DemoShell } from '../_demo/DemoShell';
+import { DemoStage } from '../_demo/ui';
 import { DriftTokens } from './DriftTokens';
 
 export const dynamic = 'force-dynamic';
@@ -55,6 +56,7 @@ export default function DriftPage() {
     <DemoShell href="/drift">
       <DemoStage
         label="Matched pair"
+        live="<AutoSkeleton.SSR>"
         note="The manifest this app imports, replayed against the bundle.css generated from it in the same capture run."
       >
         <div data-specimen="matched">
@@ -64,6 +66,7 @@ export default function DriftPage() {
 
       <DemoStage
         label="Drifted pair"
+        live="<AutoSkeleton.SSR>"
         note="Identical element, identical key and direction, one difference: its build token belongs to a manifest this stylesheet was not generated from."
       >
         <div data-specimen="drifted">
@@ -73,14 +76,14 @@ export default function DriftPage() {
 
       <DriftTokens matchedToken={manifest.integrity} driftedToken={drifted.integrity} />
 
-      <p className="mt-8 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+      <p className="ui-note">
         Note what did <em>not</em> happen. The drifted specimen did not paint the old shapes, did not stretch
         them to the new frame, and did not collapse to nothing. It fell through to the same neutral block an
         uncaptured key renders — 80 px tall, 8 px radius, no clip-path — because the drift fallback in the
         generated bundle is written with the neutral block&apos;s own dimensions rather than a second set of
         numbers that could disagree with it.
       </p>
-      <p className="mt-4 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+      <p className="ui-note">
         Nothing had to be wired up for that. A consumer who never calls{' '}
         <code className="font-mono">assertSsrManifestIntegrity</code> still cannot ship the wrong geometry; the
         assertion is the loud, opt-in half that fails a build early, and this is the quiet half that holds

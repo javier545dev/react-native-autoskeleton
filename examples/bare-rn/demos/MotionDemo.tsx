@@ -18,7 +18,8 @@ import { AccessibilityInfo, StyleSheet, View } from 'react-native';
 import { AutoSkeleton } from 'autoskeleton';
 import type { AnimationKind } from 'autoskeleton';
 import { Segmented } from './controls';
-import { DEMO_COLORS, DemoPage, Panel, Readout, Row } from './ui';
+import { useDemoTheme } from './theme';
+import { DemoPage, Panel, Readout, Row } from './ui';
 
 const ANIMATIONS = [
   { value: 'shimmer' as const, label: 'shimmer' },
@@ -45,6 +46,7 @@ function useReduceMotionPreference(): boolean {
 }
 
 export function MotionDemo(): React.JSX.Element {
+  const t = useDemoTheme();
   const [animation, setAnimation] = useState<AnimationKind>('shimmer');
   const reduceMotion = useReduceMotionPreference();
   const effective: AnimationKind = reduceMotion && animation === 'shimmer' ? 'pulse' : animation;
@@ -69,9 +71,9 @@ export function MotionDemo(): React.JSX.Element {
       <Panel label={`<AutoSkeleton animation="${animation}">`}>
         <AutoSkeleton isLoading skeletonKey={`demo-motion-${animation}`} animation={animation}>
           <View style={styles.card}>
-            <View style={styles.line} />
-            <View style={[styles.line, styles.lineShort]} />
-            <View style={styles.block} />
+            <View style={[styles.line, { backgroundColor: t.color.ink }]} />
+            <View style={[styles.line, styles.lineShort, { backgroundColor: t.color.ink }]} />
+            <View style={[styles.block, { backgroundColor: t.color.lineStrong }]} />
           </View>
         </AutoSkeleton>
       </Panel>
@@ -86,7 +88,6 @@ const styles = StyleSheet.create({
   line: {
     width: '100%',
     height: 20,
-    backgroundColor: DEMO_COLORS.ink,
     borderRadius: 4,
   },
   lineShort: {
@@ -95,7 +96,6 @@ const styles = StyleSheet.create({
   block: {
     width: '100%',
     height: 96,
-    backgroundColor: '#334155',
     borderRadius: 10,
   },
 });

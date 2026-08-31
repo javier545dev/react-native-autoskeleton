@@ -1,0 +1,132 @@
+/* examples/vite/src/styles/tokens.css
+ *
+ * Every value the app's own CHROME paints. Nothing outside this file declares
+ * a `--ui-*` custom property, and nothing inside it knows anything about the
+ * library beyond the five rules below.
+ *
+ * ── Why a separate namespace at all ────────────────────────────────────────
+ *
+ * `autoskeleton` paints borderless, filled, neutral-grey, rounded, shimmering
+ * rectangles (default ramp #e2e2e2 -> #f5f5f5). That is the subject of this
+ * app. The chrome around it therefore has exactly one job — recede, and never
+ * be mistaken for the thing it frames:
+ *
+ *   1. No borderless filled grey block in chrome. Every chrome surface is
+ *      text, a hairline-bordered surface, or a small saturated-accent
+ *      element. Fill-without-border is reserved for the library's output.
+ *   2. Chrome neutrals are tinted — warm stone in light, cool near-navy in
+ *      dark. Pure grey belongs to the skeleton.
+ *   3. Never animate a gradient in chrome, and carry no shimmer-like motion
+ *      anywhere. `test/web/tailwind-app-theme.spec.ts` pauses every
+ *      `askl-shimmer` animation it can find on the page and asserts on what
+ *      is left moving; a decorative sweep in the chrome would be a second
+ *      moving thing that gate never agreed to.
+ *   4. The stage is delimited. Every live demo area sits inside a bordered
+ *      panel that says so, so the reader always knows where "app" ends and
+ *      "library output" begins.
+ *   5. App chrome never declares `--skl-*` or `--askl-*`. Those namespaces
+ *      belong to the library. The only file in this app allowed to write one
+ *      is `src/tailwind-theme.css`, and it does so scoped to the theming
+ *      demo's own container rather than `:root` — see the comment there.
+ *
+ * The violet accent is picked for DISTANCE, not taste. It is far from both
+ * skeleton defaults and from every colour the theming demos paint
+ * (#0f3d5c/#7fd4ff, #5c1f0f/#ffb37f, #1e40af/#f59e0b, #065f46/#a7f3d0), so no
+ * chrome-coloured pixel anywhere on the page can be read as a themed
+ * skeleton.
+ */
+
+:root {
+  /* Surfaces and ink */
+  --ui-bg: #f8f8f7;
+  --ui-surface: #ffffff;
+  --ui-stage: #ffffff;
+  --ui-ink: #1c1917;
+  --ui-ink-2: #57534e;
+  --ui-ink-3: #a8a29e;
+  --ui-line: #e7e5e4;
+  --ui-line-strong: #d6d3d1;
+  --ui-accent: #7c3aed;
+  --ui-accent-soft: rgb(124 58 237 / 0.08);
+  --ui-code-bg: #f5f5f4;
+  --ui-danger: #b91c1c;
+
+  /* Type */
+  --ui-font-sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --ui-font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --ui-text-2xs: 0.6875rem; /* 11px — group labels, uppercase */
+  --ui-text-xs: 0.75rem; /* 12px — source code, readout values */
+  --ui-text-sm: 0.8125rem; /* 13px — metrics, notes, nav items */
+  --ui-text-md: 0.9375rem; /* 15px — body, claims */
+  --ui-text-lg: 1.25rem; /* 20px — demo titles */
+  --ui-text-xl: 1.5rem; /* 24px — group headers */
+  --ui-text-2xl: 2rem; /* 32px — hero h1 */
+
+  --ui-leading-2xs: 1.4;
+  --ui-leading-xs: 1.5;
+  --ui-leading-sm: 1.55;
+  --ui-leading-md: 1.6;
+  --ui-leading-lg: 1.25;
+  --ui-leading-xl: 1.2;
+  --ui-leading-2xl: 1.15;
+
+  /* Space — 4px base */
+  --ui-sp-1: 4px;
+  --ui-sp-2: 8px;
+  --ui-sp-3: 12px;
+  --ui-sp-4: 16px;
+  --ui-sp-5: 24px;
+  --ui-sp-6: 32px;
+  --ui-sp-7: 48px;
+  --ui-sp-8: 64px;
+
+  /* Radii */
+  --ui-r-sm: 6px;
+  --ui-r-md: 10px;
+  --ui-r-lg: 14px;
+  --ui-r-pill: 999px;
+
+  color-scheme: light dark;
+}
+
+/* Dark redefines COLOUR ONLY. Type, space and radii are one scale in both
+ * themes, so a token that moved here would be a bug rather than a theme.
+ *
+ * Two selectors, because this app has two independent ways to be dark: the
+ * reader's OS preference, and the theming demo's own `<html>` class toggle
+ * (`[data-testid="toggle-theme"]`). The class must win wherever it is set, so
+ * it comes last. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ui-bg: #131316;
+    --ui-surface: #1b1b1f;
+    --ui-stage: #101013;
+    --ui-ink: #f4f4f5;
+    --ui-ink-2: #a1a1aa;
+    --ui-ink-3: #6f6f78;
+    --ui-line: #2a2a30;
+    --ui-line-strong: #3f3f46;
+    --ui-accent: #a78bfa;
+    --ui-accent-soft: rgb(167 139 250 / 0.14);
+    --ui-code-bg: #212127;
+    --ui-danger: #f87171;
+  }
+}
+
+html.dark {
+  --ui-bg: #131316;
+  --ui-surface: #1b1b1f;
+  --ui-stage: #101013;
+  --ui-ink: #f4f4f5;
+  --ui-ink-2: #a1a1aa;
+  --ui-ink-3: #6f6f78;
+  --ui-line: #2a2a30;
+  --ui-line-strong: #3f3f46;
+  --ui-accent: #a78bfa;
+  --ui-accent-soft: rgb(167 139 250 / 0.14);
+  --ui-code-bg: #212127;
+  --ui-danger: #f87171;
+
+  color-scheme: dark;
+}
