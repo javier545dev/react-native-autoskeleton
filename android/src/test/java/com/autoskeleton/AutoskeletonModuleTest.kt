@@ -1,12 +1,21 @@
 package com.autoskeleton
 
+import android.content.Context
 import android.graphics.Color
 import android.os.Looper
 import android.view.View
 import android.widget.FrameLayout
+import com.facebook.react.bridge.Callback
+import com.facebook.react.bridge.CatalystInstance
 import com.facebook.react.bridge.JavaOnlyArray
 import com.facebook.react.bridge.JavaOnlyMap
+import com.facebook.react.bridge.JavaScriptContextHolder
+import com.facebook.react.bridge.JavaScriptModule
+import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.RuntimeExecutor
+import com.facebook.react.bridge.UIManager
+import com.facebook.react.turbomodule.core.interfaces.CallInvokerHolder
 import com.facebook.react.uimanager.BackgroundStyleApplicator
 import com.facebook.react.uimanager.DisplayMetricsHolder
 import com.facebook.react.uimanager.LengthPercentage
@@ -17,7 +26,6 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.mockito.Mockito.mock
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
@@ -39,27 +47,34 @@ import org.robolectric.Shadows.shadowOf
  * `AutoskeletonModule.kt`'s own doc comment on `computeWireArray`) is what
  * keeps this REAL logic unit-testable at all.
  */
-/** WHY THERE IS NO HAND-WRITTEN FAKE HERE ANY MORE.
- *
- *  This used to be a `FakeReactApplicationContext` subclass with nineteen
- *  inert `override fun`s, one per abstract member of `ReactApplicationContext`
- *  in whichever React Native version happened to be installed. That couples a
- *  unit test to the exact SHAPE of a framework class, so it breaks whenever
- *  that shape moves in either direction — and it did: the RN matrix failed on
- *  0.83 through 0.86 with
- *
- *      AutoskeletonModuleTest.kt:68 'getRuntimeExecutor' overrides nothing.
- *
- *  while the library itself compiled and linked on all four (`assembleDebug`
- *  passed; only this test did not). A library supporting eleven minors cannot
- *  have its tests hard-code one minor's class surface.
- *
- *  A mock has no shape of its own: it adapts to whatever the class declares in
- *  the version under test. Nothing here calls a single method on the context —
- *  the tests inject their own `AutoskeletonViewResolver`, so the production
- *  `AutoskeletonSystemViewResolver(reactContext)` is never constructed, and the
- *  context exists only to satisfy the codegen'd `NativeAutoskeletonSpec` base
- *  constructor. There is therefore no behaviour to preserve, only a type. */
+/** `ReactApplicationContext` (and its `ReactContext` base) is `abstract` in
+ *  this RN version — this test never exercises any bridge/Fabric behavior
+ *  through it (only `AutoskeletonModule`'s constructor requires one to
+ *  satisfy the codegen'd `NativeAutoskeletonSpec` base class), so every
+ *  abstract member is stubbed with an inert implementation. */
+private class FakeReactApplicationContext(context: Context) : ReactApplicationContext(context) {
+    override fun <T : JavaScriptModule> getJSModule(jsInterface: Class<T>): T =
+        throw UnsupportedOperationException("not used by AutoskeletonModuleTest")
+    override fun <T : NativeModule> hasNativeModule(nativeModuleInterface: Class<T>): Boolean = false
+    override fun getNativeModules(): MutableCollection<NativeModule> = mutableListOf()
+    override fun <T : NativeModule> getNativeModule(nativeModuleInterface: Class<T>): T? = null
+    override fun getNativeModule(name: String): NativeModule? = null
+    override fun getCatalystInstance(): CatalystInstance =
+        throw UnsupportedOperationException("not used by AutoskeletonModuleTest")
+    override fun hasActiveCatalystInstance(): Boolean = false
+    override fun hasActiveReactInstance(): Boolean = false
+    override fun hasCatalystInstance(): Boolean = false
+    override fun hasReactInstance(): Boolean = false
+    override fun getRuntimeExecutor(): RuntimeExecutor? = null
+    override fun destroy() = Unit
+    override fun handleException(e: Exception) = Unit
+    override fun isBridgeless(): Boolean = false
+    override fun getJavaScriptContextHolder(): JavaScriptContextHolder? = null
+    override fun getJSCallInvokerHolder(): CallInvokerHolder? = null
+    override fun getFabricUIManager(): UIManager? = null
+    override fun getSourceURL(): String? = null
+    override fun registerSegment(segmentId: Int, path: String, callback: Callback) = Unit
+}
 
 @RunWith(RobolectricTestRunner::class)
 class AutoskeletonModuleTest {
@@ -76,7 +91,7 @@ class AutoskeletonModuleTest {
 
     private fun moduleFor(view: View, cache: AutoskeletonNativeShapeCache = AutoskeletonNativeShapeCache): AutoskeletonModule {
         DisplayMetricsHolder.initDisplayMetricsIfNotInitialized(RuntimeEnvironment.getApplication())
-        val reactContext = mock(ReactApplicationContext::class.java)
+        val reactContext = FakeReactApplicationContext(RuntimeEnvironment.getApplication())
         return AutoskeletonModule(
             reactContext = reactContext,
             viewResolver = AutoskeletonViewResolver { tag -> if (tag == 42) view else null },
