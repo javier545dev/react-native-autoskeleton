@@ -8,7 +8,6 @@ import com.facebook.react.uimanager.DisplayMetricsHolder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -37,10 +36,6 @@ import kotlin.math.abs
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class AutoskeletonRasterProbeTest {
-    /** See the rule's own doc: without it any code path that reads a React
-     *  Native feature flag fails to link on the host JVM. */
-    @get:Rule val featureFlags = AutoskeletonFeatureFlagsRule()
-
     private fun freshView(widthPx: Int = 100, heightPx: Int = 100): FrameLayout {
         val context = RuntimeEnvironment.getApplication()
         DisplayMetricsHolder.initDisplayMetricsIfNotInitialized(context)

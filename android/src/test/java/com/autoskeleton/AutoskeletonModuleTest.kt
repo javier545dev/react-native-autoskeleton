@@ -15,7 +15,6 @@ import com.facebook.react.uimanager.style.BorderRadiusProp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.mockito.Mockito.mock
@@ -64,10 +63,6 @@ import org.robolectric.Shadows.shadowOf
 
 @RunWith(RobolectricTestRunner::class)
 class AutoskeletonModuleTest {
-    /** See the rule's own doc: without it any code path that reads a React
-     *  Native feature flag fails to link on the host JVM. */
-    @get:Rule val featureFlags = AutoskeletonFeatureFlagsRule()
-
 
     /** Mirrors `AutoskeletonSensorOptions.defaults` exactly, as a plain
      *  `AutoskeletonGetShapesConfig` — the "nothing configured" baseline
