@@ -32,6 +32,7 @@ interface Step {
   readonly name?: string;
   readonly uses?: string;
   readonly run?: string;
+  readonly if?: string;
   readonly with?: Record<string, unknown>;
   readonly 'working-directory'?: string;
 }
@@ -307,4 +308,89 @@ describe('emulator scripts do not rely on shell line continuations', () => {
       }
     }
   });
+});
+
+// 20 of the 22 `bare-rn` matrix rows failed to install, all with one ERESOLVE:
+//
+//   While resolving: react-native@0.86.3
+//   Found: @react-native/jest-preset@0.87.1
+//
+// The matrix swaps `react-native` to the row's version and re-pins four of the
+// example's `@react-native/*` packages. `@react-native/jest-preset` and
+// `@react-native/new-app-screen` were in neither list. Both peer-depend on
+// react-native EXACTLY, so at the example's pinned 0.87.1 they contradict every
+// older row before a line is compiled.
+//
+// THE SUBTLETY THAT MAKES THIS GATE NON-TRIVIAL, found by trying to plant the
+// defect and watching the first version of this test stay green: the workflow
+// DOES delete `@react-native/jest-preset` — inside a step guarded by
+// `if: matrix.trim-example == 'true'`, which is false for exactly the rows that
+// failed. A gate that greps the file for the delete therefore passes while the
+// bug is live. Only a step that runs on EVERY row can be relied on, so this
+// reads the parsed workflow and ignores any step carrying an `if:`.
+//
+// Deliberately scoped to `@react-native/*`: those are the packages React Native
+// publishes in lockstep and pins exactly. An ordinary dependency with a normal
+// semver range is not this problem.
+describe('the RN matrix leaves no @react-native/* package at the example version', () => {
+  const EXAMPLE = 'examples/bare-rn/package.json';
+  const manifest = JSON.parse(
+    readFileSync(path.join(REPO_ROOT, EXAMPLE), 'utf8')
+  ) as {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  };
+
+  const scoped = Object.keys({
+    ...manifest.dependencies,
+    ...manifest.devDependencies,
+  })
+    .filter((name) => name.startsWith('@react-native/'))
+    .sort();
+
+  const workflow = readWorkflow('native-matrix.yml');
+
+  // Only the jobs that actually re-pin react-native per row; the Expo jobs and
+  // `pack-library` never touch the example's manifest.
+  const pinningJobs = jobsOf(workflow).filter(([, job]) =>
+    stepsOf(job).some((step) =>
+      (step.run ?? '').includes('npm pkg set "dependencies.react-native=')
+    )
+  );
+
+  it('there are jobs that re-pin react-native per row', () => {
+    expect(pinningJobs.length).toBeGreaterThan(0);
+  });
+
+  it(`${EXAMPLE} declares some @react-native/* packages to begin with`, () => {
+    // Without this the loops below pass vacuously if the example ever stops
+    // declaring them, and the gate quietly stops meaning anything.
+    expect(scoped.length).toBeGreaterThan(0);
+  });
+
+  for (const [jobId, job] of pinningJobs) {
+    // A step with an `if:` runs on SOME rows. Only unconditional steps say
+    // anything about the row that is currently failing.
+    const unconditional = stepsOf(job)
+      .filter((step) => step.if === undefined)
+      .map((step) => step.run ?? '')
+      .join('\n');
+
+    for (const name of scoped) {
+      it(`${jobId}: ${name} is re-pinned or deleted on every row`, () => {
+        const pinned =
+          unconditional.includes(`npm pkg set "dependencies.${name}=`) ||
+          unconditional.includes(`npm pkg set "devDependencies.${name}=`);
+        const deleted =
+          unconditional.includes(`npm pkg delete dependencies.${name}`) ||
+          unconditional.includes(`npm pkg delete devDependencies.${name}`);
+        expect(
+          pinned || deleted,
+          `${name} is declared in ${EXAMPLE}, but ${jobId} neither re-pins nor ` +
+            `deletes it in a step that runs on every row, so rows below the ` +
+            `example's own version fail to install with ERESOLVE`
+        ).toBe(true);
+      });
+    }
+  }
 });

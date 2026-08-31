@@ -104,10 +104,12 @@ jobs:
       matrix:
         # ONE ROW PER SUPPORTED RN MINOR, floor 0.77 (see this file's header for
         # why 0.77 and not 0.83). Latest published PATCH per minor, not an
-        # arbitrary one. The previous list pinned 0.83.1, 0.84.2 and 0.85.0,
-        # and NONE of those three was ever published — npm has 0.83.10, 0.84.1
-        # and 0.85.3. Every row using a real version passed; every row using an
-        # invented one died with ETARGET before it compiled a line. Nobody
+        # arbitrary one. The previous list pinned 0.83.1, 0.84.2 and 0.85.0.
+        # Only 0.84.2 was never published; 0.83.1 and 0.85.0 do exist, they are
+        # simply not the latest patch of their minor (0.83.10 and 0.85.3 are).
+        # An earlier note here claimed all three were invented — checked again
+        # against the registry, that was wrong, and only the 0.84.2 row could
+        # have died with ETARGET. Nobody
         # noticed because this workflow had never run: it was inside the file
         # that failed to parse. EVERY version below (react-native, react,
         # react-test-renderer, @react-native-community/cli) was confirmed to
@@ -237,6 +239,19 @@ jobs:
           npm pkg set "devDependencies.@react-native/eslint-config=${{ matrix.react-native-version }}"
           npm pkg set "devDependencies.@react-native/metro-config=${{ matrix.react-native-version }}"
           npm pkg set "devDependencies.@react-native/typescript-config=${{ matrix.react-native-version }}"
+          # `@react-native/new-app-screen` peer-depends on react-native
+          # EXACTLY, so leaving it at the example's 0.87.1 makes every older row
+          # unresolvable. It has a published release at every version this
+          # matrix uses, so it pins like its siblings.
+          npm pkg set "dependencies.@react-native/new-app-screen=${{ matrix.react-native-version }}"
+          # `@react-native/jest-preset` is the package ERESOLVE actually named
+          # when 20 of 22 rows failed: the example pins 0.87.1, it peer-depends
+          # on react-native exactly, and NOTHING pinned it, so every row below
+          # 0.87.1 died before compiling a line. It cannot be pinned like its
+          # siblings because npm publishes no 0.77-0.84 release of it at all
+          # (0.85.3 is the first). This job runs Gradle / xcodebuild and never
+          # jest, so it is deleted on EVERY row instead of trimmed on some.
+          npm pkg delete devDependencies.@react-native/jest-preset
         working-directory: examples/bare-rn
 
       # Only on the pre-0.82 rows. These are the example APP's UI dependencies,
@@ -345,7 +360,7 @@ jobs:
             community-cli: '20.2.0'
             trim-example: 'false'
             npm-install-flags: ''
-          - react-native-version: '0.83.1'
+          - react-native-version: '0.83.10'
             react: '19.2.3'
             react-test-renderer: '19.2.3'
             types-react: '^19.2.0'
@@ -359,7 +374,7 @@ jobs:
             community-cli: '20.2.0'
             trim-example: 'false'
             npm-install-flags: ''
-          - react-native-version: '0.85.0'
+          - react-native-version: '0.85.3'
             react: '19.2.3'
             react-test-renderer: '19.2.3'
             types-react: '^19.2.0'
@@ -412,6 +427,19 @@ jobs:
           npm pkg set "devDependencies.@react-native/eslint-config=${{ matrix.react-native-version }}"
           npm pkg set "devDependencies.@react-native/metro-config=${{ matrix.react-native-version }}"
           npm pkg set "devDependencies.@react-native/typescript-config=${{ matrix.react-native-version }}"
+          # `@react-native/new-app-screen` peer-depends on react-native
+          # EXACTLY, so leaving it at the example's 0.87.1 makes every older row
+          # unresolvable. It has a published release at every version this
+          # matrix uses, so it pins like its siblings.
+          npm pkg set "dependencies.@react-native/new-app-screen=${{ matrix.react-native-version }}"
+          # `@react-native/jest-preset` is the package ERESOLVE actually named
+          # when 20 of 22 rows failed: the example pins 0.87.1, it peer-depends
+          # on react-native exactly, and NOTHING pinned it, so every row below
+          # 0.87.1 died before compiling a line. It cannot be pinned like its
+          # siblings because npm publishes no 0.77-0.84 release of it at all
+          # (0.85.3 is the first). This job runs Gradle / xcodebuild and never
+          # jest, so it is deleted on EVERY row instead of trimmed on some.
+          npm pkg delete devDependencies.@react-native/jest-preset
         working-directory: examples/bare-rn
 
       # Only on the pre-0.82 rows. These are the example APP's UI dependencies,
