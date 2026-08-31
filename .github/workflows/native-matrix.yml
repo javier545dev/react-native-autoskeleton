@@ -287,6 +287,20 @@ jobs:
           node scripts/adopt-template-toolchain.mjs "$TPL/build.gradle" examples/bare-rn/android/build.gradle
           cp "$TPL/gradle/wrapper/gradle-wrapper.properties" examples/bare-rn/android/gradle/wrapper/gradle-wrapper.properties
           grep -n 'distributionUrl' examples/bare-rn/android/gradle/wrapper/gradle-wrapper.properties
+          # `examples/bare-rn`'s manifest is the 0.87 template's, which writes
+          # `android:usesCleartextTraffic="${usesCleartextTraffic}"` and relies
+          # on that release's gradle plugin to define the placeholder
+          # (`AgpConfiguratorUtils.kt`). Older plugins do not define it — the
+          # 0.77 template puts a literal `true` in its debug manifest instead —
+          # so the merger stops with "requires a placeholder substitution but no
+          # value ... is provided". Supplying it keeps the row's manifest
+          # mergeable without editing the checked-in manifest, and matches the
+          # value the newer plugin itself uses for a debug build.
+          # One printf, not a heredoc: inside a YAML `run: |` block the closing
+          # delimiter would be indented too, and bash only accepts it at column
+          # zero, so the heredoc would swallow the rest of the script.
+          printf '\nandroid { buildTypes { debug { manifestPlaceholders["usesCleartextTraffic"] = "true" } } }\n' >> examples/bare-rn/android/app/build.gradle
+          tail -2 examples/bare-rn/android/app/build.gradle
 
       - name: Trim examples/bare-rn to what a pre-0.82 row can build
         if: matrix.trim-example == 'true'
