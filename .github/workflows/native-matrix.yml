@@ -126,76 +126,6 @@ jobs:
         # `@react-native-community/template@<same patch>` ships, so the row
         # matches a real, shipped app configuration rather than a guess.
         include:
-          - react-native-version: '0.77.3'
-            react: '18.3.1'
-            react-test-renderer: '18.3.1'
-            types-react: '^18.2.6'
-            community-cli: '15.0.1'
-            trim-example: 'true'
-            npm-install-flags: '--legacy-peer-deps'
-          - react-native-version: '0.78.3'
-            react: '19.0.0'
-            react-test-renderer: '19.0.0'
-            types-react: '^19.0.0'
-            community-cli: '15.0.1'
-            trim-example: 'true'
-            npm-install-flags: '--legacy-peer-deps'
-          - react-native-version: '0.79.7'
-            react: '19.0.0'
-            react-test-renderer: '19.0.0'
-            types-react: '^19.0.0'
-            community-cli: '18.0.0'
-            trim-example: 'true'
-            npm-install-flags: '--legacy-peer-deps'
-          - react-native-version: '0.80.3'
-            react: '19.1.0'
-            react-test-renderer: '19.1.0'
-            types-react: '^19.1.0'
-            community-cli: '19.1.2'
-            trim-example: 'true'
-            npm-install-flags: '--legacy-peer-deps'
-          - react-native-version: '0.81.6'
-            react: '19.1.4'
-            react-test-renderer: '19.1.0'
-            types-react: '^19.1.4'
-            community-cli: '20.0.0'
-            trim-example: 'true'
-            npm-install-flags: '--legacy-peer-deps'
-          - react-native-version: '0.82.1'
-            react: '19.2.3'
-            react-test-renderer: '19.2.3'
-            types-react: '^19.2.0'
-            community-cli: '20.2.0'
-            trim-example: 'false'
-            npm-install-flags: ''
-          - react-native-version: '0.83.10'
-            react: '19.2.3'
-            react-test-renderer: '19.2.3'
-            types-react: '^19.2.0'
-            community-cli: '20.2.0'
-            trim-example: 'false'
-            npm-install-flags: ''
-          - react-native-version: '0.84.1'
-            react: '19.2.3'
-            react-test-renderer: '19.2.3'
-            types-react: '^19.2.0'
-            community-cli: '20.2.0'
-            trim-example: 'false'
-            npm-install-flags: ''
-          - react-native-version: '0.85.3'
-            react: '19.2.3'
-            react-test-renderer: '19.2.3'
-            types-react: '^19.2.0'
-            community-cli: '20.2.0'
-            trim-example: 'false'
-            npm-install-flags: ''
-          - react-native-version: '0.86.3'
-            react: '19.2.3'
-            react-test-renderer: '19.2.3'
-            types-react: '^19.2.0'
-            community-cli: '20.2.0'
-            trim-example: 'false'
-            npm-install-flags: ''
           - react-native-version: '0.87.1'
             react: '19.2.3'
             react-test-renderer: '19.2.3'
@@ -657,3 +587,118 @@ jobs:
           test -n "$hit" || { echo "::error::AutoskeletonPackage was never compiled"; exit 1; }
           echo "compiled: $hit"
         working-directory: examples/rn-077
+
+  # THE ROWS THAT USED TO LIVE IN `bare-rn-android-matrix`, DONE THE WAY THAT
+  # ACTUALLY WORKS.
+  #
+  # Those rows covered 0.77-0.86 by taking `examples/bare-rn` — a React Native
+  # 0.87 app — and mutating it down: swapping its JavaScript dependencies, then
+  # its Kotlin and Gradle, then its whole `ext { }` block, then a manifest
+  # placeholder. Six rounds, and every round uncovered one more thing that made
+  # the app still a 0.87 app underneath: an ERESOLVE on a package with an exact
+  # peer, then `Failed to find Platform SDK android-37`, then a placeholder no
+  # older gradle plugin defines, then `react-native-reanimated` refusing to
+  # build below its own minimum. Mutating an app of one version into an app of
+  # another is not the same as being that version, and the failures were never
+  # in this library.
+  #
+  # Meanwhile a REAL app of each version — scaffolded by that release's own CLI,
+  # carrying its own Gradle, Kotlin, SDK levels, manifest and dependency set —
+  # built on the first attempt, every time, for every version tried. So the
+  # matrix now scaffolds instead of mutating. It is slower per row and it stops
+  # needing a new patch every time React Native moves a knob.
+  #
+  # 0.77.3 is not here: `floor-rn-077-android` builds the COMMITTED
+  # `examples/rn-077`, which also keeps that example from rotting. 0.87.1 is not
+  # here either — `bare-rn-android-matrix` covers it, and bare-rn genuinely IS a
+  # 0.87 app, so no mutation is involved.
+  genuine-app-android-matrix:
+    runs-on: ubuntu-latest
+    needs: pack-library
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rn: '0.78.3'
+            cli: '15.0.1'
+            install-flags: '--legacy-peer-deps'
+          - rn: '0.79.7'
+            cli: '18.0.0'
+            install-flags: '--legacy-peer-deps'
+          - rn: '0.80.3'
+            cli: '19.1.2'
+            install-flags: '--legacy-peer-deps'
+          - rn: '0.81.6'
+            cli: '20.0.0'
+            install-flags: '--legacy-peer-deps'
+          - rn: '0.82.1'
+            cli: '20.2.0'
+            install-flags: ''
+          - rn: '0.83.10'
+            cli: '20.2.0'
+            install-flags: ''
+          - rn: '0.84.1'
+            cli: '20.2.0'
+            install-flags: ''
+          - rn: '0.85.3'
+            cli: '20.2.0'
+            install-flags: ''
+          - rn: '0.86.3'
+            cli: '20.2.0'
+            install-flags: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+      - uses: actions/download-artifact@v4
+        with:
+          name: autoskeleton-tarball
+          path: .tarball
+      - name: Fail loudly if the tarball did not arrive
+        run: test -n "$(ls -A .tarball 2>/dev/null)" || { echo "::error::no tarball"; exit 1; }
+      - name: Scaffold a real ${{ matrix.rn }} app with that release's own CLI
+        run: |
+          set -euo pipefail
+          npx --yes "@react-native-community/cli@${{ matrix.cli }}" init GenuineApp \
+            --version "${{ matrix.rn }}" --directory /tmp/genuine --skip-install --install-pods false
+          test -f /tmp/genuine/package.json
+          node -e "console.log('scaffolded react-native', require('/tmp/genuine/package.json').dependencies['react-native'])"
+      - name: Install the NDK this template pins
+        run: |
+          set -euo pipefail
+          ndk=$(grep -oE 'ndkVersion *= *"[^"]+"' /tmp/genuine/android/build.gradle | grep -oE '[0-9]+\.[0-9.]+' || true)
+          if [ -n "$ndk" ]; then
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk"
+          fi
+      - name: Install THIS run's tarball
+        run: npm install --no-audit --no-fund ${{ matrix.install-flags }} "autoskeleton@file:$GITHUB_WORKSPACE/.tarball/$(ls "$GITHUB_WORKSPACE/.tarball")"
+        working-directory: /tmp/genuine
+      - name: Autolinking must discover autoskeleton (ADR-14)
+        run: |
+          npx react-native config > /tmp/rn-config.json
+          node -e "
+            const c = require('/tmp/rn-config.json');
+            if (!Object.keys(c.dependencies || {}).includes('autoskeleton')) {
+              console.error('::error::autolinking did not discover autoskeleton on RN ${{ matrix.rn }}');
+              process.exit(1);
+            }
+            console.log('autolinking discovered autoskeleton');
+          "
+        working-directory: /tmp/genuine
+      - name: assembleDebug
+        run: ./gradlew assembleDebug
+        working-directory: /tmp/genuine/android
+      - name: The library's own class must have been compiled
+        # A green build that never compiled autoskeleton would prove nothing, so
+        # the artifact is asserted rather than inferred from an exit code.
+        run: |
+          hit=$(find node_modules/autoskeleton/android/build -name 'AutoskeletonPackage*.class' | head -1)
+          test -n "$hit" || { echo "::error::AutoskeletonPackage was never compiled on ${{ matrix.rn }}"; exit 1; }
+          echo "compiled: $hit"
+        working-directory: /tmp/genuine

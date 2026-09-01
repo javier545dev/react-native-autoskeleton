@@ -406,3 +406,74 @@ describe('the RN matrix leaves no @react-native/* package at the example version
     }
   }
 });
+
+// Android coverage of the supported React Native range is now spread across
+// three jobs on purpose:
+//
+//   floor-rn-077-android        builds the committed `examples/rn-077`
+//   genuine-app-android-matrix  scaffolds a real app per version, 0.78-0.86
+//   bare-rn-android-matrix      builds `examples/bare-rn`, which IS a 0.87 app
+//
+// That split is what replaced six rounds of trying to mutate one 0.87 app into
+// every older version. The risk it introduces is a version silently falling
+// through the gap between three jobs — nothing would go red, the matrix would
+// just quietly stop covering a minor the peer range still promises.
+//
+// So rather than maintain a list here that could itself drift, this asserts the
+// SHAPE: exactly one row per minor, and no missing minor between the lowest and
+// the highest covered. Adding 0.88 or dropping 0.81 both have to be deliberate.
+describe('the Android jobs cover every RN minor in the supported range', () => {
+  const workflow = readWorkflow('native-matrix.yml');
+
+  function rowsOf(jobId: string, field: string): string[] {
+    const job = (workflow.jobs ?? {})[jobId] as
+      | { strategy?: { matrix?: { include?: Array<Record<string, string>> } } }
+      | undefined;
+    return (job?.strategy?.matrix?.include ?? []).map((row) => row[field]).filter(Boolean);
+  }
+
+  const exampleVersion = (
+    JSON.parse(
+      readFileSync(path.join(REPO_ROOT, 'examples/rn-077/package.json'), 'utf8')
+    ) as { dependencies: Record<string, string> }
+  ).dependencies['react-native'];
+
+  const covered = [
+    ...rowsOf('bare-rn-android-matrix', 'react-native-version'),
+    ...rowsOf('genuine-app-android-matrix', 'rn'),
+    exampleVersion,
+  ];
+
+  const minorOf = (v: string) => Number(v.split('.')[1]);
+  const minors = covered.map(minorOf).sort((a, b) => a - b);
+
+  it('covers a contiguous run of minors, with no version covered twice', () => {
+    expect(covered.length).toBeGreaterThan(1);
+    expect(new Set(minors).size, `a minor is covered by two jobs: ${covered.join(', ')}`).toBe(
+      minors.length
+    );
+    const missing: number[] = [];
+    for (let m = minors[0]; m <= minors[minors.length - 1]; m += 1) {
+      if (!minors.includes(m)) missing.push(m);
+    }
+    expect(
+      missing,
+      `no Android job builds RN 0.${missing.join(', 0.')}, but the peer range still promises it`
+    ).toEqual([]);
+  });
+
+  it('starts at the minor the peer range declares as the floor', () => {
+    // If `package.json` ever raises or lowers the floor, the matrix has to move
+    // with it — a range nothing builds is the thing this whole file exists to
+    // stop being possible.
+    const declared = (
+      JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')) as {
+        peerDependencies: Record<string, string>;
+      }
+    ).peerDependencies['react-native'];
+    const floorMinor = Number(/(\d+)\.(\d+)\./.exec(declared)?.[2]);
+    expect(minors[0], `peer range says ${declared} but the lowest Android row is 0.${minors[0]}`).toBe(
+      floorMinor
+    );
+  });
+});
