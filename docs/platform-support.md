@@ -192,7 +192,8 @@ The prop is accepted on all three platforms. Only the web implementation draws.
   overlay component.
 
 Both native classes are implemented and unit-tested. Neither is wired. A blank
-overlay on iOS or Android is our gap, not your mistake.
+overlay on iOS or Android is our gap, not your mistake. Tracked as
+[#31](https://github.com/javier545dev/react-native-autoskeleton/issues/31).
 
 An earlier version of `docs/observability.md` claimed the overlay was "fully
 wired on web and Android" and framed iOS as the only gap. That was exactly
@@ -224,6 +225,8 @@ preserving a consumer `testID` would make `Ignore` stop working on iOS
 entirely. Closing that needs a second native marker channel; it is tracked, not
 fixed.
 
+Tracked as [#28](https://github.com/javier545dev/react-native-autoskeleton/issues/28).
+
 ### 5d. On Android, `defaultRadius` does not fill in a missing radius
 
 Android's radius ladder is R0 (typed `radius` hint) → R1 (`Drawable.getOutline`)
@@ -254,6 +257,8 @@ container's box. iOS does neither. A wide native scroll row inside an
 `<AutoSkeleton>` can therefore contribute shapes that extend past the visible
 region.
 
+Tracked as [#30](https://github.com/javier545dev/react-native-autoskeleton/issues/30).
+
 ### 5e-bis. A sized but transparent container contributes no shape — on every platform
 
 Not a limitation of one platform; a deliberate rule all three implement
@@ -272,6 +277,25 @@ answer is an always-mounted opaque slot —
 full argument. Gated by the shared `container-rule-sized-but-transparent`
 fixture across the iOS, Android and web sensors.
 
+### 5e-ter. `visibility: hidden` content is still shaped on web
+
+`leafShape()` in `src/web/dom-sensor.ts` refuses to shape a leaf whose computed
+`opacity` is `0`, with the reasoning written out at the call site. It does not
+look at `visibility`, which appears nowhere in that file. A `visibility: hidden`
+element occupies layout and reports a real `getBoundingClientRect()`, so it is
+measured exactly like a visible one and a skeleton block is painted over a
+region where nothing will ever appear.
+
+Unlike the `opacity: 0` rule, this one has no partial-coverage caveat.
+`visibility` inherits, and `getComputedStyle` resolves that inheritance before
+you read it — verified in Chromium: a child of a `visibility: hidden` parent
+computes `hidden`, a child that sets `visibility: visible` computes `visible`,
+and the hidden child still reports a non-zero height. So a single check
+alongside the existing `opacity` one is complete for every shape emitted, and
+costs nothing extra because that caller has already paid for `getComputedStyle`.
+
+Tracked as [#29](https://github.com/javier545dev/react-native-autoskeleton/issues/29).
+
 ### 5f. `handoffFadeMs` is a delay, not a fade
 
 Nothing on either platform's teardown path animates opacity. The overlay is
@@ -288,6 +312,8 @@ See [`observability.md` §`onMetrics`](./observability.md) for the full per-fiel
 table. Summary: on iOS and Android, `traversalMs` is always `0`,
 `radiusSourceHistogram` is always all-zeros, and `degraded` is always `[]`
 except for `['native-module-unavailable']`.
+
+Tracked as [#24](https://github.com/javier545dev/react-native-autoskeleton/issues/24).
 
 ### 5h. `onMetrics.cacheHit` and `traversalMs` are decided once per mounted instance
 
@@ -336,6 +362,8 @@ The entries are small (a `[VERSION, x, y, w, h, r] × N` array of doubles per
 distinct cache key, and a cache key includes a bucketed width, so the key space
 is bounded by your distinct `skeletonKey`/`itemType` values × buckets × 2
 directions). It is not an unbounded-per-frame leak. It is still unbounded.
+
+Tracked as [#25](https://github.com/javier545dev/react-native-autoskeleton/issues/25).
 
 ### 5l. `Sensor.observe()` does nothing on native
 
