@@ -285,76 +285,6 @@ jobs:
         # Same rows, same verified pins, same reasoning as the Android
         # matrix above — see the comment there.
         include:
-          - react-native-version: '0.77.3'
-            react: '18.3.1'
-            react-test-renderer: '18.3.1'
-            types-react: '^18.2.6'
-            community-cli: '15.0.1'
-            trim-example: 'true'
-            npm-install-flags: '--legacy-peer-deps'
-          - react-native-version: '0.78.3'
-            react: '19.0.0'
-            react-test-renderer: '19.0.0'
-            types-react: '^19.0.0'
-            community-cli: '15.0.1'
-            trim-example: 'true'
-            npm-install-flags: '--legacy-peer-deps'
-          - react-native-version: '0.79.7'
-            react: '19.0.0'
-            react-test-renderer: '19.0.0'
-            types-react: '^19.0.0'
-            community-cli: '18.0.0'
-            trim-example: 'true'
-            npm-install-flags: '--legacy-peer-deps'
-          - react-native-version: '0.80.3'
-            react: '19.1.0'
-            react-test-renderer: '19.1.0'
-            types-react: '^19.1.0'
-            community-cli: '19.1.2'
-            trim-example: 'true'
-            npm-install-flags: '--legacy-peer-deps'
-          - react-native-version: '0.81.6'
-            react: '19.1.4'
-            react-test-renderer: '19.1.0'
-            types-react: '^19.1.4'
-            community-cli: '20.0.0'
-            trim-example: 'true'
-            npm-install-flags: '--legacy-peer-deps'
-          - react-native-version: '0.82.1'
-            react: '19.2.3'
-            react-test-renderer: '19.2.3'
-            types-react: '^19.2.0'
-            community-cli: '20.2.0'
-            trim-example: 'false'
-            npm-install-flags: ''
-          - react-native-version: '0.83.10'
-            react: '19.2.3'
-            react-test-renderer: '19.2.3'
-            types-react: '^19.2.0'
-            community-cli: '20.2.0'
-            trim-example: 'false'
-            npm-install-flags: ''
-          - react-native-version: '0.84.1'
-            react: '19.2.3'
-            react-test-renderer: '19.2.3'
-            types-react: '^19.2.0'
-            community-cli: '20.2.0'
-            trim-example: 'false'
-            npm-install-flags: ''
-          - react-native-version: '0.85.3'
-            react: '19.2.3'
-            react-test-renderer: '19.2.3'
-            types-react: '^19.2.0'
-            community-cli: '20.2.0'
-            trim-example: 'false'
-            npm-install-flags: ''
-          - react-native-version: '0.86.3'
-            react: '19.2.3'
-            react-test-renderer: '19.2.3'
-            types-react: '^19.2.0'
-            community-cli: '20.2.0'
-            trim-example: 'false'
-            npm-install-flags: ''
           - react-native-version: '0.87.1'
             react: '19.2.3'
             react-test-renderer: '19.2.3'
@@ -702,3 +632,130 @@ jobs:
           test -n "$hit" || { echo "::error::AutoskeletonPackage was never compiled on ${{ matrix.rn }}"; exit 1; }
           echo "compiled: $hit"
         working-directory: /tmp/genuine
+
+  # The iOS half of the same replacement, with one honest asymmetry.
+  #
+  # `bare-rn-ios-matrix` covered 0.77-0.86 by mutating a 0.87 app, and nine of
+  # eleven rows were red. Scaffolding a real app per version removes ONE of the
+  # two causes and not the other, and the difference was measured rather than
+  # assumed:
+  #
+  #   * `pod install` could not resolve `React-Core-prebuilt` on 0.82 and
+  #     0.84-0.86. That was the 0.87 template's prebuilt-frameworks setup
+  #     dragged onto an older row. A genuine 0.77 app installs 68 pods with no
+  #     such error, so scaffolding fixes it.
+  #   * `Pods/fmt` does not compile against current Clang on 0.77-0.81
+  #     ("call to consteval function ... is not a constant expression").
+  #     Scaffolding does NOT fix this: a genuine 0.77.3 app, built locally
+  #     against Xcode 26.6, fails identically with 5 errors inside fmt. It is a
+  #     break between an old `fmt` release and today's toolchain, entirely
+  #     inside React Native's own dependencies.
+  #
+  # So those rows stop at `pod install` instead of pretending to build. That is
+  # not nothing: it proves CocoaPods autolinking discovers this package on that
+  # version, which is the iOS half of ADR-14 and the part that could actually
+  # regress here. What it does not prove is a full compile, and the row says so
+  # rather than being quietly dropped — a version with no row at all looks
+  # supported-and-checked, which is worse than one that states its limit.
+  genuine-app-ios-matrix:
+    runs-on: macos-latest
+    needs: pack-library
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `fmt` will not compile against current Clang on these. 0.77.3 is the
+          # one actually measured: a genuine 0.77.3 app, scaffolded and pod-installed
+          # locally, links autoskeleton in Podfile.lock and then fails with 5 errors
+          # inside fmt under Xcode 26.6.
+          - rn: '0.77.3'
+            cli: '15.0.1'
+            install-flags: '--legacy-peer-deps'
+            full-build: 'false'
+          - rn: '0.78.3'
+            cli: '15.0.1'
+            install-flags: '--legacy-peer-deps'
+            full-build: 'false'
+          - rn: '0.79.7'
+            cli: '18.0.0'
+            install-flags: '--legacy-peer-deps'
+            full-build: 'false'
+          - rn: '0.80.3'
+            cli: '19.1.2'
+            install-flags: '--legacy-peer-deps'
+            full-build: 'false'
+          - rn: '0.81.6'
+            cli: '20.0.0'
+            install-flags: '--legacy-peer-deps'
+            full-build: 'false'
+          # These build all the way through.
+          - rn: '0.82.1'
+            cli: '20.2.0'
+            install-flags: ''
+            full-build: 'true'
+          - rn: '0.83.10'
+            cli: '20.2.0'
+            install-flags: ''
+            full-build: 'true'
+          - rn: '0.84.1'
+            cli: '20.2.0'
+            install-flags: ''
+            full-build: 'true'
+          - rn: '0.85.3'
+            cli: '20.2.0'
+            install-flags: ''
+            full-build: 'true'
+          - rn: '0.86.3'
+            cli: '20.2.0'
+            install-flags: ''
+            full-build: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: autoskeleton-tarball
+          path: .tarball
+      - name: Fail loudly if the tarball did not arrive
+        run: test -n "$(ls -A .tarball 2>/dev/null)" || { echo "::error::no tarball"; exit 1; }
+      - name: Scaffold a real ${{ matrix.rn }} app with that release's own CLI
+        run: |
+          set -euo pipefail
+          npx --yes "@react-native-community/cli@${{ matrix.cli }}" init GenuineApp \
+            --version "${{ matrix.rn }}" --directory /tmp/genuine --skip-install --install-pods false
+          node -e "console.log('scaffolded react-native', require('/tmp/genuine/package.json').dependencies['react-native'])"
+      - name: Install THIS run's tarball
+        run: npm install --no-audit --no-fund ${{ matrix.install-flags }} "autoskeleton@file:$GITHUB_WORKSPACE/.tarball/$(ls "$GITHUB_WORKSPACE/.tarball")"
+        working-directory: /tmp/genuine
+      - name: pod install
+        run: pod install
+        working-directory: /tmp/genuine/ios
+      - name: CocoaPods autolinking must have found autoskeleton (the iOS half of ADR-14)
+        # Asserted from Podfile.lock rather than from `pod install` exiting 0:
+        # a successful install that linked nothing would be a green step and no
+        # evidence at all.
+        run: |
+          grep -q 'Autoskeleton (from `../node_modules/autoskeleton`)' Podfile.lock \
+            || { echo "::error::CocoaPods did not link autoskeleton on RN ${{ matrix.rn }}"; exit 1; }
+          echo "Podfile.lock links autoskeleton from node_modules"
+        working-directory: /tmp/genuine/ios
+      - name: xcodebuild
+        if: matrix.full-build == 'true'
+        # Names discovered, never hardcoded: the scaffold derives them from the
+        # app name and a rename upstream would otherwise look like a build break.
+        run: |
+          set -euo pipefail
+          workspace=$(ls -d *.xcworkspace | head -1)
+          scheme=$(basename "$workspace" .xcworkspace)
+          echo "building workspace=$workspace scheme=$scheme"
+          xcodebuild build \
+            -workspace "$workspace" \
+            -scheme "$scheme" \
+            -destination 'generic/platform=iOS Simulator'
+        working-directory: /tmp/genuine/ios
+      - name: Say plainly that this row stopped at autolinking
+        if: matrix.full-build != 'true'
+        run: |
+          echo "::notice::RN ${{ matrix.rn }} verified as far as CocoaPods autolinking. A full compile is not possible on this runner: React Native pins an fmt release that current Clang rejects. See genuine-app-ios-matrix's own comment."

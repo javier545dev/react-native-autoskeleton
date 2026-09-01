@@ -477,3 +477,56 @@ describe('the Android jobs cover every RN minor in the supported range', () => {
     );
   });
 });
+
+// The same contiguity property for iOS, which is covered by a different pair of
+// jobs and at two different strengths: `genuine-app-ios-matrix` builds fully
+// from 0.82 up and stops at CocoaPods autolinking below it, because React
+// Native pins an `fmt` release current Clang rejects on 0.77-0.81.
+//
+// The weaker rows still have to EXIST. A version with no row at all reads as
+// supported-and-checked, which is a worse lie than a row that states its limit —
+// so this asserts coverage, and the row's own `full-build` flag carries how far
+// that coverage goes.
+describe('the iOS jobs cover every RN minor in the supported range', () => {
+  const workflow = readWorkflow('native-matrix.yml');
+
+  function rowsOf(jobId: string, field: string): string[] {
+    const job = (workflow.jobs ?? {})[jobId] as
+      | { strategy?: { matrix?: { include?: Array<Record<string, string>> } } }
+      | undefined;
+    return (job?.strategy?.matrix?.include ?? []).map((row) => row[field]).filter(Boolean);
+  }
+
+  const covered = [
+    ...rowsOf('bare-rn-ios-matrix', 'react-native-version'),
+    ...rowsOf('genuine-app-ios-matrix', 'rn'),
+  ];
+  const minors = covered.map((v) => Number(v.split('.')[1])).sort((a, b) => a - b);
+
+  it('covers a contiguous run of minors, none of them twice', () => {
+    expect(covered.length).toBeGreaterThan(1);
+    expect(new Set(minors).size, `a minor is covered twice: ${covered.join(', ')}`).toBe(
+      minors.length
+    );
+    const missing: number[] = [];
+    for (let m = minors[0]; m <= minors[minors.length - 1]; m += 1) {
+      if (!minors.includes(m)) missing.push(m);
+    }
+    expect(
+      missing,
+      `no iOS job covers RN 0.${missing.join(', 0.')}, but the peer range still promises it`
+    ).toEqual([]);
+  });
+
+  it('starts at the minor the peer range declares as the floor', () => {
+    const declared = (
+      JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')) as {
+        peerDependencies: Record<string, string>;
+      }
+    ).peerDependencies['react-native'];
+    const floorMinor = Number(/(\d+)\.(\d+)\./.exec(declared)?.[2]);
+    expect(minors[0], `peer range says ${declared} but the lowest iOS row is 0.${minors[0]}`).toBe(
+      floorMinor
+    );
+  });
+});
