@@ -688,11 +688,18 @@ jobs:
             cli: '20.0.0'
             install-flags: '--legacy-peer-deps'
             full-build: 'false'
-          # These build all the way through.
+          # 0.82 belongs with the group above, and this is where measurement
+          # beat inference. It was classified as a full build because the
+          # earlier run showed it failing in `pod install` on
+          # `React-Core-prebuilt` — scaffolding fixed that, and the fmt failure
+          # it had been hiding behind surfaced underneath, identical to
+          # 0.77-0.81's. One blocker masking another is exactly why the boundary
+          # could not be reasoned out and had to be run.
           - rn: '0.82.1'
             cli: '20.2.0'
             install-flags: ''
-            full-build: 'true'
+            full-build: 'false'
+          # These build all the way through.
           - rn: '0.83.10'
             cli: '20.2.0'
             install-flags: ''
