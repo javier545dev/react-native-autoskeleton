@@ -198,13 +198,80 @@ async function overlayCentre(page: Page): Promise<{ x: number; y: number }> {
   return { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) };
 }
 
+/** Opens the themed demo ALONE, via its `#/<id>` deep link.
+ *
+ *  The pixel assertions below sample with `page.screenshot({ clip })`, whose
+ *  coordinates are viewport-relative and are read once from the overlay's box.
+ *  Loading `/` renders EVERY demo, so that sample point sat below a growing
+ *  stack of other demos and beside every other skeleton's animation:
+ *  `pinShimmerPhase` had to pause and seek all of them before each screenshot.
+ *  Measured on 2026-09-02, when four demos were added: the suite went from
+ *  6-of-6 passing to 1-or-2-of-6, failing with a sampled colour 236 channel
+ *  values away from the expected highlight — a pixel from somewhere else, not
+ *  a theming regression. Neither reserving height above the sample point nor
+ *  waiting for the scroll to settle moved that number.
+ *
+ *  Focusing the demo removes the entire class: one demo, one overlay, one
+ *  animation, no scroll. What `/` itself must guarantee — that this demo is
+ *  mounted there at all, which several gates depend on — is asserted
+ *  separately and cheaply below, without pixels. */
 async function openThemedDemo(page: Page): Promise<{ x: number; y: number }> {
-  await page.goto(`${server.baseURL}/`);
+  await page.goto(`${server.baseURL}/#/tailwind-theme`);
   await page.locator('[data-testid="themed-card"]').scrollIntoViewIfNeeded();
+  await waitForStableOverlayBox(page);
   return overlayCentre(page);
 }
 
+/** Blocks until the themed overlay's VIEWPORT box stops moving.
+ *
+ *  `paintedPixel` samples with `page.screenshot({ clip })`, whose coordinates
+ *  are viewport-relative, so every sample depends on the box read once by
+ *  `overlayCentre`. Anything that moves the page after that read — a scroll
+ *  still settling, a demo above this one changing height — silently redirects
+ *  the sample to a different pixel, and the assertion then reports a colour
+ *  from somewhere else entirely rather than a theming failure.
+ *
+ *  This is not hypothetical: the index renders every demo, so the number of
+ *  sections above the themed one grows as demos are added, and
+ *  `scrollIntoViewIfNeeded()` resolves before the resulting scroll has
+ *  necessarily settled. Two consecutive animation frames reporting the same
+ *  top/left is the cheapest sufficient signal. */
+async function waitForStableOverlayBox(page: Page): Promise<void> {
+  await page.locator('[data-testid="themed-demo"] .askl-overlay').waitFor({ state: 'visible' });
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector('[data-testid="themed-demo"] .askl-overlay');
+      if (el === null) {
+        return false;
+      }
+      const read = () => {
+        const r = el.getBoundingClientRect();
+        return `${Math.round(r.x)}:${Math.round(r.y)}`;
+      };
+      const first = read();
+      return new Promise<boolean>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve(read() === first)));
+      });
+    },
+    undefined,
+    { timeout: 5000 },
+  );
+}
+
 test.describe('Tailwind v4 theming in a real consumer app (REQ-THEME-1, tasks.md 7.1)', () => {
+  // The pixel tests below open the demo alone via `#/tailwind-theme`, so this
+  // asserts the thing that focusing gave up: `/` with NO hash renders every
+  // demo, including this one. `examples/vite/src/App.tsx` documents that as
+  // load-bearing rather than incidental, and a router change that hid demos
+  // behind a hash would take the theming gate offline silently. No pixels
+  // here on purpose — presence is a DOM question, and mixing it with colour
+  // sampling is what made this file flaky.
+  test('the themed demo is mounted at / with no hash, not only at its deep link', async ({ page }) => {
+    await page.goto(`${server.baseURL}/`);
+    await expect(page.locator('[data-testid="themed-demo"]')).toBeAttached();
+    await expect(page.locator('[data-testid="themed-card"]')).toBeAttached();
+  });
+
   test("the app's production build ships the @theme tokens the skeleton resolves through", async () => {
     // Whitespace-tolerant: the production build runs the emitted CSS through
     // Vite's minifier, so `--color-skl-base: #1e40af` ships as
