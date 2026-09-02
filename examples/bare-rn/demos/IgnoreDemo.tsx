@@ -33,6 +33,23 @@ import { Button, useFakeLoad } from './controls';
 import { useDemoTheme } from './theme';
 import { DemoPage, Panel, Row } from './ui';
 
+/** A composite that does NOT forward `nativeID`/`testID`, which is the exact
+ *  shape that makes `Ignore` do nothing. Written out here rather than described
+ *  in prose so the demo can show the failure instead of only warning about it:
+ *  the third badge below is wrapped in `Ignore` and gets covered anyway.
+ *
+ *  Since `Ignore` now warns in dev when its child is a plain function
+ *  component, opening this screen with the Metro logs visible is also how you
+ *  see the warning fire on a real render rather than only in a unit test. */
+function SwallowingBadge(props: { readonly label: string }): React.JSX.Element {
+  const t = useDemoTheme();
+  return (
+    <View style={[styles.badge, { backgroundColor: t.color.lineStrong }]}>
+      <Text style={styles.badgeText}>{props.label}</Text>
+    </View>
+  );
+}
+
 function useClock(): string {
   const [now, setNow] = useState(() => new Date().toLocaleTimeString());
   useEffect(() => {
@@ -54,7 +71,7 @@ export function IgnoreDemo(): React.JSX.Element {
     >
       <Panel
         label="<AutoSkeleton.Ignore>"
-        note="The green badge is inside Ignore and keeps ticking. Its grey twin on the right is an ordinary sibling in the same frame, and gets a placeholder."
+        note="Three badges. The first is inside Ignore wrapping a host View and keeps ticking. The second is an ordinary sibling and gets a placeholder, as it should. The third is ALSO inside Ignore — but wrapping a composite that swallows the marker, so it gets a placeholder too. Metro logs the warning for it."
       >
         <AutoSkeleton key={load.coldKey} isLoading={load.isLoading} skeletonKey="demo-ignore">
           <View style={styles.card}>
@@ -70,6 +87,13 @@ export function IgnoreDemo(): React.JSX.Element {
               <View style={styles.mutedBadge}>
                 <Text style={styles.badgeText}>not ignored</Text>
               </View>
+              {/* Wrapped in `Ignore` exactly like the first badge, and covered
+                  anyway: `cloneElement` hands `nativeID`/`testID` to
+                  `SwallowingBadge`, which never passes them to a native view.
+                  Nothing errors. This is the whole defect, on screen. */}
+              <AutoSkeleton.Ignore>
+                <SwallowingBadge label="ignored?" />
+              </AutoSkeleton.Ignore>
             </View>
             <View style={[styles.headline, { backgroundColor: t.color.ink }]} />
             <View style={[styles.paragraph, { backgroundColor: t.color.lineStrong }]} />

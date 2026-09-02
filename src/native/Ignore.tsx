@@ -73,6 +73,7 @@
 // it set its own, is overwritten by the marker.
 
 import { Children, cloneElement, type ReactElement, type ReactNode } from 'react';
+import { describeChild } from './Hint';
 
 /** Sentinel `nativeID`/`testID` value both native sensors recognize
  *  DIRECTLY, independent of `HintRegistry` — structurally the same
@@ -85,8 +86,65 @@ import { Children, cloneElement, type ReactElement, type ReactNode } from 'react
  *  failure, never a silent divergence. */
 export const AUTOSKELETON_IGNORE_MARKER_ID = '__autoskeleton-ignore__';
 
+/** True when the marker this component stamps has a real chance of never
+ *  reaching a native view.
+ *
+ *  `cloneElement` sets props on the element it is given. A string `type` is a
+ *  host component and the props land on the view itself. A `forwardRef` or
+ *  `memo` object — which is what React Native's own `View`, `Text` and
+ *  `Image` are, checked rather than assumed — is written precisely to pass
+ *  props through. A PLAIN function or class component is the case that
+ *  swallows them, which is the failure this predicate exists to surface.
+ *
+ *  DELIBERATELY IMPRECISE, and it matters that this is stated. A function
+ *  component that spreads `{...props}` onto a host view forwards correctly and
+ *  will still be warned about — a false positive. The alternative considered
+ *  was attaching a ref and checking after mount, which is exact; it was
+ *  rejected because `cloneElement(child, { ref })` overwrites the consumer's
+ *  own ref on React 18, and breaking a working ref in shipped code to power a
+ *  development warning is the wrong trade. So the warning says "may not"
+ *  rather than "does not", and names the one-line way to be sure. */
+export function ignoreMarkerMayNotReachHost(childType: unknown): boolean {
+  return typeof childType === 'function';
+}
+
+/** Pure formatter, env-free so it is testable on its own — the same
+ *  `formatXWarning` split `Hint.tsx` and `core/metrics.ts` already use. */
+export function formatIgnoreCompositeChildWarning(childDescription: string): string {
+  return (
+    `[autoskeleton] <AutoSkeleton.Ignore> wraps ${childDescription}, and the marker it stamps ` +
+    'reaches a native view only if that component forwards `nativeID` and `testID` down to one. ' +
+    'If it does not, the subtree is measured anyway and the skeleton covers content you asked to ' +
+    'exclude — with no error, because cloning always succeeds. If it does forward them, ignore ' +
+    'this. To be certain, wrap a host element instead: ' +
+    '<AutoSkeleton.Ignore><View><YourComponent /></View></AutoSkeleton.Ignore>.'
+  );
+}
+
+/** `__DEV__` is the native dev gate this codebase already uses; the `NODE_ENV`
+ *  arm is what makes this reachable under the Vitest `node` environment, where
+ *  Metro never defines `__DEV__`. Same shape as `Hint.tsx`. */
+function devWarningsEnabled(): boolean {
+  if (typeof __DEV__ !== 'undefined') {
+    return __DEV__;
+  }
+  return typeof process === 'undefined' || process.env?.['NODE_ENV'] !== 'production';
+}
+
+/** Warns once per distinct child description. A component that re-renders
+ *  freely would otherwise warn on every render, which is noise a developer
+ *  learns to scroll past — the same as no warning. Mirrors `Hint.tsx`'s latch. */
+const warnedCompositeChildren = new Set<string>();
+
 export function Ignore(props: { readonly children: ReactNode }): React.JSX.Element {
   const child = Children.only(props.children) as ReactElement<Record<string, unknown>>;
+  if (devWarningsEnabled() && ignoreMarkerMayNotReachHost(child.type)) {
+    const description = describeChild(child);
+    if (!warnedCompositeChildren.has(description)) {
+      warnedCompositeChildren.add(description);
+      console.warn(formatIgnoreCompositeChildWarning(description));
+    }
+  }
   return cloneElement(child, {
     nativeID: AUTOSKELETON_IGNORE_MARKER_ID,
     testID: AUTOSKELETON_IGNORE_MARKER_ID,

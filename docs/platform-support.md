@@ -225,6 +225,18 @@ preserving a consumer `testID` would make `Ignore` stop working on iOS
 entirely. Closing that needs a second native marker channel; it is tracked, not
 fixed.
 
+Since the composite case cannot be detected exactly — React Native's `View`,
+`Text` and `Image` are `forwardRef` objects, not host strings, so "warn unless
+the type is a string" would fire on the most common correct usage — `Ignore`
+now warns in dev when its child is a plain function or class component. That
+over-warns on a component which does forward its props, so the message says
+"only if" and names the one-line way to be certain rather than asserting a
+defect. Attaching a ref and checking after mount would be exact, and was
+rejected: it overwrites the consumer's own ref on React 18.
+
+`examples/bare-rn` `Ignore` renders the failing shape next to the working one
+so the difference is visible rather than described.
+
 Tracked as [#28](https://github.com/javier545dev/react-native-autoskeleton/issues/28).
 
 ### 5d. On Android, `defaultRadius` does not fill in a missing radius
