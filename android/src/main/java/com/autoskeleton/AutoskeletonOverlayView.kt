@@ -52,6 +52,25 @@ class AutoskeletonOverlayView(context: Context) : FrameLayout(context) {
             field = value
             applyMotionState()
         }
+
+    /** The writing direction the snapshot behind `cacheKey` was measured for,
+     *  carried by the `writingDirection` prop — the exact value
+     *  `<AutoSkeleton>` composed that key with.
+     *
+     *  Named `writingDirection` on the wire rather than `direction` because
+     *  Fabric already parses a raw prop called `direction` into Yoga's layout
+     *  direction, and its accepted values are these very strings; see
+     *  `src/native/AutoskeletonOverlayNativeComponent.ts`.
+     *
+     *  It forwards to a live handle for the same reason `animation` does —
+     *  Fabric can deliver a prop after the mount. In practice a direction
+     *  change also changes `cacheKey`, so the remount path usually gets there
+     *  first; this setter is what makes correctness independent of that. */
+    var writingDirection: String = DIRECTION_LTR
+        set(value) {
+            field = normalizeDirection(value)
+            handle?.setDirection(field)
+        }
     var debugOverlay: Boolean = false
 
     private val renderer = AutoskeletonRendererTier1()
@@ -107,7 +126,14 @@ class AutoskeletonOverlayView(context: Context) : FrameLayout(context) {
             speedMs = speedMs,
         )
         sharedShimmerClock.setPeriod(speedMs)
-        handle = renderer.mount(this, shapes, theme, sharedShimmerClock, effectiveAnimation(animation, reducedMotion))
+        handle = renderer.mount(
+            this,
+            shapes,
+            theme,
+            sharedShimmerClock,
+            effectiveAnimation(animation, reducedMotion),
+            writingDirection,
+        )
         mountedCacheKey = key
     }
 
@@ -129,6 +155,22 @@ class AutoskeletonOverlayView(context: Context) : FrameLayout(context) {
         const val ANIMATION_SHIMMER = "shimmer"
         const val ANIMATION_PULSE = "pulse"
         const val ANIMATION_NONE = "none"
+
+        /** Mirrors `Direction` in `src/core/types.ts` — the same two strings
+         *  the composite cache key carries in its `direction` segment. */
+        const val DIRECTION_LTR = "ltr"
+        const val DIRECTION_RTL = "rtl"
+
+        /** Anything that is not exactly `"rtl"` is `"ltr"`.
+         *
+         *  Same fallback shape, and same reasoning, as `effectiveAnimation`'s
+         *  "an unrecognised kind falls back to shimmer": a prop typo must
+         *  degrade to the overwhelmingly common case and to the behaviour that
+         *  predates the prop, never to the exotic one. `WithDefault<..., 'ltr'>`
+         *  in the codegen spec already covers an OMITTED prop; this covers the
+         *  value actually being wrong. */
+        fun normalizeDirection(direction: String): String =
+            if (direction == DIRECTION_RTL) DIRECTION_RTL else DIRECTION_LTR
 
         /** The Kotlin mirror of `src/core/animation.ts`'s `effectiveAnimation`,
          *  pinned against the same table by `AutoskeletonAnimationKindTest`.

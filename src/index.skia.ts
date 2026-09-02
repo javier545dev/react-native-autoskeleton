@@ -63,6 +63,18 @@ export type { SkeletonOverlayComponent, SkeletonOverlayProps } from './native/ov
  *  whole Skia canvas on every parent render. */
 export function createSkiaOverlay(peers: Tier2Peers): SkeletonOverlayComponent {
   function AutoskeletonSkiaOverlay(props: SkeletonOverlayProps): ReactElement {
+    // Every field of `SkeletonOverlayProps` is forwarded, and `animation` is
+    // the one that has been dropped here before. It was added to the overlay
+    // contract precisely to stop tier-2 drawing a travelling shimmer for
+    // `animation="none"` (see `overlayContract.ts`), and commit f464f11 fixed
+    // that everywhere except this wrapper — the only place a consumer's
+    // overlay is actually constructed. Omitting it does not fail to compile:
+    // `SkiaRenderer` reads `props.animation ?? 'shimmer'`, so a dropped prop
+    // silently becomes the most animated kind, which is exactly the bug.
+    // The tests missed it for the same reason: they render `SkiaShimmerOverlay`
+    // directly and pass `animation` by hand, so they exercised a path no
+    // consumer takes. `test/native/skia-renderer.test.ts` now also renders
+    // THROUGH `createSkiaOverlay`.
     return createElement(SkiaShimmerOverlay, {
       peers,
       shapes: props.shapes,
@@ -71,7 +83,9 @@ export function createSkiaOverlay(peers: Tier2Peers): SkeletonOverlayComponent {
       speedMs: props.speedMs,
       width: props.width,
       height: props.height,
+      animation: props.animation,
       reducedMotion: props.reducedMotion,
+      direction: props.direction,
     });
   }
   return AutoskeletonSkiaOverlay;

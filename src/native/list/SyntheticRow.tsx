@@ -10,7 +10,7 @@
 
 import { StyleSheet, View } from 'react-native';
 import { resolveSharedShimmerPeriodMs } from '../../core/shimmer-period';
-import type { AnimationKind, ShapeSnapshot } from '../../core/types';
+import type { AnimationKind, Direction, ShapeSnapshot } from '../../core/types';
 import { resolveAutoskeletonOverlayNativeComponent } from '../renderer/AutoskeletonOverlayHostComponent';
 import { FallbackSkeletonBlock } from './FallbackSkeletonBlock';
 
@@ -23,6 +23,15 @@ export interface SyntheticRowProps {
   readonly highlightColor: string;
   readonly defaultRadius: number;
   readonly speedMs: number;
+  /** The writing direction the snapshot was measured for. REQUIRED, not
+   *  optional-with-a-default: every caller already holds this value — it is
+   *  the one they handed `composeCacheKey` to build `cacheKey` — so passing it
+   *  costs nothing, while a default would let a call site silently paint an
+   *  RTL snapshot with an LTR sweep and never fail to compile. This row
+   *  renderer deliberately does NOT read `I18nManager` itself: two independent
+   *  reads can only ever agree by luck, and the value that must agree is the
+   *  one already baked into `cacheKey`. */
+  readonly direction: Direction;
 }
 
 export function SyntheticRow(props: SyntheticRowProps): React.JSX.Element {
@@ -44,6 +53,7 @@ export function SyntheticRow(props: SyntheticRowProps): React.JSX.Element {
           speedMs={speedMs}
           animation={props.animation}
           reducedMotion={props.reducedMotion}
+          writingDirection={props.direction}
           debugOverlay={false}
           accessible={false}
           importantForAccessibility="no-hide-descendants"

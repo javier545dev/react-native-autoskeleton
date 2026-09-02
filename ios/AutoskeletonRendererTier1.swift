@@ -73,6 +73,17 @@ protocol AutoskeletonRendererHandle: AnyObject {
     /// "reduced", and `"none"` was routed INTO the reduced-motion pulse — an
     /// animation, for the value that means "do not animate".
     func setAnimation(_ animation: String)
+
+    /// The writing direction the shapes were measured for — `"ltr"` or
+    /// `"rtl"`, forwarded from the SAME value `<AutoSkeleton>` put into the
+    /// composite shape cache key (`src/core/cache-key.ts`), never re-read from
+    /// `effectiveUserInterfaceLayoutDirection` here. The key already stores a
+    /// separate snapshot per direction; a renderer that asked UIKit instead
+    /// could answer differently from the key it is painting (a per-view
+    /// `semanticContentAttribute` moves one and not the other), and the
+    /// failure mode of that disagreement is a snapshot captured for one
+    /// direction swept with the other's highlight.
+    func setDirection(_ direction: String)
     func destroy()
 }
 
@@ -112,7 +123,8 @@ final class AutoskeletonRendererTier1 {
         shapes: [AutoskeletonShapeInfo],
         theme: AutoskeletonSkeletonTheme,
         clock: AutoskeletonShimmerClock,
-        animation: String
+        animation: String,
+        direction: String = AutoskeletonOverlayViewHost.directionLtr
     ) -> AutoskeletonRendererHandle {
         let token = tracing.begin("AutoskeletonRendererMount")
 
@@ -144,6 +156,7 @@ final class AutoskeletonRendererTier1 {
             theme: theme,
             clock: clock
         )
+        handle.setDirection(direction)
         handle.setAnimation(animation)
 
         tracing.end("AutoskeletonRendererMount", token: token)
@@ -185,6 +198,11 @@ final class AutoskeletonRendererTier1 {
         /// re-derive the width-dependent sweep (or the width-dependent parked
         /// position) without asking the caller.
         private var animation = AutoskeletonOverlayViewHost.animationShimmer
+        /// The resolved writing direction currently applied. `"ltr"` by
+        /// default, which is the direction every sweep travelled before this
+        /// property existed — so an unset direction is byte-identical to the
+        /// previous behaviour rather than merely close to it.
+        private var direction = AutoskeletonOverlayViewHost.directionLtr
 
         init(
             surface: UIView,
@@ -278,6 +296,19 @@ final class AutoskeletonRendererTier1 {
             applyCurrentAnimation()
         }
 
+        /// Re-applies the current kind so the sweep picks up the new travel
+        /// direction. Guarded on an ACTUAL change for the same reason
+        /// `AutoskeletonOverlayViewHost` guards `setAnimation`:
+        /// `applyCurrentAnimation` removes and re-adds the `CABasicAnimation`,
+        /// recomputing `beginTime`, so calling it on every prop delivery would
+        /// restart the phase on every update. A no-op call must stay a no-op.
+        func setDirection(_ direction: String) {
+            let normalized = AutoskeletonOverlayViewHost.normalizedDirection(direction)
+            guard normalized != self.direction else { return }
+            self.direction = normalized
+            applyCurrentAnimation()
+        }
+
         /// The single place any kind is applied, so switching between them can
         /// never leave two animations on the layer or a stale transform behind.
         private func applyCurrentAnimation() {
@@ -320,8 +351,24 @@ final class AutoskeletonRendererTier1 {
         private func applyShimmer() {
             let width = containerLayer.bounds.width > 0 ? containerLayer.bounds.width : (surface?.bounds.width ?? 0)
             let animation = CABasicAnimation(keyPath: "transform.translation.x")
-            animation.fromValue = -width
-            animation.toValue = width
+            // RTL sweeps the SAME span the other way — `+width -> -width`
+            // instead of `-width -> +width`. Nothing else changes: the band's
+            // colour stops are `[base, highlight, base]` at `[0, 0.5, 1]`,
+            // symmetric about its own centre, so reversing the translation is
+            // the whole flip. Android negates the identical term in its
+            // `onDraw` phase math and tier-2 multiplies by `travelSignFor`'s
+            // -1 in Skia, because a sweep that flips on two of the three
+            // renderers is worse than one that never flips at all.
+            //
+            // PHASE IS UNTOUCHED. `beginTime` below is still derived from the
+            // shared `AutoskeletonShimmerClock`'s absolute origin (ADR-8), so
+            // every instance on the screen remains on one wave; direction
+            // changes WHERE the band is at a given phase, never WHEN the phase
+            // is. Prior art for the flip itself: SkeletonView (iOS) selects
+            // `isRTL ? .rightLeft : .leftRight` for exactly this reason.
+            let travelsRightToLeft = direction == AutoskeletonOverlayViewHost.directionRtl
+            animation.fromValue = travelsRightToLeft ? width : -width
+            animation.toValue = travelsRightToLeft ? -width : width
             animation.duration = clock.periodMs / 1000
             animation.repeatCount = .infinity
             animation.isRemovedOnCompletion = false

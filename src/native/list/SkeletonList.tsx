@@ -101,6 +101,9 @@ export function SkeletonList(props: SkeletonListProps): React.JSX.Element {
             cacheKey={cacheKey}
             animation={animation}
             reducedMotion={reducedMotion}
+            // The same local `composeCacheKey` above received, so the sweep
+            // can never travel against the geometry cached under that key.
+            direction={direction}
             baseColor={ctx.theme.baseColor}
             highlightColor={ctx.theme.highlightColor}
             defaultRadius={ctx.theme.defaultRadius}

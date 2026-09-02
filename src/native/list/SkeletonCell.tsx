@@ -55,6 +55,9 @@ export function SkeletonCell(props: SkeletonCellProps): React.JSX.Element {
         cacheKey={cell.cacheKey}
         animation={animation}
         reducedMotion={reducedMotion}
+        // The direction `cell.cacheKey` was composed with, straight from the
+        // hook that composed it — never a second `I18nManager` read.
+        direction={cell.direction}
         baseColor={ctx.theme.baseColor}
         highlightColor={ctx.theme.highlightColor}
         defaultRadius={ctx.theme.defaultRadius}

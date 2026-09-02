@@ -77,6 +77,21 @@ public final class AutoskeletonOverlayViewHost: NSObject {
     private var handle: AutoskeletonRendererHandle?
     private var mountedCacheKey: String?
     private var mountedAnimation: String?
+    private var mountedDirection: String?
+
+    /// The writing direction most recently delivered by
+    /// `AutoskeletonOverlayView.mm`, defaulting to `"ltr"` — which is what
+    /// every overlay swept before this property existed, so a host that is
+    /// never told is byte-identical to the old behaviour.
+    ///
+    /// It is a separate `@objc` setter rather than another `mountOrUpdate`
+    /// parameter on purpose: `mountOrUpdate`'s selector is already the
+    /// ObjC-visible contract `AutoskeletonOverlayView.mm` calls, and widening
+    /// it would break every existing Swift call site in
+    /// `AutoskeletonOverlayViewHostTests` for a value none of them care about.
+    /// It also mirrors Android, where `writingDirection` arrives through its
+    /// own prop setter on `AutoskeletonOverlayView.kt`.
+    private var direction = AutoskeletonOverlayViewHost.directionLtr
 
     @objc override public init() {
         renderer = AutoskeletonRendererTier1()
@@ -155,6 +170,17 @@ public final class AutoskeletonOverlayViewHost: NSObject {
             // since Fabric delivers every prop together in one
             // `updateProps:oldProps:` call.
             existingHandle.update(shapes: shapes)
+            // Same "only when it actually changed" discipline as the animation
+            // above, and for the identical reason: `Handle.setDirection`
+            // re-applies the `CABasicAnimation`, which recomputes `beginTime`.
+            // In practice this branch never fires — `direction` is part of the
+            // composite cache key, so a direction change arrives as a NEW key
+            // and takes the remount path below — but the guard is what makes
+            // that a property of this code rather than of the key format.
+            if mountedDirection != direction {
+                existingHandle.setDirection(direction)
+                mountedDirection = direction
+            }
             if mountedAnimation != resolvedAnimation {
                 existingHandle.setAnimation(resolvedAnimation)
                 mountedAnimation = resolvedAnimation
@@ -175,10 +201,26 @@ public final class AutoskeletonOverlayViewHost: NSObject {
             shapes: shapes,
             theme: theme,
             clock: clock,
-            animation: resolvedAnimation
+            animation: resolvedAnimation,
+            direction: direction
         )
         mountedCacheKey = cacheKey
         mountedAnimation = resolvedAnimation
+        mountedDirection = direction
+    }
+
+    /// The writing direction the snapshot behind `cacheKey` was measured for,
+    /// forwarded verbatim from the `writingDirection` prop — which carries the
+    /// exact value `<AutoSkeleton>` put into that cache key.
+    ///
+    /// Fabric delivers every prop in one `updateProps:oldProps:` call, and
+    /// `AutoskeletonOverlayView.mm` calls this immediately BEFORE
+    /// `mountOrUpdate(...)`, so a mount always sees the direction belonging to
+    /// the key it is about to mount. `layoutSubviews`' later `mountOrUpdate`
+    /// call needs no companion call: the value is stored here, not passed
+    /// through.
+    @objc public func setDirection(_ direction: String) {
+        self.direction = Self.normalizedDirection(direction)
     }
 
     /// Removes the mounted overlay, if any. Called from
@@ -189,6 +231,7 @@ public final class AutoskeletonOverlayViewHost: NSObject {
         handle = nil
         mountedCacheKey = nil
         mountedAnimation = nil
+        mountedDirection = nil
     }
 
     // MARK: - the shared `animation` vocabulary
@@ -196,6 +239,25 @@ public final class AutoskeletonOverlayViewHost: NSObject {
     static let animationShimmer = "shimmer"
     static let animationPulse = "pulse"
     static let animationNone = "none"
+
+    // MARK: - the shared `writingDirection` vocabulary
+
+    /// Mirrors `Direction` in `src/core/types.ts` — the same two strings the
+    /// composite cache key carries in its `direction` segment.
+    static let directionLtr = "ltr"
+    static let directionRtl = "rtl"
+
+    /// Anything that is not exactly `"rtl"` is `"ltr"`.
+    ///
+    /// Same fallback shape, and same reasoning, as `effectiveAnimation`'s
+    /// "an unrecognised kind falls back to `shimmer`": a prop typo must
+    /// degrade to the overwhelmingly common case and to the behaviour that
+    /// predates the prop, never to the exotic one. `WithDefault<..., 'ltr'>`
+    /// in the codegen spec already makes an OMITTED prop `"ltr"`; this covers
+    /// the value actually being wrong.
+    static func normalizedDirection(_ direction: String) -> String {
+        direction == directionRtl ? directionRtl : directionLtr
+    }
 
     /// The pulse's trough. Mirrors `PULSE_MIN_OPACITY` in `src/core/animation.ts`.
     static let pulseMinOpacity = 0.6

@@ -64,6 +64,14 @@ class AutoskeletonOverlayViewManager :
         view.reducedMotion = value
     }
 
+    override fun setWritingDirection(view: AutoskeletonOverlayView, value: String?) {
+        // Null is the "prop absent" case Fabric hands a nullable string prop;
+        // `WithDefault<..., 'ltr'>` in the codegen spec means an omitted prop
+        // is LTR, which is exactly the sweep every consumer had before this
+        // prop existed.
+        view.writingDirection = value ?: AutoskeletonOverlayView.DIRECTION_LTR
+    }
+
     override fun setDebugOverlay(view: AutoskeletonOverlayView, value: Boolean) {
         view.debugOverlay = value
     }

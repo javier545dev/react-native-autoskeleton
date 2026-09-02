@@ -29,6 +29,8 @@ import {
   type SkiaModule,
 } from '../../src/native/tier2/SkiaRenderer';
 import { TIER2_SHIMMER_ORIGIN_MS, tier2PhaseAt } from '../../src/native/tier2/shimmerOrigin';
+import { createSkiaOverlay } from '../../src/index.skia';
+import type { SkeletonOverlayProps } from '../../src/native/overlayContract';
 
 // ---------------------------------------------------------------------------
 // A Reanimated stand-in that RECORDS the animation tree instead of running it.
@@ -551,5 +553,71 @@ describe('the default native entry graph is peer-free, and tier-2 is only reacha
       const dynamicRequires = source.match(/(?:^|[^.\w])require\(\s*(?!'|")/g) ?? [];
       expect(dynamicRequires, `${file} contains a dynamic require(); Metro compiles that to a throw`).toEqual([]);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The wrapper a consumer actually mounts
+// ---------------------------------------------------------------------------
+
+describe('createSkiaOverlay forwards the whole overlay contract', () => {
+  // REGRESSION (2026-09-02). `createSkiaOverlay` built its element from an
+  // explicit prop list and `animation` was missing from it, so tier-2 drew a
+  // travelling shimmer for `animation="none"` — the exact defect
+  // `overlayContract.ts` says commit f464f11 fixed. It survived because every
+  // other tier-2 test renders `SkiaShimmerOverlay` DIRECTLY and passes
+  // `animation` by hand, exercising a path no consumer takes: the overlay a
+  // consumer mounts is always the one this factory returns.
+  //
+  // So this asserts the GENERAL property rather than the one prop that broke.
+  // A dropped prop cannot fail to compile — `SkiaRenderer` defaults
+  // `animation` to `'shimmer'` — so only a test comparing the two objects
+  // key-by-key can catch the next one.
+  // `Required<...>` rather than `SkeletonOverlayProps` is what makes the
+  // forwarding test below exhaustive AND self-maintaining: it forces every
+  // OPTIONAL field to be listed too, so adding a field to the contract fails
+  // to compile here until it is added to this fixture — at which point the
+  // loop starts asserting it is forwarded. Typed as the plain contract, this
+  // fixture would silently keep testing only the fields someone remembered,
+  // which is exactly how `animation` went unforwarded through a release.
+  // `direction` is the proof: it was added while this test already existed,
+  // is optional, and would not have been covered.
+  const overlayProps: Required<SkeletonOverlayProps> = {
+    shapes: [{ x: 0, y: 0, w: 10, h: 10, r: 0 }],
+    baseColor: '#e2e2e2',
+    highlightColor: '#f5f5f5',
+    speedMs: 1400,
+    width: 300,
+    height: 200,
+    animation: 'none',
+    reducedMotion: false,
+    direction: 'rtl',
+  };
+
+  /** `createSkiaOverlay` is typed as returning `SkeletonOverlayComponent`
+   *  (`ComponentType`), which is a union with `ComponentClass` and therefore
+   *  not callable. It always returns the function component defined inside it,
+   *  so calling it is what actually happens at render — the cast narrows the
+   *  declared type to the one the factory really produces, and reading the
+   *  returned element's `props` is what lets this assert the FORWARDING rather
+   *  than the rendered output (which would need a full Skia peer double). */
+  function renderOverlayElement(props: SkeletonOverlayProps): Record<string, unknown> {
+    const { reanimated } = recordingReanimated();
+    const factory = createSkiaOverlay({ skia: {} as SkiaModule, reanimated }) as unknown as (
+      p: SkeletonOverlayProps,
+    ) => { props: Record<string, unknown> };
+    return factory(props).props;
+  }
+
+  it('passes every SkeletonOverlayProps field through to the renderer', () => {
+    const forwarded = renderOverlayElement(overlayProps);
+
+    for (const key of Object.keys(overlayProps) as Array<keyof SkeletonOverlayProps>) {
+      expect(forwarded[key], `createSkiaOverlay dropped "${key}"`).toEqual(overlayProps[key]);
+    }
+  });
+
+  it("forwards animation='none', the field whose loss silently became 'shimmer'", () => {
+    expect(renderOverlayElement({ ...overlayProps, animation: 'none' })['animation']).toBe('none');
   });
 });

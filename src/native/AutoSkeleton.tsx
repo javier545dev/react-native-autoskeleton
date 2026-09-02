@@ -754,6 +754,15 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
               // re-deriving it changes nothing.
               animation,
               reducedMotion,
+              // THE SAME LOCAL that went into `composeCacheKey` above, passed
+              // by reference rather than re-derived. `direction` was already
+              // part of the cache key — an RTL snapshot is different geometry
+              // — but no renderer read it, so the highlight swept
+              // left-to-right for an RTL reader too. Reusing the local (rather
+              // than having each renderer ask the platform) is what makes "the
+              // sweep's direction and the snapshot's direction are the same
+              // value" true by construction instead of by agreement.
+              direction,
             })}
           </View>
         )}
@@ -772,6 +781,11 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
             speedMs={resolveSharedShimmerPeriodMs(theme.speedMs)}
             animation={animation}
             reducedMotion={reducedMotion}
+            // Same local, same reason as the tier-2 arm above. The prop is
+            // named `writingDirection` on the native side only because
+            // `direction` is already Yoga's — see the spec file for the
+            // collision this avoids.
+            writingDirection={direction}
             debugOverlay={debugOverlayEnabled}
             accessible={false}
             importantForAccessibility="no-hide-descendants"

@@ -168,6 +168,18 @@ using namespace facebook::react;
 - (void)mountOrUpdate
 {
     const auto &props = *std::static_pointer_cast<AutoskeletonOverlayViewProps const>(_props);
+    // BEFORE `mountOrUpdate`, never after: the host stores this value and reads
+    // it when it mounts, so setting it second would mount the first frame with
+    // the previous direction. `toString` is codegen's own enum->string helper,
+    // the same one `animation` already goes through — the prop is
+    // `WithDefault<'ltr' | 'rtl', 'ltr'>`, so an omitted prop arrives here as
+    // "ltr" and every existing consumer is unchanged.
+    //
+    // The prop is `writingDirection` and not `direction` because Fabric's C++
+    // `ViewProps` already parses a raw prop named `direction` into Yoga's
+    // layout direction, whose accepted values are these very strings — see
+    // `src/native/AutoskeletonOverlayNativeComponent.ts` for the full account.
+    [_host setDirection:RCTNSStringFromString(toString(props.writingDirection))];
     [_host mountOrUpdateWithCacheKey:RCTNSStringFromString(props.cacheKey)
                             baseColor:RCTNSStringFromString(props.baseColor)
                        highlightColor:RCTNSStringFromString(props.highlightColor)

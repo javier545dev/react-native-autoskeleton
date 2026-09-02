@@ -64,7 +64,7 @@
 // DROPPED FEATURE. See `staggerDelayForIndex` at the bottom of this file.
 
 import { useEffect, useMemo, type ReactElement } from 'react';
-import type { AnimationKind, ShapeInfo } from '../../core/types';
+import type { AnimationKind, Direction, ShapeInfo } from '../../core/types';
 import { effectiveAnimation, PULSE_MIN_OPACITY } from '../../core/animation';
 import { tier2PhaseAt } from './shimmerOrigin';
 
@@ -212,6 +212,22 @@ export function createDriveAnimation(reanimated: ReanimatedModule, speedMs: numb
  *  rather than a reduced-motion affordance. */
 const PULSE_PARK_DRIVE = 0.75;
 
+/** The parked drive value that puts the band's centre at `width / 2` for the
+ *  given writing direction.
+ *
+ *  RTL negates the travel, so feeding it the LTR park drive would park the band
+ *  at `-width / 2` — half a container OFF the skeleton, which is exactly the
+ *  "frozen at an arbitrary point of the sweep" accident `PULSE_PARK_DRIVE`
+ *  exists to prevent. The pulse's resting position is the container's CENTRE in
+ *  every direction (both native tiers translate by `width / 2` with no
+ *  direction term at all, because a band whose colours are symmetric about its
+ *  centre, parked at the centre, is the same picture mirrored), so the drive
+ *  that produces it is what has to mirror, not the position. Negating the
+ *  travel is the same as reflecting the drive about `0.5`. */
+export function pulseParkDriveFor(direction: Direction): number {
+  return direction === 'rtl' ? 1 - PULSE_PARK_DRIVE : PULSE_PARK_DRIVE;
+}
+
 /** `core/animation.ts`'s pulse: the highlight's opacity breathes from
  *  `PULSE_MIN_OPACITY` to 1 and back exactly once per clock period.
  *
@@ -228,6 +244,31 @@ const PULSE_PARK_DRIVE = 0.75;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function createPulseAnimation(reanimated: ReanimatedModule, speedMs: number): any {
   return reanimated.withRepeat(reanimated.withTiming(1, { duration: speedMs / 2 }), -1, true);
+}
+
+/** The sign the band's travel carries: `+1` for LTR, `-1` for RTL.
+ *
+ *  WHY DIRECTION AT ALL. `direction` has been part of the shape cache key
+ *  since `core/cache-key.ts` was written, so the library already stores a
+ *  separate snapshot per writing direction — but no renderer read it, and an
+ *  RTL reader watched the highlight travel against their reading direction.
+ *  Prior art agrees on the remedy: SkeletonView (iOS) picks
+ *  `isRTL ? .rightLeft : .leftRight` for exactly this reason.
+ *
+ *  WHY A SIGN AND NOT A `travelAt(drive, width, direction)` HELPER. The two
+ *  `useDerivedValue` updaters below become Reanimated WORKLETS in a consumer's
+ *  build — that is the only way they can read `drive.value` on the UI thread at
+ *  all — and a worklet may not call an ordinary module-scope function: it would
+ *  throw at runtime unless the consumer's Reanimated Babel plugin had also
+ *  workletized this file's helper, which nothing in this repo verifies and no
+ *  other file here relies on. So the DECISION is made on the JS thread and only
+ *  a captured `number` crosses the boundary; the arithmetic itself stays inline
+ *  and unchanged.
+ *
+ *  `* 1` is exact for every double, so the LTR path is byte-identical to the
+ *  expression that predates this function rather than merely equivalent. */
+export function travelSignFor(direction: Direction): number {
+  return direction === 'rtl' ? -1 : 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -250,6 +291,12 @@ export interface SkiaShimmerOverlayProps {
    *  shape still compiles; absent means the previous default. */
   readonly animation?: AnimationKind;
   readonly reducedMotion: boolean;
+  /** The writing direction the shapes were measured for, forwarded from
+   *  `SkeletonOverlayProps.direction` — i.e. the same value `<AutoSkeleton>`
+   *  put into the shape cache key. Under `'rtl'` the band travels the other
+   *  way (see `travelAt`); absent means `'ltr'`, which is the only travel
+   *  direction this renderer had before. */
+  readonly direction?: Direction;
   /** Test seam: overrides the wall clock used to derive the join phase.
    *  Production never passes it. */
   readonly nowMs?: () => number;
@@ -307,6 +354,8 @@ export function SkiaShimmerOverlay(props: SkiaShimmerOverlayProps): ReactElement
   // colour beyond the band.
   const needsBaseFill = !travels;
 
+  const direction: Direction = props.direction ?? 'ltr';
+
   const drive = reanimated.useSharedValue(0);
   // Separate from `drive` because it is a different quantity on a different
   // curve: `drive` is the band's POSITION (sawtooth), this is its OPACITY
@@ -322,7 +371,7 @@ export function SkiaShimmerOverlay(props: SkiaShimmerOverlayProps): ReactElement
       // Park the band deliberately (see `PULSE_PARK_DRIVE`) and breathe only
       // its opacity — no directional movement of any kind, which is what
       // REQ-A11Y-3 is actually asking for.
-      drive.value = PULSE_PARK_DRIVE;
+      drive.value = pulseParkDriveFor(direction);
       highlightOpacity.value = PULSE_MIN_OPACITY;
       highlightOpacity.value = createPulseAnimation(reanimated, props.speedMs);
       return () => {
@@ -346,17 +395,34 @@ export function SkiaShimmerOverlay(props: SkiaShimmerOverlayProps): ReactElement
       // `withRepeat` running forever — a real, previously-open defect.
       reanimated.cancelAnimation(drive);
     };
-  }, [drive, highlightOpacity, reanimated, travels, pulses, props.speedMs, nowMs]);
+    // `direction` is in the dep list only for the parked pulse above — the
+    // sawtooth driver itself is direction-agnostic (the flip lives in
+    // `travelAt`, a derived value). Re-running is phase-preserving anyway:
+    // `tier2PhaseAt` re-derives the join point from the shared origin, so a
+    // restart rejoins the same wave rather than starting a private one.
+  }, [drive, highlightOpacity, reanimated, travels, pulses, props.speedMs, nowMs, direction]);
 
   const width = props.width;
+  // The BAND's own span (`travel ± width`) is direction-independent: its
+  // colour stops are `[base, highlight, base]` at `[0, 0.5, 1]`, symmetric
+  // about its centre, exactly like tier-1's `CAGradientLayer` and Android's
+  // `LinearGradient`. Only where that centre IS depends on direction, which is
+  // why the sign is the sole new term and the `± width` endpoints are
+  // untouched — the same shape as the native flip, where only the translation
+  // reverses and the gradient itself is never rebuilt.
+  //
+  // Resolved HERE, on the JS thread, so the two updaters below capture a plain
+  // number rather than calling across the worklet boundary — see
+  // `travelSignFor`.
+  const travelSign = travelSignFor(direction);
   const gradientStart = reanimated.useDerivedValue(() => {
-    const travel = -width + drive.value * width * 2;
+    const travel = (-width + drive.value * width * 2) * travelSign;
     return { x: travel - width, y: 0 };
-  }, [drive, width]);
+  }, [drive, width, travelSign]);
   const gradientEnd = reanimated.useDerivedValue(() => {
-    const travel = -width + drive.value * width * 2;
+    const travel = (-width + drive.value * width * 2) * travelSign;
     return { x: travel + width, y: 0 };
-  }, [drive, width]);
+  }, [drive, width, travelSign]);
 
   return (
     <skia.Canvas style={{ width: props.width, height: props.height }}>

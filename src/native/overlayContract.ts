@@ -16,7 +16,7 @@
 // decoded snapshot for metrics and list sizing, so nothing is measured twice.
 
 import type { ComponentType } from 'react';
-import type { AnimationKind, ShapeInfo } from '../core/types';
+import type { AnimationKind, Direction, ShapeInfo } from '../core/types';
 
 export interface SkeletonOverlayProps {
   /** Decoded shapes, in wire order, relative to the wrapper's top-left. */
@@ -44,6 +44,26 @@ export interface SkeletonOverlayProps {
    *  want both, e.g. to pick a gentler easing. */
   readonly animation?: AnimationKind;
   readonly reducedMotion: boolean;
+  /** The WRITING DIRECTION the shapes above were measured for — the SAME
+   *  value `<AutoSkeleton>` put into `composeCacheKey`, passed by reference
+   *  from that one local rather than re-derived here.
+   *
+   *  That identity is the whole point. `direction` has been part of the shape
+   *  cache key since `core/cache-key.ts` was written (a snapshot measured
+   *  under RTL is genuinely different geometry), but no renderer ever read it,
+   *  so every skeleton swept left-to-right regardless — an RTL reader watched
+   *  the highlight travel against their reading direction. The alternative fix
+   *  (each renderer asking the platform: `I18nManager` /
+   *  `View.getLayoutDirection()` / `effectiveUserInterfaceLayoutDirection`)
+   *  needs no prop, but those answers can DISAGREE with the key's — a per-view
+   *  `semanticContentAttribute` or `android:layoutDirection` override moves one
+   *  without moving the other — and the failure mode of a disagreement is a
+   *  snapshot captured for one direction painted with the other's sweep.
+   *
+   *  Optional so an overlay written against the older prop shape still
+   *  type-checks; absent means `'ltr'`, the behaviour every overlay had before
+   *  this field existed. */
+  readonly direction?: Direction;
 }
 
 export type SkeletonOverlayComponent = ComponentType<SkeletonOverlayProps>;

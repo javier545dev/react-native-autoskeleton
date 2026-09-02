@@ -48,6 +48,17 @@ interface AutoskeletonRendererHandle {
      *  not "reduced", and `"none"` was routed INTO the reduced-motion pulse —
      *  an animation, for the value that means "do not animate". */
     fun setAnimation(animation: String)
+
+    /** The writing direction the shapes were measured for — `"ltr"` or
+     *  `"rtl"`, forwarded from the SAME value `<AutoSkeleton>` put into the
+     *  composite shape cache key (`src/core/cache-key.ts`), never re-read from
+     *  `View.getLayoutDirection()` here. The key already stores a separate
+     *  snapshot per direction; a view that asked Android instead could answer
+     *  differently from the key it is painting (an `android:layoutDirection`
+     *  on an ancestor moves one and not the other), and the failure mode of
+     *  that disagreement is a snapshot captured for one direction swept with
+     *  the other's highlight. */
+    fun setDirection(direction: String)
     fun destroy()
 }
 
@@ -65,6 +76,11 @@ class AutoskeletonRendererTier1(
         theme: AutoskeletonSkeletonTheme,
         clock: AutoskeletonShimmerClock,
         animation: String,
+        // Defaulted so every existing caller — including
+        // `AutoskeletonRendererTier1Test`, which passes `animation` and
+        // `scheduler` by name — keeps compiling AND keeps sweeping
+        // left-to-right, which is the only direction this renderer had before.
+        direction: String = AutoskeletonOverlayView.DIRECTION_LTR,
         scheduler: AutoskeletonFrameScheduler = AutoskeletonChoreographerFrameScheduler(),
     ): AutoskeletonRendererHandle {
         val token = tracing.begin(MOUNT_TRACE_SECTION)
@@ -83,6 +99,7 @@ class AutoskeletonRendererTier1(
         overlay.measure(widthSpec, heightSpec)
         overlay.layout(0, 0, surface.width, surface.height)
         overlay.updateShapes(shapes)
+        overlay.setDirection(direction)
         overlay.setAnimation(animation)
         tracing.end(MOUNT_TRACE_SECTION)
         return Handle(overlay)
@@ -91,6 +108,7 @@ class AutoskeletonRendererTier1(
     private class Handle(private val overlay: AutoskeletonShimmerOverlayView) : AutoskeletonRendererHandle {
         override fun update(shapes: List<AutoskeletonShapeInfo>) = overlay.updateShapes(shapes)
         override fun setAnimation(animation: String) = overlay.setAnimation(animation)
+        override fun setDirection(direction: String) = overlay.setDirection(direction)
         override fun destroy() = overlay.destroySelf()
     }
 
@@ -131,6 +149,7 @@ class AutoskeletonShimmerOverlayView internal constructor(
     private var shader: LinearGradient? = null
     private var animating = false
     private var animation = AutoskeletonOverlayView.ANIMATION_SHIMMER
+    private var direction = AutoskeletonOverlayView.DIRECTION_LTR
 
     /** The opaque base fill drawn UNDER the highlight for every kind whose
      *  highlight is not itself fully covering. Allocated once, never per frame
@@ -198,6 +217,21 @@ class AutoskeletonShimmerOverlayView internal constructor(
             stopAnimating()
         } else {
             startAnimating()
+        }
+        postInvalidateOnAnimation()
+    }
+
+    /** Sets the sweep's travel direction. No frame-loop change and no shader
+     *  rebuild: the shader's stops span `-width .. +width` and its colours are
+     *  symmetric about its centre, so direction only ever affects the
+     *  per-frame `Matrix.setTranslate` in [onDraw]. The trailing invalidate is
+     *  what repaints under `"none"`/`"pulse"`, where nothing else would ask
+     *  for a frame — the same reason [setAnimation] ends with one. */
+    fun setDirection(value: String) {
+        direction = if (value == AutoskeletonOverlayView.DIRECTION_RTL) {
+            AutoskeletonOverlayView.DIRECTION_RTL
+        } else {
+            AutoskeletonOverlayView.DIRECTION_LTR
         }
         postInvalidateOnAnimation()
     }
@@ -297,12 +331,35 @@ class AutoskeletonShimmerOverlayView internal constructor(
                 lastHighlightAlpha = 0
             } else {
                 val phase = clock.phaseAt(System.currentTimeMillis().toDouble())
+                // `((phase * 2) - 1) * w` sweeps `-w -> +w` across one
+                // period; RTL traverses the SAME span the other way, which is
+                // that expression negated. Nothing else about the frame
+                // changes: the `LinearGradient`'s stops are
+                // `[base, highlight, base]` at `[0, 0.5, 1]`, symmetric about
+                // its own centre, so reversing the translation is the whole
+                // flip and `ensureShader` still allocates nothing (NFR-5).
+                //
+                // PHASE IS UNTOUCHED — `phase` still comes from the shared
+                // `AutoskeletonShimmerClock` (ADR-8), so direction changes
+                // WHERE the band is at a given phase, never WHEN the phase is,
+                // and every instance on screen stays on one wave. iOS reverses
+                // `applyShimmer`'s from/to for the same reason and tier-2's
+                // `travelAt` negates the same term, because a sweep that flips
+                // on two of the three renderers is worse than one that never
+                // flips at all.
+                val ltrSweepTranslateX = ((phase.toFloat() * 2f) - 1f) * w
+                val sweepTranslateX =
+                    if (direction == AutoskeletonOverlayView.DIRECTION_RTL) -ltrSweepTranslateX else ltrSweepTranslateX
                 // The pulse parks the band at the container's CENTRE — the
                 // named resting position `core/animation.ts` defines and every
                 // renderer shares — instead of leaving it wherever the sweep
-                // last happened to be.
-                lastShaderTranslateX =
-                    if (isPulse) w / 2f else ((phase.toFloat() * 2f) - 1f) * w
+                // last happened to be. That park carries NO direction term on
+                // purpose: a band whose colours are symmetric about its centre,
+                // parked at the container's centre, is the same picture
+                // mirrored. iOS translates by `width / 2` with no direction
+                // term either, and tier-2 mirrors its park DRIVE precisely so
+                // that it lands on this same point.
+                lastShaderTranslateX = if (isPulse) w / 2f else sweepTranslateX
                 lastHighlightAlpha = if (isPulse) pulseAlpha(phase) else 255
                 matrix.setTranslate(lastShaderTranslateX, 0f)
                 activeShader.setLocalMatrix(matrix)
