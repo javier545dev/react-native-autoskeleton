@@ -145,6 +145,26 @@ export function createShimmerClock(periodMs: number = DEFAULT_PERIOD_MS): Shimme
 
 function applyGeometry(overlay: HTMLDivElement, props: RenderProps): void {
   const decoded = decodeWire(props.snapshot.data);
+
+  // A snapshot with no shapes must paint NOTHING, and saying so explicitly is
+  // load-bearing rather than defensive. `buildClipPath([])` returns
+  // `path("")` — `[].join(' ')` is the empty string — which is not a valid
+  // `clip-path` value, so Chromium drops the declaration and the property
+  // computes to `none`. With no clip, `.askl-overlay`'s `inset: 0` plus its
+  // `background-color: var(--skl-base, …)` fills the ENTIRE wrapper with the
+  // base colour.
+  //
+  // That is worst precisely where it is most likely: the empty-snapshot path
+  // is the one `fallback` exists to cover, so a consumer's hand-authored
+  // fallback was being painted over by a plain grey block — measured at
+  // 296x111 with `computed clip-path: none` while the fallback sat underneath
+  // it. Found by `examples/vite`'s `#/cold-fallback` demo, 2026-09-02.
+  if (decoded.shapes.length === 0) {
+    overlay.style.display = 'none';
+    return;
+  }
+  overlay.style.display = '';
+
   const path = buildClipPath(
     decoded.shapes.map((s) => ({ x: s.x, y: s.y, w: s.w, h: s.h, r: s.r })),
     {
