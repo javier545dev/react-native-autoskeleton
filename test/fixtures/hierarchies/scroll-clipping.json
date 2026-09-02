@@ -1,0 +1,31 @@
+{
+  "class": "container",
+  "frame": { "x": 0, "y": 0, "w": 300, "h": 300 },
+  "nativeID": "root",
+  "children": [
+    {
+      "class": "scroll",
+      "frame": { "x": 0, "y": 0, "w": 300, "h": 300 },
+      "contentOffset": { "x": 0, "y": 0 },
+      "contentSize": { "x": 300, "y": 600 },
+      "nativeID": "scroller",
+      "children": [
+        {
+          "class": "text",
+          "frame": { "x": 10, "y": 10, "w": 100, "h": 30 },
+          "nativeID": "fully-visible"
+        },
+        {
+          "class": "text",
+          "frame": { "x": 10, "y": 280, "w": 100, "h": 40 },
+          "nativeID": "half-past-the-fold"
+        },
+        {
+          "class": "text",
+          "frame": { "x": 10, "y": 400, "w": 100, "h": 30 },
+          "nativeID": "entirely-below-the-fold"
+        }
+      ]
+    }
+  ]
+}

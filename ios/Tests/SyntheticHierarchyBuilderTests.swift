@@ -58,6 +58,21 @@ final class SyntheticHierarchyBuilderTests: XCTestCase {
         try assertShapes(shapes, matchExpected: "scrolled-ancestor")
     }
 
+    /// The offset test above proves the sensor accounts for `contentOffset`.
+    /// It did not clip: a child scrolled past the viewport kept its full frame
+    /// and became a shape nobody can see — and those shapes are charged
+    /// against `maxShapes`, so a long list could spend its budget below the
+    /// fold and truncate what is actually on screen.
+    ///
+    /// The fixture holds three leaves on purpose — fully visible, half past
+    /// the fold, entirely below it. A fix that dropped everything outside the
+    /// viewport would pass with only the third; one that clipped nothing would
+    /// pass with only the first. Shared byte-for-byte with the Android suite.
+    func testScrollContainerClipsChildrenToItsViewport() throws {
+        let shapes = try measure(fixtureNamed: "scroll-clipping")
+        try assertShapes(shapes, matchExpected: "scroll-clipping")
+    }
+
     // MARK: - Container rule, both branches
 
     func testContainerRuleLeavesWin() throws {

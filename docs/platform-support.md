@@ -150,7 +150,7 @@ Legend: **yes** = implemented and reachable from the public API;
 | Virtualized-list API | **no** (§3a) | yes | yes |
 | `debugOverlay` draws | yes | **no** (§5b) | **no** (§5b) |
 | Automatic successor-paint detection (`expectsPlaceholder`) | yes | **no** | **no** |
-| Clipping to scrollable / `overflow` ancestors | yes | **no** (§5e) | **no** (§5e) |
+| Clipping to scrollable / `overflow` ancestors | yes, any `overflow` ancestor | yes, scroll views (§5e) | yes, scroll views (§5e) |
 | Tier-2 Skia renderer | n/a | yes (opt-in) | yes (opt-in) |
 | `autoskeleton/ssr` build-time replay | yes | n/a | n/a |
 
@@ -257,19 +257,24 @@ R2, the raster corner probe, exists (`AutoskeletonRasterProbe`) but production
 uses `AutoskeletonPublicApiRadiusResolver`, which does not include it — so
 `radiusSource: 'raster-probe'` is unreachable in a shipped Android build.
 
-### 5e. Neither native sensor clips to scroll containers
+### 5e. Clipping to scrollable ancestors
 
-The web sensor intersects each shape against every `overflow`-clipping ancestor
-up to the traversal root, so a horizontally scrollable carousel does not emit
-full-size frames for its off-screen items.
+All three sensors clip a leaf's frame to every scrolling ancestor's viewport,
+so content scrolled past the fold contributes nothing. Web does it through
+`computeClipBox`/`applyClip` against any `overflow` ancestor; the native
+sensors clip against `ScrollView`/`HorizontalScrollView` (Android) and
+`UIScrollView` (iOS) only.
 
-Neither native sensor does this. Android accounts for ancestor `scrollX`/`scrollY`
-offsets when computing a frame, but never intersects with the scroll
-container's box. iOS does neither. A wide native scroll row inside an
-`<AutoSkeleton>` can therefore contribute shapes that extend past the visible
-region.
+The narrower native rule is deliberate. Clipping against every parent that
+crops its children would be a much larger behavioural change — a child that
+deliberately overflows its parent is ordinary in a React Native layout — and
+the scrolling case is the one with a real symptom: those shapes are charged
+against `maxShapes`, so a long list could spend its whole budget below the
+fold and truncate the part actually on screen.
 
-Tracked as [#30](https://github.com/javier545dev/react-native-autoskeleton/issues/30).
+Gated by the shared `scroll-clipping` fixture, which holds a fully visible
+leaf, one half past the fold and one entirely below it, so a fix that dropped
+everything outside the viewport and one that clipped nothing both fail.
 
 ### 5e-bis. A sized but transparent container contributes no shape — on every platform
 

@@ -67,6 +67,22 @@ class AutoskeletonSensorTest {
         assertShapesMatch(measure("scrolled-ancestor"), "scrolled-ancestor")
     }
 
+    // MARK: - Scroll clipping
+    //
+    // The offset test above proves the sensor SUBTRACTS a scroll offset. It
+    // does not clip: a child scrolled past the viewport keeps its full frame
+    // and becomes a shape nobody can see. That is not only paint — those
+    // shapes are charged against `maxShapes`, so a long list can spend its
+    // whole budget below the fold and truncate the part actually on screen.
+    //
+    // The fixture holds all three cases on purpose. A fix that drops
+    // everything outside the viewport would pass with only the third leaf, and
+    // a fix that clips nothing would pass with only the first.
+    @Test
+    fun scrollContainerClipsChildrenToItsViewport() {
+        assertShapesMatch(measure("scroll-clipping"), "scroll-clipping")
+    }
+
     // MARK: - Container rule, both branches
 
     @Test
