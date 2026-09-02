@@ -368,6 +368,30 @@ function leafShape(el: Element, ctx: TraversalContext, source: ShapeSource, styl
   if (style.opacity === '0') {
     return false;
   }
+  // `visibility: hidden` is the same mistake by a different property, and it
+  // needs no caveat of its own. Unlike `opacity`, `visibility` INHERITS, and
+  // `getComputedStyle` resolves that inheritance before you read it — verified
+  // in Chromium rather than taken from the spec: a leaf inside a
+  // `visibility: hidden` container computes `hidden`, a leaf that sets
+  // `visibility: visible` inside one computes `visible`, and the hidden leaf
+  // still reports a non-zero `getBoundingClientRect()`, which is exactly why
+  // it used to be shaped. So this single leaf-level check is complete for
+  // every shape this module emits: there is no "a hidden CONTAINER still has
+  // its descendants shaped" hole to record, because those descendants compute
+  // hidden too and take this same branch.
+  //
+  // A hidden container is still recursed into, which is wasted traversal but
+  // never a wrong shape. Skipping the subtree would need a `getComputedStyle`
+  // on every container, the same NFR-3 cost the rule above declines to pay.
+  //
+  // This is HALF the rule. `traverse` sends text leaves to `textLeafShapes`
+  // before ever reaching here, so the same check lives there too — found by
+  // building the demo, not by reading: a `visibility: hidden` <span> kept
+  // producing its shape with only this branch in place. Structurally the same
+  // split that once left clipping applied to text leaves and nothing else.
+  if (style.visibility === 'hidden') {
+    return false;
+  }
   // Clipping is a property of the LEAF's ancestor chain, not of the leaf's
   // kind: `getBoundingClientRect()` reports the laid-out box even when an
   // ancestor's `overflow` clips it away entirely, so every geometry-producing
@@ -403,6 +427,14 @@ function leafShape(el: Element, ctx: TraversalContext, source: ShapeSource, styl
  *  regardless of the leaf element's own `display`. This is real DOM geometry
  *  jsdom cannot produce at all (jsdom #653, #3729), on either API. */
 function textLeafShapes(el: Element, ctx: TraversalContext): boolean {
+  // The text-path half of `leafShape`'s `visibility` rule — see there for why
+  // computed `visibility` needs no container-level counterpart. This is the
+  // one place in this module that pays for a `getComputedStyle` it did not
+  // already need, so the cost is stated rather than hidden: one call per TEXT
+  // leaf, where image, input and container leaves were already paying one.
+  if (getComputedStyle(el).visibility === 'hidden') {
+    return false;
+  }
   // Computed once per leaf (invariant across every line box below), not
   // per-line: `Range.getClientRects()` reports the text's LAID-OUT box, not
   // its visually clipped box — an `overflow:hidden` + `text-overflow:

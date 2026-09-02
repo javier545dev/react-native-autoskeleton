@@ -277,25 +277,6 @@ answer is an always-mounted opaque slot —
 full argument. Gated by the shared `container-rule-sized-but-transparent`
 fixture across the iOS, Android and web sensors.
 
-### 5e-ter. `visibility: hidden` content is still shaped on web
-
-`leafShape()` in `src/web/dom-sensor.ts` refuses to shape a leaf whose computed
-`opacity` is `0`, with the reasoning written out at the call site. It does not
-look at `visibility`, which appears nowhere in that file. A `visibility: hidden`
-element occupies layout and reports a real `getBoundingClientRect()`, so it is
-measured exactly like a visible one and a skeleton block is painted over a
-region where nothing will ever appear.
-
-Unlike the `opacity: 0` rule, this one has no partial-coverage caveat.
-`visibility` inherits, and `getComputedStyle` resolves that inheritance before
-you read it — verified in Chromium: a child of a `visibility: hidden` parent
-computes `hidden`, a child that sets `visibility: visible` computes `visible`,
-and the hidden child still reports a non-zero height. So a single check
-alongside the existing `opacity` one is complete for every shape emitted, and
-costs nothing extra because that caller has already paid for `getComputedStyle`.
-
-Tracked as [#29](https://github.com/javier545dev/react-native-autoskeleton/issues/29).
-
 ### 5f. `handoffFadeMs` is a delay, not a fade
 
 Nothing on either platform's teardown path animates opacity. The overlay is

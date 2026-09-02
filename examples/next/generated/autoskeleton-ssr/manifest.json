@@ -16,7 +16,7 @@
       "snapshot": {
         "v": 1,
         "key": "v1|dashboard|-|375|1|ltr|web",
-        "capturedAt": 1788197172462,
+        "capturedAt": 1788312376175,
         "frame": [
           375,
           312
@@ -53,7 +53,7 @@
       "snapshot": {
         "v": 1,
         "key": "v1|dashboard|-|1280|1|ltr|web",
-        "capturedAt": 1788197172674,
+        "capturedAt": 1788312376383,
         "frame": [
           640,
           312
@@ -90,7 +90,7 @@
       "snapshot": {
         "v": 1,
         "key": "v1|dashboard|-|375|1|rtl|web",
-        "capturedAt": 1788197172915,
+        "capturedAt": 1788312376577,
         "frame": [
           375,
           312
@@ -127,7 +127,7 @@
       "snapshot": {
         "v": 1,
         "key": "v1|dashboard|-|1280|1|rtl|web",
-        "capturedAt": 1788197173153,
+        "capturedAt": 1788312376801,
         "frame": [
           640,
           312

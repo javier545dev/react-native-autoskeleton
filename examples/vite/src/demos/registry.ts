@@ -18,6 +18,7 @@ import { CacheReplay } from './CacheReplay'
 import { ColdLoad } from './ColdLoad'
 import { CssVariableTheme } from './CssVariableTheme'
 import { DebugOverlayDemo } from './DebugOverlayDemo'
+import { HiddenContent } from './HiddenContent'
 import { HintRadius } from './HintRadius'
 import { IgnoreSubtree } from './IgnoreSubtree'
 import { ImageHandoff } from './ImageHandoff'
@@ -26,6 +27,7 @@ import { RefreshPolicy } from './RefreshPolicy'
 import { TailwindTheme } from './TailwindTheme'
 import { TextLines } from './TextLines'
 
+import hiddenContentSource from './HiddenContent.tsx?raw'
 import cacheReplaySource from './CacheReplay.tsx?raw'
 import coldLoadSource from './ColdLoad.tsx?raw'
 import cssVariableThemeSource from './CssVariableTheme.tsx?raw'
@@ -124,6 +126,16 @@ export const DEMOS: readonly Demo[] = [
     file: 'src/demos/TextLines.tsx',
     source: textLinesSource,
     Component: TextLines,
+  },
+  {
+    id: 'hidden-content',
+    title: 'Hidden content is still measured',
+    group: 'detection',
+    shows:
+      'A `visibility: hidden` element keeps its box and its rect, so the sensor shapes it — a skeleton block over a region that stays empty. Toggle the badge and watch the shape count.',
+    file: 'src/demos/HiddenContent.tsx',
+    source: hiddenContentSource,
+    Component: HiddenContent,
   },
   {
     id: 'cache-replay',

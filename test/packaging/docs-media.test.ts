@@ -46,10 +46,15 @@ function localRefs(markdown: string): string[] {
     re.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = re.exec(markdown)) !== null) {
+      // `noUncheckedIndexedAccess` is on, and a capture group really can be
+      // undefined for a pattern that matched without it — narrow rather than
+      // assert, so a future pattern change cannot turn this into a crash.
       const ref = m[1];
+      if (ref === undefined) continue;
       // Remote and inline references are somebody else's to keep alive.
       if (/^(https?:)?\/\//.test(ref) || ref.startsWith('data:')) continue;
-      refs.push(ref.split('#')[0]);
+      const withoutFragment = ref.split('#')[0];
+      if (withoutFragment !== undefined) refs.push(withoutFragment);
     }
   }
   return refs;

@@ -429,7 +429,13 @@ describe('the Android jobs cover every RN minor in the supported range', () => {
     const job = (workflow.jobs ?? {})[jobId] as
       | { strategy?: { matrix?: { include?: Array<Record<string, string>> } } }
       | undefined;
-    return (job?.strategy?.matrix?.include ?? []).map((row) => row[field]).filter(Boolean);
+    // `filter(Boolean)` does not narrow the type under
+    // `noUncheckedIndexedAccess`, and an absent field would otherwise reach
+    // `minorOf` as undefined and silently become NaN — a gap that reads as
+    // "covered".
+    return (job?.strategy?.matrix?.include ?? [])
+      .map((row) => row[field])
+      .filter((v): v is string => typeof v === 'string');
   }
 
   const exampleVersion = (
@@ -441,10 +447,10 @@ describe('the Android jobs cover every RN minor in the supported range', () => {
   const covered = [
     ...rowsOf('bare-rn-android-matrix', 'react-native-version'),
     ...rowsOf('genuine-app-android-matrix', 'rn'),
-    exampleVersion,
+    ...(exampleVersion === undefined ? [] : [exampleVersion]),
   ];
 
-  const minorOf = (v: string) => Number(v.split('.')[1]);
+  const minorOf = (v: string): number => Number(v.split('.')[1] ?? NaN);
   const minors = covered.map(minorOf).sort((a, b) => a - b);
 
   it('covers a contiguous run of minors, with no version covered twice', () => {
@@ -452,8 +458,16 @@ describe('the Android jobs cover every RN minor in the supported range', () => {
     expect(new Set(minors).size, `a minor is covered by two jobs: ${covered.join(', ')}`).toBe(
       minors.length
     );
+    // Read the endpoints once and narrow them: the loop bounds are indexed
+    // accesses, so under `noUncheckedIndexedAccess` they are possibly
+    // undefined, and `undefined <= undefined` would quietly skip the loop —
+    // a gate that passes because it never ran.
+    const lowest = minors[0];
+    const highest = minors[minors.length - 1];
+    expect(lowest, 'no minors were parsed out of the matrix').toBeTypeOf('number');
+    expect(highest, 'no minors were parsed out of the matrix').toBeTypeOf('number');
     const missing: number[] = [];
-    for (let m = minors[0]; m <= minors[minors.length - 1]; m += 1) {
+    for (let m = lowest as number; m <= (highest as number); m += 1) {
       if (!minors.includes(m)) missing.push(m);
     }
     expect(
@@ -471,7 +485,7 @@ describe('the Android jobs cover every RN minor in the supported range', () => {
         peerDependencies: Record<string, string>;
       }
     ).peerDependencies['react-native'];
-    const floorMinor = Number(/(\d+)\.(\d+)\./.exec(declared)?.[2]);
+    const floorMinor = Number(/(\d+)\.(\d+)\./.exec(declared ?? '')?.[2] ?? NaN);
     expect(minors[0], `peer range says ${declared} but the lowest Android row is 0.${minors[0]}`).toBe(
       floorMinor
     );
@@ -494,22 +508,36 @@ describe('the iOS jobs cover every RN minor in the supported range', () => {
     const job = (workflow.jobs ?? {})[jobId] as
       | { strategy?: { matrix?: { include?: Array<Record<string, string>> } } }
       | undefined;
-    return (job?.strategy?.matrix?.include ?? []).map((row) => row[field]).filter(Boolean);
+    // `filter(Boolean)` does not narrow the type under
+    // `noUncheckedIndexedAccess`, and an absent field would otherwise reach
+    // `minorOf` as undefined and silently become NaN — a gap that reads as
+    // "covered".
+    return (job?.strategy?.matrix?.include ?? [])
+      .map((row) => row[field])
+      .filter((v): v is string => typeof v === 'string');
   }
 
   const covered = [
     ...rowsOf('bare-rn-ios-matrix', 'react-native-version'),
     ...rowsOf('genuine-app-ios-matrix', 'rn'),
   ];
-  const minors = covered.map((v) => Number(v.split('.')[1])).sort((a, b) => a - b);
+  const minors = covered.map((v) => Number(v.split('.')[1] ?? NaN)).sort((a, b) => a - b);
 
   it('covers a contiguous run of minors, none of them twice', () => {
     expect(covered.length).toBeGreaterThan(1);
     expect(new Set(minors).size, `a minor is covered twice: ${covered.join(', ')}`).toBe(
       minors.length
     );
+    // Read the endpoints once and narrow them: the loop bounds are indexed
+    // accesses, so under `noUncheckedIndexedAccess` they are possibly
+    // undefined, and `undefined <= undefined` would quietly skip the loop —
+    // a gate that passes because it never ran.
+    const lowest = minors[0];
+    const highest = minors[minors.length - 1];
+    expect(lowest, 'no minors were parsed out of the matrix').toBeTypeOf('number');
+    expect(highest, 'no minors were parsed out of the matrix').toBeTypeOf('number');
     const missing: number[] = [];
-    for (let m = minors[0]; m <= minors[minors.length - 1]; m += 1) {
+    for (let m = lowest as number; m <= (highest as number); m += 1) {
       if (!minors.includes(m)) missing.push(m);
     }
     expect(
@@ -524,7 +552,7 @@ describe('the iOS jobs cover every RN minor in the supported range', () => {
         peerDependencies: Record<string, string>;
       }
     ).peerDependencies['react-native'];
-    const floorMinor = Number(/(\d+)\.(\d+)\./.exec(declared)?.[2]);
+    const floorMinor = Number(/(\d+)\.(\d+)\./.exec(declared ?? '')?.[2] ?? NaN);
     expect(minors[0], `peer range says ${declared} but the lowest iOS row is 0.${minors[0]}`).toBe(
       floorMinor
     );
