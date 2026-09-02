@@ -263,6 +263,28 @@ skeleton-to-content lifecycle visually occurred.
 difference is <code>skeletonOnRefresh</code>. The suppressed one reports nothing
 at all — that silence is the contract, not a gap.</sub>
 
+### Images hand off without a gap — on web
+
+The frame after a skeleton disappears is where loading states usually break:
+the image has been told to load but has not painted, so the reader gets a
+flash of nothing. On web the skeleton is held until an `<img>` successor has
+actually decoded and painted. `onMetrics` reports which happened —
+`successor-painted` means the image really did paint first, `timeout` means it
+did not and the guard fired, because a skeleton that waits forever on an image
+that never loads would be worse than a brief gap.
+
+<p align="center">
+  <img
+    src="docs/assets/image-handoff.gif"
+    alt="A skeleton block replaced by a photograph with no empty frame in between"
+    width="720">
+</p>
+
+This one is honestly platform-split, and the table below says so: automatic
+successor-paint detection is a web capability. On iOS and Android the handoff
+is timing-based, and `expectsPlaceholder` is how you tell it a placeholder is
+coming — see [`docs/image-pipeline.md`](docs/image-pipeline.md).
+
 ---
 
 ## What works where
@@ -280,7 +302,8 @@ The short version. The long version, with the mechanism behind every gap, is
 | CSS-variable / Tailwind v4 theming | yes | n/a | n/a |
 | `debugOverlay` draws | yes | **no** | **no** |
 | Automatic successor-paint detection | yes | **no** | **no** |
-| Clipping to scroll containers | yes | **no** | **no** |
+| Clipping to scroll containers | yes | yes | yes |
+| Shimmer sweep follows writing direction | **no** | yes | yes |
 | Tier-2 Skia renderer (opt-in) | n/a | yes | yes |
 | Server rendering (`autoskeleton/ssr`) | yes | n/a | n/a |
 
@@ -452,6 +475,19 @@ colour at all and defers to your stylesheet, which is what makes a dark-mode
 class flip retheme every skeleton with no React state involved. Tailwind v4
 `@theme` tokens compile to exactly these two custom properties, so that path
 needs no interop either.
+
+<p align="center">
+  <img
+    src="docs/assets/css-variables.png"
+    alt="Three identical components painting three different skeleton colours, each inheriting a different --skl-base and --skl-highlight through the cascade"
+    width="720">
+</p>
+
+<sub>Three identical components, three different skeletons, zero props. The only
+difference is which element each is nested inside: the first two sit under
+containers declaring their own <code>--skl-base</code>/<code>--skl-highlight</code>,
+and the third declares nothing, so it inherits whatever <code>:root</code>
+says.</sub>
 
 Native has no cascade, so the same two colours come from a provider — which
 works on web too, and beats the CSS variables once you set it:
