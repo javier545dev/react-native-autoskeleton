@@ -56,7 +56,7 @@ Tap **Demos ›** in the top-right of the launch screen.
 — about 1.5 s of skeleton, then the real content — so the transition the
 library exists for has happened before you have finished reading the sentence
 above it. Below that is the whole index on one scrolling list, split into
-section headers. There is no category screen: with twelve demos a hop per
+section headers. There is no category screen: with fifteen demos a hop per
 category would add a tap to every journey and disclose nothing a section header
 does not, so **every demo is exactly one tap from home**.
 
@@ -82,6 +82,7 @@ library cannot keep is worse than a missing demo.
 | Demo | What it makes obvious |
 | --- | --- |
 | Cold load | The skeleton comes from the measured layout — you never author one. |
+| data-driven loading | Pass the value, not a predicate. Nullish means loading; `0`, `''` and `false` are loaded values. The function child receives `NonNullable<T>`, and `isLoading` still wins when both are given. |
 
 ### What gets detected
 
@@ -89,6 +90,13 @@ library cannot keep is worse than a missing demo.
 | --- | --- |
 | Text | A `<Text>` is one detected leaf. One `<Text>` per line of meaning is the text-shaped skeleton on native. |
 | Images | An image is its own leaf; the placeholder keeps the picture's real frame. |
+| Scroll clipping | A leaf below the fold of a `<ScrollView>` is clipped away and never spends the shape budget. The same rows in a non-scrolling `overflow: 'hidden'` box are all charged — **6 shapes against 24**, measured on screen. |
+
+### Lifecycle
+
+| Demo | What it makes obvious |
+| --- | --- |
+| Cold miss & fallback | A strictly conditional child leaves the sensor nothing to measure, so the first loading state of a session paints **nothing** without `fallback`. Two identical instances, one with the prop and one without. |
 
 ### Control & opt-out
 
@@ -124,7 +132,7 @@ library cannot keep is worse than a missing demo.
 | --- | --- |
 | Tier 2 — Skia | The opt-in upgrade, wired the way a consumer wires it. |
 
-Two honest notes about those tables:
+Three honest notes about those tables:
 
 - **The `debugOverlay` half of the metrics demo does not draw on this
   platform**, and the demo now says so with the control rendered visibly
@@ -139,6 +147,16 @@ Two honest notes about those tables:
   intervals instead. `radiusSourceHistogram` is likewise all-zeros and
   `degraded` is always empty on native. Full table in
   [`docs/observability.md` §1.1](../../docs/observability.md).
+- **The cold-miss demo's second cycle is not as bleak as the docs' worst
+  case, and the demo says so.** Measured on an iPhone 17 (iOS 26.5 simulator,
+  2026-09-02): cycle 1 leaves the no-`fallback` panel blank for the whole
+  2.2 s, and both instances then report `shapeCount: 2` — the traversal caught
+  the two `<Text>` leaves in the frame where `data` arrived. So cycle 2 paints
+  a measured skeleton in *both* panels and the `fallback` correctly steps
+  aside. That rescue is timing, not a contract: `core/snapshot.ts` re-attempts
+  an empty measurement only `MAX_EMPTY_MEASUREMENTS` times before it is
+  permanent for that key. What `fallback` guarantees is the first cycle of the
+  session — the one every new reader sees.
 
 ### The list demo's authoring constraint
 

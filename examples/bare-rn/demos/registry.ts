@@ -11,14 +11,16 @@
  * user, and a promise the library cannot keep is worse than a missing demo.
  *
  * The `group` field is the shared taxonomy below. It is what turns a flat list
- * of twelve equally-weighted cards into a reading order: a newcomer starts at
+ * of fifteen equally-weighted cards into a reading order: a newcomer starts at
  * `start-here` and never has to guess whether `delay` is more fundamental than
  * `hint`. Array order is unchanged and stays the tie-breaker within a group.
  */
 
 import type { ComponentType } from 'react';
 import { ColdLoadDemo } from './ColdLoadDemo';
+import { DataDemo } from './DataDemo';
 import { DelayDemo } from './DelayDemo';
+import { FallbackDemo } from './FallbackDemo';
 import { HintDemo } from './HintDemo';
 import { IgnoreDemo } from './IgnoreDemo';
 import { ImageDemo } from './ImageDemo';
@@ -26,6 +28,7 @@ import { ListDemo } from './ListDemo';
 import { MetricsDemo } from './MetricsDemo';
 import { MotionDemo } from './MotionDemo';
 import { RefreshDemo } from './RefreshDemo';
+import { ScrollClipDemo } from './ScrollClipDemo';
 import { SkiaDemo } from './SkiaDemo';
 import { TextDemo } from './TextDemo';
 import { ThemingDemo } from './ThemingDemo';
@@ -53,10 +56,10 @@ export interface DemoGroup {
 }
 
 /**
- * The full taxonomy, in reading order. This app has no `lifecycle` or `server`
- * demos, so `DemoGallery` renders only the groups that have entries — the list
- * stays complete on purpose, because a group with no demos here is a fact
- * about this app, not a hole in the system.
+ * The full taxonomy, in reading order. This app has no `server` demos, so
+ * `DemoGallery` renders only the groups that have entries — the list stays
+ * complete on purpose, because a group with no demos here is a fact about this
+ * app, not a hole in the system.
  */
 export const GROUPS: readonly DemoGroup[] = [
   {
@@ -127,6 +130,14 @@ export const DEMOS: readonly DemoEntry[] = [
     component: ColdLoadDemo,
   },
   {
+    id: 'data',
+    title: 'data-driven loading',
+    summary: 'Pass the value, not a predicate. Nullish means loading; 0 and \'\' are loaded values.',
+    source: 'demos/DataDemo.tsx',
+    group: 'start-here',
+    component: DataDemo,
+  },
+  {
     id: 'text',
     title: 'Text',
     summary: 'A <Text> is one detected leaf. One <Text> per line of meaning is the text-shaped skeleton.',
@@ -141,6 +152,22 @@ export const DEMOS: readonly DemoEntry[] = [
     source: 'demos/ImageDemo.tsx',
     group: 'detection',
     component: ImageDemo,
+  },
+  {
+    id: 'scroll-clip',
+    title: 'Scroll clipping',
+    summary: 'A leaf below the fold of a scroll container is clipped away, and never spends the shape budget.',
+    source: 'demos/ScrollClipDemo.tsx',
+    group: 'detection',
+    component: ScrollClipDemo,
+  },
+  {
+    id: 'fallback',
+    title: 'Cold miss & fallback',
+    summary: 'A strictly conditional child leaves nothing to measure. fallback is the only thing that can paint.',
+    source: 'demos/FallbackDemo.tsx',
+    group: 'lifecycle',
+    component: FallbackDemo,
   },
   {
     id: 'hint',

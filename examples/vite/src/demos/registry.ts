@@ -16,12 +16,16 @@ import type { ComponentType } from 'react'
 
 import { CacheReplay } from './CacheReplay'
 import { ColdLoad } from './ColdLoad'
+import { ColdMissFallback } from './ColdMissFallback'
 import { CssVariableTheme } from './CssVariableTheme'
+import { DataChildFunction } from './DataChildFunction'
+import { DataNullish } from './DataNullish'
 import { DebugOverlayDemo } from './DebugOverlayDemo'
 import { HiddenContent } from './HiddenContent'
 import { HintRadius } from './HintRadius'
 import { IgnoreSubtree } from './IgnoreSubtree'
 import { ImageHandoff } from './ImageHandoff'
+import { LoadingWins } from './LoadingWins'
 import { ReducedMotion } from './ReducedMotion'
 import { RefreshPolicy } from './RefreshPolicy'
 import { TailwindTheme } from './TailwindTheme'
@@ -30,11 +34,15 @@ import { TextLines } from './TextLines'
 import hiddenContentSource from './HiddenContent.tsx?raw'
 import cacheReplaySource from './CacheReplay.tsx?raw'
 import coldLoadSource from './ColdLoad.tsx?raw'
+import coldMissFallbackSource from './ColdMissFallback.tsx?raw'
 import cssVariableThemeSource from './CssVariableTheme.tsx?raw'
+import dataChildFunctionSource from './DataChildFunction.tsx?raw'
+import dataNullishSource from './DataNullish.tsx?raw'
 import debugOverlaySource from './DebugOverlayDemo.tsx?raw'
 import hintRadiusSource from './HintRadius.tsx?raw'
 import ignoreSubtreeSource from './IgnoreSubtree.tsx?raw'
 import imageHandoffSource from './ImageHandoff.tsx?raw'
+import loadingWinsSource from './LoadingWins.tsx?raw'
 import reducedMotionSource from './ReducedMotion.tsx?raw'
 import refreshPolicySource from './RefreshPolicy.tsx?raw'
 import tailwindThemeSource from './TailwindTheme.tsx?raw'
@@ -230,5 +238,45 @@ export const DEMOS: readonly Demo[] = [
     file: 'src/demos/DebugOverlayDemo.tsx',
     source: debugOverlaySource,
     Component: DebugOverlayDemo,
+  },
+  {
+    id: 'data-nullish',
+    title: 'What data counts as loading',
+    group: 'start-here',
+    shows:
+      'Only nullish data means loading. This cart sits on a measured skeleton while its count is null and leaves it the instant the value becomes 0 — falsy, and an ordinary loaded value.',
+    file: 'src/demos/DataNullish.tsx',
+    source: dataNullishSource,
+    Component: DataNullish,
+  },
+  {
+    id: 'data-child',
+    title: 'One condition instead of two',
+    group: 'start-here',
+    shows:
+      'Same value, same moment, same result on screen: data={user} with a function child does what isLoading={user === null} plus the inverted {user !== null && …} guard did — and the child is handed a non-null User, so nothing restates the condition.',
+    file: 'src/demos/DataChildFunction.tsx',
+    source: dataChildFunctionSource,
+    Component: DataChildFunction,
+  },
+  {
+    id: 'cold-fallback',
+    title: 'Cold miss: what fallback is for',
+    group: 'lifecycle',
+    shows:
+      'A function child leaves nothing mounted to measure. Without fallback the wrapper has no box at all — nothing traversed, nothing reported, 0 pixels, forever. With it there is a box and a visible loading state, though what paints in that box on web today is one unclipped block rather than the placeholder you wrote, and the demo measures why.',
+    file: 'src/demos/ColdMissFallback.tsx',
+    source: coldMissFallbackSource,
+    Component: ColdMissFallback,
+  },
+  {
+    id: 'loading-wins',
+    title: 'isLoading wins over data',
+    group: 'lifecycle',
+    shows:
+      'Both panels hold the same non-null data for the whole demo; only the one that also passes isLoading={isFetching} enters a loading state when the refetch starts.',
+    file: 'src/demos/LoadingWins.tsx',
+    source: loadingWinsSource,
+    Component: LoadingWins,
   },
 ]
