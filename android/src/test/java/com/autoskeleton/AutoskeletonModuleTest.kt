@@ -21,6 +21,7 @@ import com.facebook.react.uimanager.DisplayMetricsHolder
 import com.facebook.react.uimanager.LengthPercentage
 import com.facebook.react.uimanager.LengthPercentageType
 import com.facebook.react.uimanager.style.BorderRadiusProp
+import com.facebook.react.views.text.ReactTextView
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -29,6 +30,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
 
 /**
  * Task 5.1 (tasks.md Phase 5) / plan.md ADR-1: `AutoskeletonModule`'s
@@ -197,7 +199,6 @@ class AutoskeletonModuleTest {
         AutoskeletonNativeShapeCache.clear()
         val leaf = roundedLeaf(radiusPx = 8f)
         val module = moduleFor(leaf)
-        val density = leaf.resources.displayMetrics.density
 
         val withRadius16 = module.computeWireArray(42.0, "r16", defaultConfig.copy(defaultRadius = 16f))!!
         val withRadius3 = module.computeWireArray(42.0, "r3", defaultConfig.copy(defaultRadius = 3f))!!
@@ -205,8 +206,17 @@ class AutoskeletonModuleTest {
         assertEquals(6, withRadius16.size)
         assertEquals(6, withRadius3.size)
         // Slot 5 is the single container shape's `r` (VERSION + x,y,w,h,r).
-        assertEquals(16.0 / density, withRadius16[5], 0.0001)
-        assertEquals(3.0 / density, withRadius3[5], 0.0001)
+        //
+        // Units defect: this used to assert `16.0 / density` and `3.0 / density`,
+        // which enshrined the bug — `config.defaultRadius` is a dp value authored
+        // in JS (`<SkeletonProvider defaultRadius={16}>`), so 16 in must be 16 out
+        // on a wire that is itself in dp. The old expectation only ever looked
+        // right because Robolectric's default density is 1, making the stray
+        // division invisible; on a real 3x device it meant a `defaultRadius={16}`
+        // painted 5.33dp. `dpLengthsSurviveTheWireRoundTripUnchangedAtDensity3`
+        // below is the case that would now catch a regression.
+        assertEquals(16.0, withRadius16[5], 0.0001)
+        assertEquals(3.0, withRadius3[5], 0.0001)
     }
 
     @Test
@@ -323,7 +333,6 @@ class AutoskeletonModuleTest {
         leaf.setTag(com.facebook.react.R.id.view_tag_native_id, "card")
         BackgroundStyleApplicator.setBackgroundColor(leaf, Color.RED)
         val module = moduleFor(leaf)
-        val density = leaf.resources.displayMetrics.density
 
         val hinted = module.computeWireArray(
             42.0,
@@ -332,7 +341,12 @@ class AutoskeletonModuleTest {
         )!!
 
         assertEquals(6, hinted.size)
-        assertEquals(20.0 / density, hinted[5], 0.0001) // slot 5 = r
+        // Units defect: this used to assert `20.0 / density`. A hint radius is a
+        // dp value authored in JS (`<AutoSkeleton.Hint radius={20}>`) and iOS
+        // applies that same 20 verbatim as points, so a 20 in must stay a 20 out
+        // — the division made Android paint 6.67dp against iOS's 20pt on a 3x
+        // device, invisible here only because Robolectric's default density is 1.
+        assertEquals(20.0, hinted[5], 0.0001) // slot 5 = r
     }
 
     @Test
@@ -381,6 +395,93 @@ class AutoskeletonModuleTest {
         )!!
 
         assertEquals(0.0, unhinted[5], 0.0001) // no background radius set, no matching hint -> R1 MEASURED 0
+    }
+
+    // MARK: - Units defect: dp in from JS, dp out on the wire, at a density
+    // that is NOT 1.
+    //
+    // Every case above runs at Robolectric's default density of 1, where a
+    // stray `/ density` or a missing `* density` is arithmetically invisible —
+    // which is exactly how `config.defaultRadius`, `config.hints[].radius` and
+    // `defaultLineHeight` came to be injected into the sensor's PIXEL-space
+    // pipeline as raw dp values and then divided by density on the way out,
+    // shipping every one of them `1/density` too small on real devices. These
+    // cases pin the round trip at density 3, so the bug cannot come back
+    // unnoticed.
+    //
+    // `@Config(qualifiers = "xxhdpi")` is the mechanism: Robolectric 4.14.1
+    // applies the resource qualifier to the whole `Configuration`/
+    // `DisplayMetrics` for the test, giving `densityDpi = 480` and therefore
+    // `density = 3.0` — asserted below before anything else, so a Robolectric
+    // upgrade that stopped honoring the qualifier fails loudly here instead of
+    // silently degrading these into more density-1 tests that prove nothing.
+
+    @Test
+    @Config(qualifiers = "xxhdpi")
+    fun dpLengthsSurviveTheWireRoundTripUnchangedAtDensity3() {
+        AutoskeletonNativeShapeCache.clear()
+        val leaf = roundedLeaf(radiusPx = 8f, w = 120, h = 120)
+        assertEquals(3f, leaf.resources.displayMetrics.density, 0.0001f)
+        val module = moduleFor(leaf)
+
+        // R3 fallback rung: `<SkeletonProvider defaultRadius={16}>`.
+        val fromDefaultRadius = module.computeWireArray(42.0, "dpi3-default", defaultConfig.copy(defaultRadius = 16f))!!
+        // R0 hint rung: `<AutoSkeleton.Hint radius={20}>`.
+        leaf.setTag(com.facebook.react.R.id.view_tag_native_id, "card")
+        val fromHint = module.computeWireArray(
+            42.0,
+            "dpi3-hint",
+            defaultConfig.copy(hints = listOf(AutoskeletonHintEntry(nodeId = "card", lines = null, radius = 20f))),
+        )!!
+
+        assertEquals(6, fromDefaultRadius.size)
+        assertEquals(6, fromHint.size)
+        assertEquals("defaultRadius={16} is 16dp in, so it must be 16dp out", 16.0, fromDefaultRadius[5], 0.0001)
+        assertEquals("Hint radius={20} is 20dp in, so it must be 20dp out", 20.0, fromHint[5], 0.0001)
+
+        // MEASURED geometry must NOT move: `view.layout(0, 0, 120, 120)` is 120
+        // raw PIXELS (Robolectric's `layout()` takes pixels regardless of
+        // density), so the wire's dp value is still 120/3 = 40. This is the
+        // guard that the fix converted only the JS-authored lengths and left
+        // the already-correct pixel geometry alone.
+        assertEquals(0.0, fromDefaultRadius[1], 0.0001) // x
+        assertEquals(0.0, fromDefaultRadius[2], 0.0001) // y
+        assertEquals(40.0, fromDefaultRadius[3], 0.0001) // w
+        assertEquals(40.0, fromDefaultRadius[4], 0.0001) // h
+    }
+
+    @Test
+    @Config(qualifiers = "xxhdpi")
+    fun collapsedTextIsDetectedAgainstADpLineHeightNotARawPixelOneAtDensity3() {
+        // `defaultLineHeight` (20) is the same dp literal iOS declares in POINTS
+        // (`ios/AutoskeletonTypes.swift`), so `frame.h < defaultLineHeight` must
+        // compare a pixel height against 20dp = 60px here, never against a bare
+        // 20px (≈6.7dp) — that mismatch made Android refuse to collapse text iOS
+        // collapses, and made every synthesized line 20px (6.7dp) tall instead of
+        // 20dp.
+        //
+        // This leaf is 30px = 10dp tall, chosen to sit strictly between the wrong
+        // threshold (20px) and the right one (60px), so the two behaviors are
+        // distinguishable: pre-fix it emitted ONE 10dp-tall text shape; post-fix
+        // it collapses into synthesized lines of exactly 20dp.
+        AutoskeletonNativeShapeCache.clear()
+        val context = RuntimeEnvironment.getApplication()
+        DisplayMetricsHolder.initDisplayMetricsIfNotInitialized(context)
+        val leaf = ReactTextView(context)
+        leaf.layout(0, 0, 120, 30)
+        assertEquals(3f, leaf.resources.displayMetrics.density, 0.0001f)
+        val module = moduleFor(leaf)
+
+        val wire = module.computeWireArray(42.0, "dpi3-collapsed-text", defaultConfig)!!
+
+        // round(30px / 60px) == 1, floored at 1 by `defaultLineCount`.
+        assertEquals("one synthesized line", 6, wire.size)
+        assertEquals(
+            "a synthesized line is exactly defaultLineHeight tall — 20dp, not 20px (6.67dp)",
+            20.0,
+            wire[4],
+            0.0001,
+        )
     }
 
     // MARK: - Adversarial-review defect (2026-08-28): a timed-out `getShapes`

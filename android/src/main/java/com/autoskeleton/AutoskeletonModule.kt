@@ -84,6 +84,60 @@ private fun ReadableArray.toHintEntries(): List<AutoskeletonHintEntry> =
     )
   }
 
+/** THE dp -> pixel boundary, and the ONLY place JS-authored lengths enter the
+ *  sensor's pixel-space pipeline.
+ *
+ *  Every length in [AutoskeletonGetShapesConfig] came from JS, where the unit is
+ *  always the density-independent point: `<SkeletonProvider defaultRadius={8}>`
+ *  means 8dp and `<AutoSkeleton.Hint radius={20}>` means 20dp — the same numbers
+ *  iOS applies verbatim, because 1pt IS iOS's density-independent unit
+ *  (`ios/AutoskeletonSensor.swift` uses the hint as points with no scaling step).
+ *  Every length in [AutoskeletonSensorOptions] is in raw view PIXELS instead,
+ *  because pixels are the only unit the traversal can compare its geometry
+ *  against: frames come out of `offsetDescendantRectToMyCoords` in pixels (see
+ *  `AutoskeletonShapeInfo`'s own doc comment), and `encodeWireArray` divides the
+ *  whole result by `density` on the way back out.
+ *
+ *  Before this function existed, the three JS-origin lengths below were injected
+ *  into that pixel pipeline UNSCALED and then divided by density anyway, so each
+ *  came out `1/density` too small on the wire:
+ *   - `defaultRadius={8}` painted 2.67dp on a 3x device instead of 8dp;
+ *   - `<AutoSkeleton.Hint radius={20}>` painted 6.67dp against iOS's 20pt;
+ *   - `defaultLineHeight` (20, not a `config` field yet, but the same dp literal
+ *     iOS declares in POINTS in `AutoskeletonTypes.swift`) made the collapsed-text
+ *     test `frame.h < defaultLineHeight` compare pixel heights against ~6.7dp
+ *     instead of 20dp, and made every synthesized line 20px tall instead of 20dp.
+ *  `AutoskeletonOverlayView.kt`'s `defaultRadius.toFloat() * density` is this exact
+ *  multiplication, already correct on the RENDERER half of this library — this is
+ *  the sensor half catching up to it.
+ *
+ *  Converting HERE, once, rather than at each of the three use sites is
+ *  deliberate. This is the single production entry point (`AutoskeletonSensor`'s
+ *  `refine()` is reached from no production Android code path — only tests call
+ *  it), so one multiplication keeps all three correct, and it leaves
+ *  [AutoskeletonSensorOptions] and [AutoskeletonPublicApiRadiusResolver] with
+ *  their single unambiguous "pixels in, pixels out" contract — the contract
+ *  `AutoskeletonRadiusLadderInstrumentedTest` builds its resolvers against
+ *  directly with real on-device pixel radii, and which therefore does not move.
+ *
+ *  MEASURED geometry is deliberately untouched: `x/y/w/h` already originate in
+ *  pixels and are already correct end to end, so the wire values for them are
+ *  byte-identical before and after this conversion. */
+internal fun AutoskeletonGetShapesConfig.toSensorOptions(density: Float): AutoskeletonSensorOptions {
+  val defaults = AutoskeletonSensorOptions.defaults
+  val defaultRadiusPx = defaultRadius * density
+  return defaults.copy(
+    // `lines` is a COUNT, not a length — only `radius` is scaled.
+    hints = AutoskeletonMapHintRegistry(hints.map { it.copy(radius = it.radius?.times(density)) }),
+    radiusResolver = AutoskeletonPublicApiRadiusResolver(defaultRadius = defaultRadiusPx),
+    budgetMs = budgetMs,
+    maxShapes = maxShapes,
+    defaultRadius = defaultRadiusPx,
+    defaultLineHeight = defaults.defaultLineHeight * density,
+    collectDebugSidecars = collectDebugSidecars,
+  )
+}
+
 /** Package-visible seam (same DI pattern as `AutoskeletonTracing`/
  *  `AutoskeletonWarningEmitter`): resolves a `View` by React tag, or `null`
  *  when the tag is unknown / not yet mounted. Production uses the PUBLIC
@@ -222,6 +276,14 @@ object AutoskeletonSystemUiThreadDispatcher : AutoskeletonUiThreadDispatcher {
 // pattern (`AutoskeletonSensor.kt`: `AutoskeletonPublicApiRadiusResolver(options.defaultRadius)`)
 // is now mirrored here instead: the resolver is constructed FRESH per call
 // from the real per-call `config.defaultRadius`.
+//
+// Units defect (this session): threading `config` into the sensor closed the
+// "the value never arrives" half of that gap, but left a unit mismatch behind —
+// `config`'s lengths are dp (they came from JS) while the sensor works in
+// pixels, so `defaultRadius`, every `radius` hint, and `defaultLineHeight`
+// entered the pixel pipeline unscaled and were then divided by density on the
+// way out, arriving `1/density` too small. `AutoskeletonGetShapesConfig.toSensorOptions(density)`
+// above is now the single conversion point; see its doc comment.
 class AutoskeletonModule(
   reactContext: ReactApplicationContext,
   private val sensor: AutoskeletonSensor = AutoskeletonSensor(),
@@ -265,17 +327,11 @@ class AutoskeletonModule(
       val view = viewResolver.resolve(reactTag.toInt()) ?: return@runAndWait null
       val density = view.resources?.displayMetrics?.density?.takeIf { it > 0f } ?: 1f
 
-      val measured = sensor.measure(
-        view,
-        AutoskeletonSensorOptions.defaults.copy(
-          hints = AutoskeletonMapHintRegistry(config.hints),
-          radiusResolver = AutoskeletonPublicApiRadiusResolver(defaultRadius = config.defaultRadius),
-          budgetMs = config.budgetMs,
-          maxShapes = config.maxShapes,
-          defaultRadius = config.defaultRadius,
-          collectDebugSidecars = config.collectDebugSidecars,
-        ),
-      ) ?: return@runAndWait null
+      // `config` is in dp (it came from JS); `AutoskeletonSensorOptions` is in
+      // pixels (the traversal's own unit). `toSensorOptions` is the single
+      // conversion between the two — see its doc comment for why it lives there
+      // and not at each use site.
+      val measured = sensor.measure(view, config.toSensorOptions(density)) ?: return@runAndWait null
 
       val wire = encodeWireArray(measured.shapes, density)
       if (isCancelled()) {
