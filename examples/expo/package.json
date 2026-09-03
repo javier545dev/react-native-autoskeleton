@@ -26,7 +26,8 @@
     "export:web": "expo export --platform web",
     "gate:uniwind": "node scripts/uniwind-paint-gate.mjs",
     "boot-smoke": "expo config --json >/dev/null && echo 'expo: app config resolves with autoskeleton in the dependency tree'",
-    "typecheck:docs-examples": "tsc --noEmit -p tsconfig.docs-examples.json"
+    "typecheck:docs-examples": "tsc --noEmit -p tsconfig.docs-examples.json",
+    "postinstall": "node ../../scripts/unpin-local-tarball.mjs"
   },
   "private": true
 }

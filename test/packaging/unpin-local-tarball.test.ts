@@ -172,14 +172,41 @@ describe('node scripts/unpin-local-tarball.mjs <example>', () => {
 
 describe('the repository state this script exists for', () => {
   // Not a hypothetical. Asserting the real files keeps the rationale honest:
-  // if someone later drops these pins for good, this says so out loud rather
-  // than leaving a script guarding nothing.
-  it('every example lockfile still resolves autoskeleton from a local tarball', () => {
-    for (const example of ['bare-rn', 'expo', 'next', 'vite']) {
-      const lock = JSON.parse(
-        readFileSync(path.join(REPO_ROOT, 'examples', example, 'package-lock.json'), 'utf8'),
-      ) as { packages: Record<string, { resolved?: string } | undefined> };
-      expect(lock.packages['node_modules/autoskeleton']?.resolved, example).toMatch(/^file:.*\.tgz$/);
+  // if someone later stops consuming the local tarball, this says so out loud
+  // rather than leaving a script guarding nothing.
+  //
+  // THIS ASSERTION MOVED FROM THE LOCKFILE TO package.json, deliberately.
+  // It used to read `packages['node_modules/autoskeleton'].resolved` out of
+  // each `package-lock.json`, which stopped being readable once the pins were
+  // dropped for good: this script removes the whole ENTRY (that is what makes
+  // npm re-resolve and re-derive the hash), so `resolved` goes with it. The
+  // test fired exactly as its comment promised it would — the fix is to
+  // re-anchor it, not to weaken it.
+  //
+  // package.json is the better anchor anyway. The dependency SPEC is the thing
+  // that actually decides where the bytes come from; the lockfile merely
+  // records the last resolution of it, and this repo now deliberately keeps
+  // that record pin-free (`test/packaging/local-tarball-pin.test.ts` is what
+  // holds that line, and `postinstall` in each example is what maintains it).
+  it('every example still declares autoskeleton as a local tarball dependency', () => {
+    for (const example of ['bare-rn', 'expo', 'next', 'rn-077', 'vite']) {
+      const pkg = JSON.parse(
+        readFileSync(path.join(REPO_ROOT, 'examples', example, 'package.json'), 'utf8'),
+      ) as { dependencies?: Record<string, string> };
+      expect(pkg.dependencies?.['autoskeleton'], example).toMatch(/^file:.*\.tgz$/);
+    }
+  });
+
+  // The other half of the same guarantee: the script only has something to do
+  // if every example is wired to run it. Without this, a new example could be
+  // added, drift silently, and nothing would notice until an install went
+  // quietly stale.
+  it('every example runs the unpin script on postinstall', () => {
+    for (const example of ['bare-rn', 'expo', 'next', 'rn-077', 'vite']) {
+      const pkg = JSON.parse(
+        readFileSync(path.join(REPO_ROOT, 'examples', example, 'package.json'), 'utf8'),
+      ) as { scripts?: Record<string, string> };
+      expect(pkg.scripts?.['postinstall'], example).toContain('unpin-local-tarball');
     }
   });
 });

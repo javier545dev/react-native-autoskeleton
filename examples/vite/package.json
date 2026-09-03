@@ -9,7 +9,8 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "boot-smoke": "vite build --logLevel warn && echo 'vite: production build succeeds with autoskeleton in the dependency tree'",
-    "typecheck:cli-consumer": "tsc --noEmit -p tsconfig.cli-consumer.json"
+    "typecheck:cli-consumer": "tsc --noEmit -p tsconfig.cli-consumer.json",
+    "postinstall": "node ../../scripts/unpin-local-tarball.mjs"
   },
   "dependencies": {
     "autoskeleton": "file:../../.tarball/autoskeleton-0.1.0.tgz",
