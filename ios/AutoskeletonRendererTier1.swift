@@ -84,6 +84,21 @@ protocol AutoskeletonRendererHandle: AnyObject {
     /// failure mode of that disagreement is a snapshot captured for one
     /// direction swept with the other's highlight.
     func setDirection(_ direction: String)
+
+    /// A palette delivered while the overlay is already mounted — the
+    /// dark-mode toggle case.
+    ///
+    /// `composeCacheKey` (`src/core/cache-key.ts`) carries no theme segment,
+    /// deliberately, because geometry does not depend on colour. So a palette
+    /// change never invalidates the key, never takes the remount path, and
+    /// without this would simply never be applied: the skeleton keeps painting
+    /// the previous palette until it happens to unmount.
+    ///
+    /// MUST NOT restart the shimmer phase — a colour change is not a new
+    /// animation. The implementation therefore never touches the
+    /// `CABasicAnimation` (which would recompute `beginTime`), only the two
+    /// layer properties that carry colour.
+    func setTheme(_ theme: AutoskeletonSkeletonTheme)
     func destroy()
 }
 
@@ -192,7 +207,7 @@ final class AutoskeletonRendererTier1 {
         private let containerLayer: CALayer
         private let maskLayer: CAShapeLayer
         private let gradientLayer: CAGradientLayer
-        private let theme: AutoskeletonSkeletonTheme
+        private var theme: AutoskeletonSkeletonTheme
         private let clock: AutoskeletonShimmerClock
         /// The resolved kind currently applied, so a geometry resync can
         /// re-derive the width-dependent sweep (or the width-dependent parked
@@ -242,6 +257,26 @@ final class AutoskeletonRendererTier1 {
         }
 
         /// Applies `body` with CoreAnimation's implicit animations suppressed.
+        /// Applies a post-mount palette in place.
+        ///
+        /// Wrapped in `withoutImplicitAnimations` for the same reason every
+        /// other layer mutation here is: a bare `CALayer` property assignment
+        /// outside a view's animation block gets CoreAnimation's default
+        /// implicit 0.25s cross-fade, so a dark-mode toggle would visibly
+        /// dissolve rather than switch. The shimmer's own `CABasicAnimation` is
+        /// deliberately untouched, which is what preserves the phase.
+        func setTheme(_ next: AutoskeletonSkeletonTheme) {
+            guard next.baseColor != theme.baseColor || next.highlightColor != theme.highlightColor else {
+                theme = next
+                return
+            }
+            theme = next
+            withoutImplicitAnimations {
+                containerLayer.backgroundColor = next.baseColor
+                gradientLayer.colors = [next.baseColor, next.highlightColor, next.baseColor]
+            }
+        }
+
         private func withoutImplicitAnimations(_ body: () -> Void) {
             CATransaction.begin()
             CATransaction.setDisableActions(true)

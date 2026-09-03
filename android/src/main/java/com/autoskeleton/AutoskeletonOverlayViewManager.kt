@@ -31,6 +31,17 @@ class AutoskeletonOverlayViewManager :
     override fun createViewInstance(context: ThemedReactContext): AutoskeletonOverlayView =
         AutoskeletonOverlayView(context)
 
+    /** React Native calls this once every prop in an update batch has been
+     *  delivered. A palette change arrives as separate `baseColor` and
+     *  `highlightColor` calls, and both colours are baked into a single
+     *  `LinearGradient`, so applying them here — rather than from each setter —
+     *  rebuilds that gradient once per update instead of once per prop, and
+     *  guarantees the overlay never paints a half-applied palette. */
+    override fun onAfterUpdateTransaction(view: AutoskeletonOverlayView) {
+        super.onAfterUpdateTransaction(view)
+        view.flushPendingTheme()
+    }
+
     override fun onDropViewInstance(view: AutoskeletonOverlayView) {
         view.destroy()
         super.onDropViewInstance(view)

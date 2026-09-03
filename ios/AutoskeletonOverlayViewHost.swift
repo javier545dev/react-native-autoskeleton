@@ -78,6 +78,12 @@ public final class AutoskeletonOverlayViewHost: NSObject {
     private var mountedCacheKey: String?
     private var mountedAnimation: String?
     private var mountedDirection: String?
+    /// The palette the live handle is currently painting with. Tracked for the
+    /// same reason `mountedAnimation`/`mountedDirection` are: `updateProps:`
+    /// fires for ANY prop delivery, including inherited `ViewProps` like
+    /// opacity, so the same-key branch must be able to tell a real palette
+    /// change from a redundant redelivery and forward only the former.
+    private var mountedTheme: AutoskeletonSkeletonTheme?
 
     /// The writing direction most recently delivered by
     /// `AutoskeletonOverlayView.mm`, defaulting to `"ltr"` — which is what
@@ -151,6 +157,13 @@ public final class AutoskeletonOverlayViewHost: NSObject {
 
         let resolvedAnimation = Self.effectiveAnimation(animation, reducedMotion: reducedMotion)
 
+        let theme = AutoskeletonSkeletonTheme(
+            baseColor: Self.parseColor(baseColor, default: .lightGray).cgColor,
+            highlightColor: Self.parseColor(highlightColor, default: .white).cgColor,
+            defaultRadius: CGFloat(defaultRadius),
+            speedMs: speedMs
+        )
+
         if let existingHandle = handle, mountedCacheKey == cacheKey {
             // Geometry-only, mirroring `AutoskeletonRendererTier1.Handle.update`'s
             // own "must not restart the shimmer phase" contract
@@ -185,16 +198,20 @@ public final class AutoskeletonOverlayViewHost: NSObject {
                 existingHandle.setAnimation(resolvedAnimation)
                 mountedAnimation = resolvedAnimation
             }
+            // The palette is the one prop group a cache key can never carry:
+            // geometry does not depend on colour, so `composeCacheKey` omits it
+            // and a dark-mode toggle arrives here, on the same key, rather than
+            // through the remount path below. `setTheme` is a no-op when the
+            // colours match, so a redundant `updateProps:` costs a comparison.
+            if mountedTheme?.baseColor != theme.baseColor
+                || mountedTheme?.highlightColor != theme.highlightColor {
+                existingHandle.setTheme(theme)
+                mountedTheme = theme
+            }
             return
         }
 
         handle?.destroy()
-        let theme = AutoskeletonSkeletonTheme(
-            baseColor: Self.parseColor(baseColor, default: .lightGray).cgColor,
-            highlightColor: Self.parseColor(highlightColor, default: .white).cgColor,
-            defaultRadius: CGFloat(defaultRadius),
-            speedMs: speedMs
-        )
         clock.setPeriod(speedMs)
         handle = renderer.mount(
             on: surface,
@@ -207,6 +224,7 @@ public final class AutoskeletonOverlayViewHost: NSObject {
         mountedCacheKey = cacheKey
         mountedAnimation = resolvedAnimation
         mountedDirection = direction
+        mountedTheme = theme
     }
 
     /// The writing direction the snapshot behind `cacheKey` was measured for,
@@ -231,6 +249,7 @@ public final class AutoskeletonOverlayViewHost: NSObject {
         handle = nil
         mountedCacheKey = nil
         mountedAnimation = nil
+        mountedTheme = nil
         mountedDirection = nil
     }
 

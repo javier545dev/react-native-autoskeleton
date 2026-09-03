@@ -59,6 +59,25 @@ interface AutoskeletonRendererHandle {
      *  that disagreement is a snapshot captured for one direction swept with
      *  the other's highlight. */
     fun setDirection(direction: String)
+
+    /** A palette change delivered while the overlay is already mounted — the
+     *  dark-mode toggle case. Like [setDirection] and [setAnimation], and for
+     *  the same reason: Fabric can deliver a prop after the mount, and here
+     *  nothing else will ever pick it up. `composeCacheKey`
+     *  (`src/core/cache-key.ts`) carries no theme segment — deliberately,
+     *  because geometry does not depend on colour — so a palette change never
+     *  invalidates the key and never triggers the remount that would otherwise
+     *  have applied it. Without this the skeleton keeps painting the previous
+     *  palette until it happens to unmount.
+     *
+     *  MUST NOT restart the shimmer phase, exactly as [update] must not: a
+     *  colour change is not a new animation.
+     *
+     *  `speedMs` on the incoming theme is deliberately NOT re-applied to the
+     *  shared clock — see `AutoskeletonOverlayView`'s theme setters for the
+     *  argument. */
+    fun setTheme(theme: AutoskeletonSkeletonTheme)
+
     fun destroy()
 }
 
@@ -109,6 +128,7 @@ class AutoskeletonRendererTier1(
         override fun update(shapes: List<AutoskeletonShapeInfo>) = overlay.updateShapes(shapes)
         override fun setAnimation(animation: String) = overlay.setAnimation(animation)
         override fun setDirection(direction: String) = overlay.setDirection(direction)
+        override fun setTheme(theme: AutoskeletonSkeletonTheme) = overlay.setTheme(theme)
         override fun destroy() = overlay.destroySelf()
     }
 
@@ -138,7 +158,7 @@ class AutoskeletonRendererTier1(
  *  `AutoskeletonRecordingTracing` and friends use elsewhere in this module. */
 class AutoskeletonShimmerOverlayView internal constructor(
     context: Context,
-    private val theme: AutoskeletonSkeletonTheme,
+    private var theme: AutoskeletonSkeletonTheme,
     private val clock: AutoskeletonShimmerClock,
     private val scheduler: AutoskeletonFrameScheduler,
     private val tracing: AutoskeletonTracing,
@@ -172,6 +192,38 @@ class AutoskeletonShimmerOverlayView internal constructor(
     /** Test seam: the current shader instance, or `null` before the view has ever
      *  been sized/drawn. */
     val currentShader: Shader? get() = shader
+
+    /** Test seam: the palette this overlay is currently painting with. */
+    val currentTheme: AutoskeletonSkeletonTheme get() = theme
+
+    /** Applies a palette delivered after mount, in place.
+     *
+     *  Both colours are baked into the `LinearGradient` at construction time,
+     *  so reassigning `theme` alone would change nothing that paints: the
+     *  cached shader keeps the OLD highlight for the rest of its life, because
+     *  `ensureShader`'s guard is keyed on `shaderWidth` and the width has not
+     *  changed. Zeroing `shaderWidth` is what actually forces the rebuild.
+     *
+     *  This is the one place a shader rebuild is legitimate outside a real
+     *  resize. NFR-5 ("zero per-frame allocations") is untouched: this runs on
+     *  a prop delivery, never on a frame, and `shaderInstanceCount` moving by
+     *  exactly one per palette change is what the test asserts.
+     *
+     *  The phase is preserved: `clock` is not consulted, `startAnimating` is
+     *  not called, and `animating` is not touched — a colour change is not a
+     *  new animation. */
+    fun setTheme(next: AutoskeletonSkeletonTheme) {
+        if (next.baseColor == theme.baseColor && next.highlightColor == theme.highlightColor) {
+            theme = next
+            return
+        }
+        theme = next
+        basePaint.color = next.baseColor
+        // Discard the cached gradient: its colours are immutable once built.
+        shaderWidth = 0
+        ensureShader()
+        postInvalidateOnAnimation()
+    }
 
     /** Test seams for the draw pass. A `Canvas` in a Robolectric unit test
      *  rasterizes nothing inspectable, so the three values that actually decide

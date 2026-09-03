@@ -194,6 +194,61 @@ final class AutoskeletonRendererTier1Tests: XCTestCase {
         XCTAssertTrue(path.contains(CGPoint(x: 40, y: 15)))
     }
 
+    // MARK: - a palette delivered after mount (the dark-mode toggle)
+
+    /// The iOS half of the same defect Android's
+    /// `aThemeChangeAfterMountRepaintsTheAlreadyMountedOverlay` pins.
+    ///
+    /// `composeCacheKey` (`src/core/cache-key.ts`) carries no theme segment —
+    /// deliberately, because geometry does not depend on colour — so a palette
+    /// change keeps the key and takes `AutoskeletonOverlayViewHost`'s in-place
+    /// branch, which used to forward geometry, direction and animation but
+    /// never colour. The user-visible result was a dark-mode toggle leaving
+    /// every on-screen skeleton in the light palette until it unmounted.
+    ///
+    /// Both colours live on layers, not in a rebuilt object as on Android: the
+    /// base fill is `containerLayer.backgroundColor` and the sweep is
+    /// `gradientLayer.colors`, so both have to move together or the skeleton
+    /// paints a half-applied palette.
+    func testSetThemeRepaintsTheMountedOverlayWithoutRestartingThePhase() {
+        let renderer = AutoskeletonRendererTier1()
+        let surface = makeSurface()
+        let clock = AutoskeletonShimmerClock(ticking: AutoskeletonNoOpTicking())
+
+        let handle = renderer.mount(
+            on: surface,
+            shapes: [AutoskeletonShapeInfo(x: 0, y: 0, w: 50, h: 20, r: 0, source: .text, radiusSource: .measured)],
+            theme: makeTheme(),
+            clock: clock,
+            animation: "shimmer"
+        )
+        let gradientLayer = gradient(in: surface)
+        let containerLayer = container(in: surface)
+        let beginTimeBefore = try! XCTUnwrap(
+            gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey)
+        ).beginTime
+
+        let dark = AutoskeletonSkeletonTheme(
+            baseColor: UIColor(white: 0.11, alpha: 1).cgColor,
+            highlightColor: UIColor(white: 0.18, alpha: 1).cgColor,
+            defaultRadius: 4,
+            speedMs: 1500
+        )
+        handle.setTheme(dark)
+
+        XCTAssertEqual(containerLayer.backgroundColor, dark.baseColor, "the base fill kept the old palette")
+        let colors = try! XCTUnwrap(gradientLayer.colors as? [CGColor])
+        XCTAssertEqual(colors.first, dark.baseColor)
+        XCTAssertEqual(colors[1], dark.highlightColor, "the sweep kept the old highlight")
+
+        // A colour change is not a new animation: the phase must survive it,
+        // exactly as it survives a geometry-only `update(shapes:)`.
+        let beginTimeAfter = try! XCTUnwrap(
+            gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey)
+        ).beginTime
+        XCTAssertEqual(beginTimeBefore, beginTimeAfter, "a palette change must not restart the shimmer phase")
+    }
+
     // MARK: - the gradient tracks a REAL surface resize (Android's sibling defect)
 
     // Adversarial-review defect (2026-08-29), found by grepping the CLASS of

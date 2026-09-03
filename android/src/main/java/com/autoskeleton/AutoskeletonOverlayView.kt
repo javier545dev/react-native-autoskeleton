@@ -38,9 +38,51 @@ class AutoskeletonOverlayView(context: Context) : FrameLayout(context) {
             field = value
             mountOrUpdate()
         }
+    /** The palette props. Each forwards to a live handle for exactly the
+     *  reason `writingDirection` below does: Fabric can deliver a prop after
+     *  the mount, and `cacheKey` cannot rescue this one. `composeCacheKey`
+     *  (`src/core/cache-key.ts`) identifies GEOMETRY — version, skeleton key,
+     *  item type, width bucket, font scale, direction, platform — and carries
+     *  no theme segment, deliberately, because geometry does not depend on
+     *  colour. So a palette change never invalidates the key and never forces
+     *  the remount that would otherwise have applied it.
+     *
+     *  These were plain fields with no setter body until this was fixed, which
+     *  made the user-visible symptom a dark-mode toggle leaving every on-screen
+     *  skeleton in the light palette until it happened to unmount. */
     var baseColor: String? = null
+        set(value) {
+            field = value
+            themeDirty = true
+        }
     var highlightColor: String? = null
+        set(value) {
+            field = value
+            themeDirty = true
+        }
     var defaultRadius: Double = 0.0
+        set(value) {
+            field = value
+            themeDirty = true
+        }
+
+    /** DELIBERATELY has no setter body, unlike its three siblings above.
+     *
+     *  `speedMs` does not belong to this overlay: it is written into
+     *  `sharedShimmerClock`, the process-wide clock every mounted overlay
+     *  reads its phase from (ADR-8 — one shared origin is what keeps two
+     *  skeletons on one screen in phase). Re-applying it post-mount would
+     *  change the period for EVERY mounted overlay, and because
+     *  `AutoskeletonShimmerClock.phaseAt` divides by `periodMs` against an
+     *  unchanged `startedAt`, the phase would jump discontinuously at the
+     *  instant of the write — a visible hitch on every skeleton on screen,
+     *  caused by one of them mounting.
+     *
+     *  A speed change therefore takes effect on the next mount, which is the
+     *  same guarantee the shared clock already gave. Making a live speed change
+     *  correct needs the clock to rebase `startedAt` so the current phase is
+     *  preserved across the period change; that is a separate fix with its own
+     *  test, not a setter. */
     var speedMs: Double = 1400.0
     var animation: String = "shimmer"
         set(value) {
@@ -119,17 +161,11 @@ class AutoskeletonOverlayView(context: Context) : FrameLayout(context) {
         }
 
         existingHandle?.destroy()
-        val theme = AutoskeletonSkeletonTheme(
-            baseColor = parseColorOrDefault(baseColor, Color.LTGRAY),
-            highlightColor = parseColorOrDefault(highlightColor, Color.WHITE),
-            defaultRadius = defaultRadius.toFloat() * density,
-            speedMs = speedMs,
-        )
         sharedShimmerClock.setPeriod(speedMs)
         handle = renderer.mount(
             this,
             shapes,
-            theme,
+            composeTheme(density),
             sharedShimmerClock,
             effectiveAnimation(animation, reducedMotion),
             writingDirection,
@@ -139,6 +175,52 @@ class AutoskeletonOverlayView(context: Context) : FrameLayout(context) {
 
     private fun applyMotionState() {
         handle?.setAnimation(effectiveAnimation(animation, reducedMotion))
+    }
+
+    /** The current palette, in the units the renderer draws in.
+     *
+     *  `defaultRadius` arrives from JS as density-independent points (the wire
+     *  is dp throughout — see `AutoskeletonModule.encodeWireArray`) and is
+     *  scaled to raw view pixels here, the same conversion `mountOrUpdate`
+     *  applies to the shapes. One helper so the mount path and the live-update
+     *  path can never drift apart on either the defaults or the units. */
+    private fun composeTheme(density: Float): AutoskeletonSkeletonTheme = AutoskeletonSkeletonTheme(
+        baseColor = parseColorOrDefault(baseColor, Color.LTGRAY),
+        highlightColor = parseColorOrDefault(highlightColor, Color.WHITE),
+        defaultRadius = defaultRadius.toFloat() * density,
+        speedMs = speedMs,
+    )
+
+    /** Set by each palette setter, cleared by [flushPendingTheme].
+     *
+     *  The setters deliberately do NOT push straight to the handle. Fabric
+     *  delivers props one at a time, so a single dark-mode toggle arrives as
+     *  separate `baseColor` and `highlightColor` calls — and since both colours
+     *  are baked into one `LinearGradient`, pushing per setter would discard
+     *  and rebuild that gradient once PER PROP rather than once per update.
+     *  Coalescing here is also what makes the applied palette always whole: a
+     *  push from the first setter would momentarily combine the new base colour
+     *  with the OLD highlight. */
+    private var themeDirty = false
+
+    /** Applies a coalesced palette change to the live overlay, once per Fabric
+     *  update transaction.
+     *
+     *  Called from `AutoskeletonOverlayViewManager.onAfterUpdateTransaction`,
+     *  which React Native invokes after every prop in a batch has been set —
+     *  the designated end-of-batch hook, and the only point at which the
+     *  incoming props are known to be complete.
+     *
+     *  A no-op before the first mount: `mountOrUpdate` reads the fields
+     *  directly, so there is nothing to forward yet. */
+    fun flushPendingTheme() {
+        if (!themeDirty) {
+            return
+        }
+        themeDirty = false
+        val live = handle ?: return
+        val density = resources?.displayMetrics?.density?.takeIf { it > 0f } ?: 1f
+        live.setTheme(composeTheme(density))
     }
 
     /** Removes the mounted overlay, if any. Called from
