@@ -607,6 +607,28 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
 
   const OverlayComponent = resolveAutoskeletonOverlayNativeComponent();
 
+  // Decoded once per snapshot, only for tier-2. Tier-1 never needs it: the
+  // native view reads geometry straight out of the native shape cache by
+  // `cacheKey` (ADR-9), so decoding here for tier-1 would be pure waste.
+  //
+  // THIS MUST STAY ABOVE THE FAIL-OPEN RETURN BELOW. It used to sit next to
+  // its only consumer in the JSX, which put it below that return and made it
+  // the one hook of fifteen that did not run unconditionally. `nativeUnavailable`
+  // starts `false` and is flipped to `true` from `useColdMeasurement`'s
+  // callback, so the render that discovers the missing module ran one hook
+  // fewer than the render before it and React aborted the tree with "Rendered
+  // fewer hooks than expected" — turning ADR-15's fail-open into a hard crash,
+  // in production only, since `__DEV__` throws the named error earlier and
+  // never reaches this branch. Both dependencies are computed well above here
+  // (`snapshot`, `overlayRenderer`), so position is the only thing that
+  // changed. `test/native/native-module-unavailable-fail-open.test.ts` mounts
+  // the component with the module absent and fails on the hook-count error if
+  // this is ever moved back down.
+  const overlayShapes = useMemo(
+    () => (overlayRenderer !== undefined && snapshot !== null ? decodeWire(snapshot.data).shapes : EMPTY_SHAPES),
+    [overlayRenderer, snapshot],
+  );
+
   // ADR-15 production fail-open: render children unwrapped, no skeleton,
   // no crash. `__DEV__` never reaches here — `useColdMeasurement`'s
   // `onNativeModuleUnavailable` callback throws first.
@@ -646,14 +668,6 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
   // the native view hierarchy they assert against is unchanged by
   // construction rather than by luck.
   const showFallback = props.fallback !== undefined && showSkeleton && noUsableGeometry;
-
-  // Decoded once per snapshot, only for tier-2. Tier-1 never needs it: the
-  // native view reads geometry straight out of the native shape cache by
-  // `cacheKey` (ADR-9), so decoding here for tier-1 would be pure waste.
-  const overlayShapes = useMemo(
-    () => (overlayRenderer !== undefined && snapshot !== null ? decodeWire(snapshot.data).shapes : EMPTY_SHAPES),
-    [overlayRenderer, snapshot],
-  );
 
   // ADR-16 reveal-before-hide: children are ALWAYS mounted underneath the
   // still-painted overlay.
