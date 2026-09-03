@@ -137,10 +137,10 @@ export const DEMOS: readonly Demo[] = [
   },
   {
     id: 'hidden-content',
-    title: 'Hidden content is still measured',
+    title: 'Hidden content is not measured',
     group: 'detection',
     shows:
-      'A `visibility: hidden` element keeps its box and its rect, so the sensor shapes it — a skeleton block over a region that stays empty. Toggle the badge and watch the shape count.',
+      'A `visibility: hidden` element keeps its box and its rect, so it is easy to shape by accident — a skeleton block over a region that stays empty. It is skipped instead. Toggle the badge and watch the shape count drop by one.',
     file: 'src/demos/HiddenContent.tsx',
     source: hiddenContentSource,
     Component: HiddenContent,

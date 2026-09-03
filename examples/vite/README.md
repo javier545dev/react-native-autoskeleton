@@ -57,6 +57,7 @@ change nothing on screen.
 | Start here | `data-nullish` | `DataNullish.tsx` | Only nullish `data` means loading: the cart leaves the skeleton when its count becomes `0`. |
 | Start here | `data-child` | `DataChildFunction.tsx` | `data={user}` + a function child replaces `isLoading={user === null}` + the inverted `{user !== null && …}` guard. |
 | What gets detected | `text-lines` | `TextLines.tsx` | A wrapped paragraph gets one bar per line box, ragged last line included (`Range.getClientRects()`). |
+| What gets detected | `hidden-content` | `HiddenContent.tsx` | `visibility: hidden` keeps its box and its rect, so it is easy to shape by accident. It is skipped: toggle the badge and the count drops by one. |
 | What gets detected | `image-handoff` | `ImageHandoff.tsx` | `expectsPlaceholder`: the skeleton is removed only after the real image has painted. |
 | Lifecycle | `cache-replay` | `CacheReplay.tsx` | Unmount and re-open: `cache HIT`, `0.00 ms` traversal, skeleton painted from the first frame. |
 | Lifecycle | `refresh` | `RefreshPolicy.tsx` | REQ-PTR-1: by default a refresh over already-shown content keeps the content; `skeletonOnRefresh` opts out. |

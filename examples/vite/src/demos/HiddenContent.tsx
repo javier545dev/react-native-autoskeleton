@@ -1,25 +1,32 @@
 // examples/vite/src/demos/HiddenContent.tsx
 //
-// The gap this demo exists to make visible, before it is fixed.
+// `visibility: hidden` content is not measured, and the shape count is how you
+// see it.
 //
-// `leafShape()` in `src/web/dom-sensor.ts` already refuses to shape a leaf
-// whose computed `opacity` is `0` — covering something the user cannot see
-// with an opaque block draws a shape over empty space. It does not look at
-// `visibility`, which appears nowhere in that file.
+// `leafShape()` in `src/web/dom-sensor.ts` refuses to shape a leaf whose
+// computed `opacity` is `0` — covering something the reader cannot see with an
+// opaque block draws a shape over empty space. `visibility` is the same mistake
+// by a different property, and until recently it was not checked at all: a
+// hidden element keeps its box and reports a real `getBoundingClientRect()`, so
+// it was measured exactly like a visible one.
 //
-// A `visibility: hidden` element still occupies layout and still reports a
-// real `getBoundingClientRect()`, so it is measured exactly like a visible
-// one. The badge slot below is reserved in the layout and painted by nobody,
-// and the skeleton covers it anyway.
+// WHY THE COUNT IS THE ASSERTION AND NOT THE SCREENSHOT. The badge's slot is
+// empty in both states, so the two look nearly identical while the card loads.
+// The honest signal is the readout: hidden gives one shape fewer than visible.
+// Toggle it and watch the number move.
 //
-// WHY THE SHAPE COUNT IS THE ASSERTION, not the screenshot. The block lands on
-// a region that is empty in BOTH states, so "before" and "after" look almost
-// identical while the card is loading — the honest signal is the readout: the
-// hidden badge contributes a shape it should not, and the count drops by one
-// when it stops.
+// THIS DEMO IS ALSO THE REASON THE FIX IS COMPLETE. Guarding only `leafShape`
+// left the hidden badge still counted here, because `traverse` sends text
+// leaves to `textLeafShapes` before `leafShape` is ever reached and the badge is
+// a `<span>`. Reading the diff did not show that; running this page did. Both
+// paths are guarded now, and `test/web/visibility-hidden.spec.ts` gates each
+// one separately so neither can be dropped quietly.
 //
-// The toggle is here so the two cases sit side by side in one demo rather than
-// requiring you to remember what the other one looked like.
+// One leaf-level check per path is complete and needs no container-level
+// counterpart: `visibility` inherits and `getComputedStyle` resolves that
+// before the sensor reads it, so a leaf inside a hidden container computes
+// `hidden` too — while a leaf that sets `visibility: visible` inside one still
+// computes `visible` and is still shaped, which is asserted.
 
 import { useState } from 'react'
 import { AutoSkeleton } from 'autoskeleton'
