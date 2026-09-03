@@ -583,3 +583,57 @@ describe('legacy entry fields resolve within their own bob target output', () =>
     });
   }
 });
+
+// THE FLOOR WAS PROVEN AT COMPILE TIME AND BROKEN AT RUNTIME.
+//
+// `examples/rn-077` exists to prove `react-native: ">=0.77.0"`, and it builds.
+// It also could not run: launching it produced
+//
+//     View config getter callback for component `div` must be a function
+//
+// because Metro on RN 0.77 bundled the WEB entry for Android. Measured, not
+// inferred — `getDefaultConfig()` in that app reports
+// `unstable_enablePackageExports: false` and
+// `resolverMainFields: ["react-native", "browser", "main"]`, and a real
+// `react-native bundle --platform android` contained
+// `lib/commonjs/index.web.js` with no `native/` module in it at all.
+//
+// With package exports off, the `exports` map is invisible. Resolution falls
+// through the legacy fields, and this package declared none of them for native,
+// so it landed on `main` — which re-exports the web build.
+//
+// CI never caught it because CI only ASSEMBLES that app. A native build links
+// Kotlin and Swift; it never asks Metro to resolve a JavaScript entry point.
+// Compiling and running are different claims and only one of them was tested.
+describe('legacy resolution for bundlers that ignore `exports`', () => {
+  const pkg = packageJson as unknown as Record<string, string | undefined>;
+
+  // React Native's own order, taken from the 0.77 app rather than assumed.
+  const METRO_MAIN_FIELDS = ['react-native', 'browser', 'main'] as const;
+
+  it('declares a top-level `react-native` field', () => {
+    expect(
+      pkg['react-native'],
+      'without this, Metro with package exports disabled falls through to `main`'
+    ).toBeDefined();
+  });
+
+  it('resolves to the NATIVE entry under Metro\'s field order, not the web one', () => {
+    // The whole defect in one assertion: walk the fields the way a resolver
+    // does and check where a native bundler actually lands.
+    const resolved = METRO_MAIN_FIELDS.map((f) => pkg[f]).find((v) => v !== undefined);
+    expect(resolved).toBeDefined();
+    expect(
+      resolved,
+      `legacy resolution lands on ${resolved}, which is not the native entry`
+    ).toMatch(/index\.native\.js$/);
+  });
+
+  it('that entry exists in the packed tarball', () => {
+    // Asserted against the PACKED artifact, not the working tree: a field
+    // pointing at a file `files` does not ship is the same outage.
+    const target = pkg['react-native'];
+    expect(target).toBeDefined();
+    expect(existsSync(path.join(PACK_EXTRACT_DIR, target as string))).toBe(true);
+  });
+});

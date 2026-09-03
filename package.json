@@ -4,6 +4,7 @@
   "description": "Automatic skeleton loaders for React Native and web",
   "main": "./lib/commonjs/index.js",
   "module": "./lib/module/index.js",
+  "react-native": "./lib/commonjs/index.native.js",
   "types": "./lib/typescript/module/src/index.d.ts",
   "sideEffects": false,
   "exports": {
