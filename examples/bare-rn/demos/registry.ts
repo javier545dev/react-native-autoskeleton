@@ -20,6 +20,7 @@ import type { ComponentType } from 'react';
 import { ColdLoadDemo } from './ColdLoadDemo';
 import { DataDemo } from './DataDemo';
 import { DelayDemo } from './DelayDemo';
+import { DirectionDemo } from './DirectionDemo';
 import { FallbackDemo } from './FallbackDemo';
 import { HintDemo } from './HintDemo';
 import { IgnoreDemo } from './IgnoreDemo';
@@ -224,6 +225,14 @@ export const DEMOS: readonly DemoEntry[] = [
     source: 'demos/ThemingDemo.tsx',
     group: 'theming',
     component: ThemingDemo,
+  },
+  {
+    id: 'direction',
+    title: 'Writing direction',
+    summary: 'On native the shimmer sweeps the way you read. One I18nManager.isRTL becomes both the cache key and the sweep.',
+    source: 'demos/DirectionDemo.tsx',
+    group: 'theming',
+    component: DirectionDemo,
   },
   {
     id: 'metrics',

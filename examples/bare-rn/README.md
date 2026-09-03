@@ -119,6 +119,7 @@ library cannot keep is worse than a missing demo.
 | --- | --- |
 | Motion | `shimmer` / `pulse` / `none`, plus the live OS reduce-motion preference — flip it in Settings without relaunching. |
 | Theming | Provider defaults overridden per instance; the same props `autoskeleton/uniwind` maps a `className` onto. |
+| Writing direction | On native the shimmer sweeps the way you read. One `I18nManager.isRTL` becomes both the cache key's direction segment and the renderer's `writingDirection`, so the snapshot's direction and the sweep's cannot disagree. There is no live toggle — the flag is read once at startup — so the demo flips it and reloads the bundle for you, and says so. |
 
 ### Diagnostics
 
