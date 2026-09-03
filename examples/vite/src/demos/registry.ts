@@ -264,7 +264,7 @@ export const DEMOS: readonly Demo[] = [
     title: 'Cold miss: what fallback is for',
     group: 'lifecycle',
     shows:
-      'A function child leaves nothing mounted to measure. Without fallback the wrapper has no box at all — nothing traversed, nothing reported, 0 pixels, forever. With it there is a box and a visible loading state, though what paints in that box on web today is one unclipped block rather than the placeholder you wrote, and the demo measures why.',
+      'A function child leaves nothing mounted to measure. Without fallback the wrapper has no box at all — nothing traversed, nothing reported, 0 pixels, forever. With it there is a box, and what you wrote is what paints: an empty measurement no longer mounts a skeleton over it.',
     file: 'src/demos/ColdMissFallback.tsx',
     source: coldMissFallbackSource,
     Component: ColdMissFallback,

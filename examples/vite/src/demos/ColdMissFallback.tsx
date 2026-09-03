@@ -31,7 +31,8 @@
 //     .askl-overlay   inline clip-path ""      computed clip-path `none`
 //                     background rgb(226, 226, 226)      box 296×111
 //
-// An unclipped overlay paints its opaque base fill across the WHOLE wrapper.
+// Writing this demo found that defect; `src/web/css-renderer.ts` now returns
+// early for a shapeless snapshot, so the fallback is what paints.
 // So what you see there is one flat shimmering block the size of the fallback
 // — not the avatar-and-three-bars placeholder written below. The fallback
 // still decides the geometry, and it is still what stands between the reader
@@ -208,14 +209,14 @@ export function ColdMissFallback() {
         therefore only one of them had a loading state at all.
       </p>
       <p className="demo-note" data-testid="cold-fallback-honesty">
-        What fills that box today is <em>not</em> the placeholder written in the source below. A
-        zero-shape snapshot produces <code>clip-path: path(&quot;&quot;)</code>, which the browser
-        rejects, so the overlay is unclipped and paints its base fill over the whole wrapper — one
-        flat block where the avatar and three bars should be. Measured here:{' '}
-        <code>computed clip-path: none</code>, <code>background: rgb(226, 226, 226)</code>, box{' '}
-        <code>296×111</code>. The fallback still sets that geometry and still stands between the
-        reader and a blank page; on web it is currently underneath the block instead of being it.
-        Snapshots with real shapes clip correctly — compare <code>#/cold-load</code>.
+        What fills that box is the placeholder written in the source below — and writing this demo
+        is what made that true. It used to be covered: a zero-shape snapshot produces{' '}
+        <code>clip-path: path(&quot;&quot;)</code>, the browser rejects it, and an unclipped overlay
+        painted its base fill across the whole wrapper — measured at <code>296×111</code>,{' '}
+        <code>rgb(226, 226, 226)</code>, one flat block where the fallback should have been. The
+        renderer now refuses to paint a shapeless overlay at all, so the overlay above is{' '}
+        <code>display: none</code> at <code>0×0</code> and the fallback is what you see. Snapshots
+        with real shapes are unaffected — compare <code>#/cold-load</code>.
       </p>
       <p className="demo-note">
         <strong>Run it again</strong> remounts both into a fresh cold cycle. Press it a few times and

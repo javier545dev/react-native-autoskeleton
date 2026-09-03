@@ -81,16 +81,16 @@ today:
 - **`autoskeleton/uniwind` does not work on the web.** It reaches
   `codegenNativeComponent` and is native-only, so there is no uniwind demo
   here. See [`docs/theming.md`](../../docs/theming.md).
-- **A `fallback` is not what you SEE on web right now.** It gives the wrapper
-  a box — which is the difference between a loading state and 0 pixels — but a
-  zero-shape snapshot makes `core/clip-path.ts` emit `path("")`, the browser
-  rejects that as a `clip-path`, and the unclipped overlay paints its base fill
-  over the whole wrapper. Measured in `cold-fallback`: `computed clip-path:
-  none`, `background: rgb(226, 226, 226)`, box `296×111`. So the reader gets
-  one flat block the size of your placeholder, with your placeholder behind it.
-  Snapshots that have real shapes clip correctly (`cold-load`'s overlay carries
-  a genuine `path("M 25 17 …")`), so this is specific to the empty-snapshot
-  path `fallback` exists to cover.
+- **`fallback` is what you see, and this demo is why.** It gives the wrapper a
+  box — the difference between a loading state and 0 pixels — and until
+  2026-09-02 it was then covered up: a zero-shape snapshot made
+  `core/clip-path.ts` emit `path("")`, the browser rejected it as a
+  `clip-path`, and the unclipped overlay painted its base fill over the whole
+  wrapper (`296×111`, `rgb(226, 226, 226)`). Writing `cold-fallback` found
+  that; the renderer now refuses to paint a shapeless overlay, so it is
+  `display: none` at `0×0` and the placeholder shows through. Snapshots with
+  real shapes were never affected — `cold-load`'s overlay carries a genuine
+  `path("M 25 17 …")`.
 
 ## Things worth knowing while reading the code
 
