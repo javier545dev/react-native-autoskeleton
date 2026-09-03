@@ -558,3 +558,82 @@ describe('the iOS jobs cover every RN minor in the supported range', () => {
     );
   });
 });
+
+// The suite that gates everything else has to itself be gated.
+//
+// Until this block existed, no workflow in `.github/workflows/` ran `vitest`
+// or the root `npm run typecheck`. The only match across all five files was
+// `typecheck:docs-examples`, which typechecks the Expo example's doc snippets
+// and nothing in `src/`. That left 109 test files — 25 under `src/`, 84 under
+// `test/` — and both `tsc` projects enforced by nothing but a maintainer
+// remembering to run them locally.
+//
+// The cost of that is measurable: the sibling block above, "example apps are
+// installed in a way a committed integrity pin cannot break", was written to
+// catch exactly the lockfile drift that later shipped anyway, because the
+// guard passed locally and ran nowhere.
+//
+// This gate does not check that the suite is green — CI does that. It checks
+// that some workflow actually invokes it, on the events where it matters.
+
+describe('the unit suite and the root typecheck run in CI', () => {
+  /** YAML 1.1 reads a bare `on` key as the boolean `true`; YAML 1.2 keeps it a
+   *  string. Accept whichever the installed parser produced. */
+  function triggersOf(file: string): Record<string, unknown> {
+    const raw = parse(readFileSync(path.join(WORKFLOW_DIR, file), 'utf8')) as Record<string, unknown>;
+    const on = (raw['on'] ?? raw[String(true)] ?? raw[true as unknown as string]) as
+      | Record<string, unknown>
+      | string
+      | undefined;
+    if (typeof on === 'string') return { [on]: {} };
+    return on ?? {};
+  }
+
+  function everyRunStep(file: string): string[] {
+    const workflow = readWorkflow(file);
+    return jobsOf(workflow).flatMap(([, job]) =>
+      stepsOf(job)
+        .map((step) => step.run)
+        .filter((run): run is string => typeof run === 'string')
+    );
+  }
+
+  /** A step counts only when it runs the WHOLE suite. `vitest run <path>` or a
+   *  scoped `typecheck:*` script would satisfy a naive substring match while
+   *  leaving most of the suite unrun, which is the state this gate exists to
+   *  end. */
+  const RUNS_FULL_SUITE = /(^|&&|;|\n)\s*(npm (run )?test|npx vitest run|yarn test)\s*(#.*)?$/m;
+  const RUNS_ROOT_TYPECHECK = /(^|&&|;|\n)\s*npm run typecheck\s*(#.*)?$/m;
+
+  it('some workflow runs the full vitest suite', () => {
+    const matches = workflowFiles.filter((file) => everyRunStep(file).some((run) => RUNS_FULL_SUITE.test(run)));
+    expect(
+      matches,
+      'no workflow runs the unit suite. 109 test files are enforced by nothing — add a job that runs `npm test`.'
+    ).not.toHaveLength(0);
+  });
+
+  it('some workflow runs the root typecheck (both tsc projects)', () => {
+    const matches = workflowFiles.filter((file) => everyRunStep(file).some((run) => RUNS_ROOT_TYPECHECK.test(run)));
+    expect(
+      matches,
+      'no workflow runs `npm run typecheck`. `typecheck:docs-examples` covers the Expo example only, not src/.'
+    ).not.toHaveLength(0);
+  });
+
+  it('the workflow that runs the suite fires on both push and pull_request', () => {
+    const suiteWorkflows = workflowFiles.filter((file) =>
+      everyRunStep(file).some((run) => RUNS_FULL_SUITE.test(run))
+    );
+    expect(suiteWorkflows.length, 'no workflow runs the suite at all').toBeGreaterThan(0);
+
+    const wellTriggered = suiteWorkflows.filter((file) => {
+      const on = triggersOf(file);
+      return 'push' in on && 'pull_request' in on;
+    });
+    expect(
+      wellTriggered,
+      `the suite runs in [${suiteWorkflows.join(', ')}] but not on both push and pull_request`
+    ).not.toHaveLength(0);
+  });
+});
