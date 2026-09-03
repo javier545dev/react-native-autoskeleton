@@ -53,3 +53,13 @@ export type {
   ShapeSource,
   SkeletonMetrics,
 } from './core/types';
+
+// The scoped-store surface behind `<SkeletonProvider store>`. The prop has
+// been public on both platforms since Phase 1, but the class that types it was
+// never exported, so a consumer could read the prop's type and had no way to
+// construct a value for it. `ShapeStore` is the narrower interface the store
+// satisfies — enough to type a custom implementation without depending on the
+// LRU one.
+export { MemoryShapeStore } from './core/snapshot';
+export type { MemoryShapeStoreOptions } from './core/snapshot';
+export type { ShapeStore } from './core/contracts';
