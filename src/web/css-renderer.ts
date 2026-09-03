@@ -182,12 +182,34 @@ function applyGeometry(overlay: HTMLDivElement, props: RenderProps): void {
   overlay.style.clipPath = path;
 }
 
-function applyAnimation(overlay: HTMLDivElement, shimmerLayer: HTMLDivElement, props: RenderProps): void {
+/** ADR-8 phase lock. Writing a negative `animation-delay` seeks the element's
+ *  CSS animation to the shared clock's current phase, so a skeleton mounting
+ *  now lands mid-sweep exactly where every already-mounted skeleton is.
+ *
+ *  This is correct ONLY at the instant the element's animation starts, where
+ *  the browser sets `startTime ≈ now` and effective progress is therefore
+ *  `(t − clockStart) mod period`. `startTime` is never re-set afterwards, so
+ *  re-deriving the delay from a fresh `Date.now()` on an update subtracts the
+ *  elapsed time a SECOND time and the sweep teleports — measured at 287px
+ *  (~72% of a 400px overlay, period 1400ms) when it was rewritten 500ms after
+ *  mount, which also drops that instance out of phase with its siblings, i.e.
+ *  destroys the one guarantee the shared clock exists to provide. It used to
+ *  live inside `applyAnimation()`, which `setAnimation()` also calls on ANY
+ *  provider re-render (see `useOverlayRenderer` in `web/AutoSkeleton.tsx`), so
+ *  the jump was on an ordinary steady-state path rather than an edge case.
+ *  Hence: called from `mount()` and nowhere else. */
+function anchorPhase(shimmerLayer: HTMLDivElement, props: RenderProps): void {
+  const delayMs = props.clock.phaseOffsetMs(Date.now());
+  shimmerLayer.style.animationDelay = `${-delayMs}ms`;
+}
+
+/** Everything that is safe to (re)write on every update: the animation KIND,
+ *  the period, and the theme custom properties. Deliberately does NOT touch
+ *  `animation-delay` — see `anchorPhase()` above. */
+function applyAnimation(overlay: HTMLDivElement, props: RenderProps): void {
   overlay.classList.remove('askl-anim-shimmer', 'askl-anim-pulse', 'askl-anim-none');
   overlay.classList.add(`askl-anim-${effectiveAnimation(props.animation, props.reducedMotion)}`);
   overlay.style.setProperty('--askl-speed', `${props.clock.periodMs}ms`);
-  const delayMs = props.clock.phaseOffsetMs(Date.now());
-  shimmerLayer.style.animationDelay = `${-delayMs}ms`;
 
   // REQ-THEME-1 / tasks.md 7.1: an inline style on this element beats ANY
   // stylesheet declaration of the same custom property, no matter how it
@@ -239,7 +261,10 @@ export function createCssRenderer(): Renderer<HTMLElement> {
       surface.appendChild(overlay);
 
       applyGeometry(overlay, initialProps);
-      applyAnimation(overlay, shimmerLayer, initialProps);
+      applyAnimation(overlay, initialProps);
+      // Mount-only, and it must stay that way: `anchorPhase`'s doc comment
+      // explains why re-running it on an update makes the sweep jump.
+      anchorPhase(shimmerLayer, initialProps);
 
       performance.mark('autoskeleton-draw-end');
       performance.measure('autoskeleton-draw', 'autoskeleton-draw-start', 'autoskeleton-draw-end');
@@ -253,7 +278,7 @@ export function createCssRenderer(): Renderer<HTMLElement> {
         },
         setAnimation(kind) {
           latest = { ...latest, animation: kind };
-          applyAnimation(overlay, shimmerLayer, latest);
+          applyAnimation(overlay, latest);
         },
         destroy() {
           overlay.remove();

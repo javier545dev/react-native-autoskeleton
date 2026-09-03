@@ -265,6 +265,70 @@ test.describe('CSS renderer — reduced motion (REQ-A11Y-3)', () => {
   });
 });
 
+test.describe('CSS renderer — ADR-8 phase lock (the negative animation-delay is a MOUNT-time anchor)', () => {
+  // Why this lives in the Playwright suite and not `src/web/css-renderer.
+  // test.ts`: the Vitest project runs under `environment: 'node'` with no DOM
+  // shim at all (jsdom is banned project-wide, see vitest.config.ts), so the
+  // element whose `animationDelay` is under test cannot even be created
+  // there — and the second half of the assertion reads a live, running CSS
+  // animation's sampled `transform`, which only a real browser has.
+
+  // `shimmerLayer.style.animationDelay = -phaseOffset` is only a correct
+  // phase anchor at the instant the element's animation STARTS, where the
+  // effective progress is `(t - clockStart) mod D`. On any later call the
+  // element's `startTime` is unchanged, so re-deriving the delay from a fresh
+  // `Date.now()` subtracts the elapsed time a SECOND time and the sweep jumps
+  // — measured at 287px (~72% of a 400px overlay, D=1400ms) when the delay
+  // was rewritten 500ms after mount. `setAnimation()` is reached from
+  // `useOverlayRenderer`'s else-branch on ANY provider re-render, so this is
+  // an ordinary steady-state path, not an edge case; every jump also breaks
+  // the cross-instance phase lock ADR-8's single shared clock exists to give.
+  test('a later setAnimation() re-uses the mount-time delay instead of re-deriving it from Date.now()', async ({
+    page,
+    setup,
+  }) => {
+    await setup({ animation: 'shimmer', reducedMotion: false, speedMs: 1400 });
+    const result = await page.evaluate(async () => {
+      const layer = document.querySelector('.askl-shimmer-layer') as HTMLElement;
+      const delayAtMount = layer.style.animationDelay;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // Both `transform` reads happen inside ONE task, so the animation
+      // timeline cannot advance between them: any difference is caused by the
+      // `setAnimation()` call itself, never by the 16ms of a frame boundary.
+      const transformBefore = getComputedStyle(layer).transform;
+      const { handle } = (window as unknown as { __askl: { handle: { setAnimation: (k: string) => void } } }).__askl;
+      handle.setAnimation('shimmer');
+      const transformAfter = getComputedStyle(layer).transform;
+
+      return { delayAtMount, delayAfterUpdate: layer.style.animationDelay, transformBefore, transformAfter };
+    });
+
+    // The phase anchor is written once, at mount, and is never rewritten.
+    expect(result.delayAfterUpdate).toBe(result.delayAtMount);
+
+    // …and the visible consequence: the sweep does not teleport.
+    const translateXOf = (matrix: string): number => Number(/matrix\(([^)]*)\)/.exec(matrix)?.[1]?.split(',')[4] ?? NaN);
+    expect(Math.abs(translateXOf(result.transformAfter) - translateXOf(result.transformBefore))).toBeLessThan(1);
+  });
+
+  test('setAnimation() still changes the animation kind and the speed custom property', async ({ page, setup }) => {
+    await setup({ animation: 'shimmer', reducedMotion: false, speedMs: 1400 });
+    const result = await page.evaluate(() => {
+      const { handle } = (window as unknown as { __askl: { handle: { setAnimation: (k: string) => void } } }).__askl;
+      handle.setAnimation('pulse');
+      const overlay = document.querySelector('.askl-overlay') as HTMLElement;
+      return {
+        classes: Array.from(overlay.classList),
+        speed: overlay.style.getPropertyValue('--askl-speed'),
+      };
+    });
+    expect(result.classes).toContain('askl-anim-pulse');
+    expect(result.classes).not.toContain('askl-anim-shimmer');
+    expect(result.speed).toBe('1400ms');
+  });
+});
+
 test.describe('CSS renderer — one deliberate pixel test (plan.md §7.3 point 5)', () => {
   test('shimmer visibly moves over time; masking it makes reduced-motion frames pixel-stable', async ({
     page,
