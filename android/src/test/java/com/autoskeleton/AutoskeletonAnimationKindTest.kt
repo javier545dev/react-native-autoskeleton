@@ -137,12 +137,18 @@ class AutoskeletonAnimationKindTest {
 
     @Test
     fun shimmerStillTravels() {
-        val clock = AutoskeletonShimmerClock()
-        clock.setPeriod(50.0)
+        // Time is INJECTED, not slept through. The clock's origin is
+        // `SystemClock.elapsedRealtime`, which Robolectric shadows and does not
+        // advance for `Thread.sleep` — and a monotonic origin is exactly what
+        // stops an NTP correction jumping every mounted overlay mid-sweep, so the
+        // fix belongs in the test rather than in the clock. Injecting is also
+        // deterministic and drops a real 20ms sleep from the suite.
+        var fakeNow = 0.0
+        val clock = AutoskeletonShimmerClock(periodMs = 50.0, now = { fakeNow })
         val overlay = mount("shimmer", AutoskeletonRecordingFrameScheduler(), clock)
         overlay.draw(android.graphics.Canvas())
         val first = overlay.lastShaderTranslateX
-        Thread.sleep(20)
+        fakeNow = 20.0
         overlay.draw(android.graphics.Canvas())
         assertNotEquals(first, overlay.lastShaderTranslateX)
     }
@@ -154,14 +160,15 @@ class AutoskeletonAnimationKindTest {
         //  - it never goes below PULSE_MIN_ALPHA, and the base is drawn at full
         //    opacity underneath, so the skeleton never becomes see-through and
         //    the real content can never read through the loading state.
-        val clock = AutoskeletonShimmerClock()
-        clock.setPeriod(60.0)
+        // Injected time, for the reason spelled out in `shimmerStillTravels`.
+        var fakeNow = 0.0
+        val clock = AutoskeletonShimmerClock(periodMs = 60.0, now = { fakeNow })
         val overlay = mount("pulse", AutoskeletonRecordingFrameScheduler(), clock)
         val alphas = mutableListOf<Int>()
         repeat(12) {
             overlay.draw(android.graphics.Canvas())
             alphas.add(overlay.lastHighlightAlpha)
-            Thread.sleep(6)
+            fakeNow += 6.0
         }
         assertTrue("highlight alpha never changed: $alphas", alphas.distinct().size > 1)
         assertTrue("highlight went below the floor: $alphas", alphas.min() >= AutoskeletonShimmerOverlayView.PULSE_MIN_ALPHA)

@@ -333,4 +333,151 @@ class AutoskeletonRendererTier1Test {
             ticksWhileBlocked.get() > 0,
         )
     }
+
+    /**
+     * The frame loop must stop when the overlay is not on screen.
+     *
+     * `scheduleNextFrame` re-posted a `Choreographer` callback unconditionally and
+     * only ever stopped for `setAnimation("none")` or `destroySelf()`. There was no
+     * `onDetachedFromWindow` / `onWindowVisibilityChanged` hook anywhere in the
+     * package, so a mounted overlay kept invalidating while its Activity was
+     * stopped and while it was scrolled out of view — one callback plus one
+     * `postInvalidateOnAnimation` per frame per overlay, times every skeleton on
+     * screen. iOS gets this free: CoreAnimation suspends its animations with the
+     * app.
+     *
+     * The phase is not a casualty of stopping. It is derived from the SHARED clock
+     * via `phaseAt(now)`, never accumulated across frames, so a resumed overlay
+     * lands wherever its siblings already are rather than where it left off.
+     */
+    @Test
+    fun theFrameLoopStopsWhenDetachedAndResumesOnReattach() {
+        val scheduler = AutoskeletonRecordingFrameScheduler()
+        // A REAL attached window, not a bare FrameLayout: `ViewGroup.removeView`
+        // only dispatches `onDetachedFromWindow` when the parent actually has an
+        // `mAttachInfo`, so an unattached fixture would silently prove nothing.
+        val activity = org.robolectric.Robolectric.buildActivity(android.app.Activity::class.java)
+            .setup()
+            .get()
+        val surface = FrameLayout(activity)
+        activity.setContentView(surface)
+        surface.layout(0, 0, 100, 100)
+        val renderer = AutoskeletonRendererTier1()
+        renderer.mount(
+            surface,
+            listOf(
+                AutoskeletonShapeInfo(
+                    0f, 0f, 50f, 50f, 0f,
+                    AutoskeletonShapeSource.CONTAINER, AutoskeletonRadiusSource.MEASURED,
+                ),
+            ),
+            theme(),
+            AutoskeletonShimmerClock(),
+            AutoskeletonOverlayView.ANIMATION_SHIMMER,
+            scheduler = scheduler,
+        )
+        val overlay = surface.getChildAt(0) as AutoskeletonShimmerOverlayView
+        scheduler.tick()
+        val postsWhileAttached = scheduler.postCount
+        assertTrue("precondition: the loop is running while attached", postsWhileAttached > 0)
+
+        surface.removeView(overlay)
+        val postsAtDetach = scheduler.postCount
+        scheduler.tick()
+        assertEquals(
+            "a detached overlay must not schedule another frame",
+            postsAtDetach,
+            scheduler.postCount,
+        )
+
+        surface.addView(overlay)
+        assertTrue("re-attaching must resume the loop", scheduler.postCount > postsAtDetach)
+    }
+
+    /** The same guarantee for a window that goes invisible without detaching —
+     *  the app being backgrounded, which is the case that actually drains a
+     *  battery. */
+    @Test
+    fun theFrameLoopStopsWhenTheWindowIsNotVisible() {
+        val scheduler = AutoskeletonRecordingFrameScheduler()
+        val surface = FrameLayout(RuntimeEnvironment.getApplication())
+        surface.layout(0, 0, 100, 100)
+        AutoskeletonRendererTier1().mount(
+            surface,
+            listOf(
+                AutoskeletonShapeInfo(
+                    0f, 0f, 50f, 50f, 0f,
+                    AutoskeletonShapeSource.CONTAINER, AutoskeletonRadiusSource.MEASURED,
+                ),
+            ),
+            theme(),
+            AutoskeletonShimmerClock(),
+            AutoskeletonOverlayView.ANIMATION_SHIMMER,
+            scheduler = scheduler,
+        )
+        val overlay = surface.getChildAt(0) as AutoskeletonShimmerOverlayView
+        scheduler.tick()
+
+        overlay.dispatchWindowVisibilityChanged(android.view.View.INVISIBLE)
+        val postsWhileHidden = scheduler.postCount
+        scheduler.tick()
+        assertEquals(
+            "an overlay in an invisible window must not schedule another frame",
+            postsWhileHidden,
+            scheduler.postCount,
+        )
+
+        overlay.dispatchWindowVisibilityChanged(android.view.View.VISIBLE)
+        assertTrue("becoming visible again must resume the loop", scheduler.postCount > postsWhileHidden)
+    }
+
+    /**
+     * The origin and the per-frame reading must come from ONE time base.
+     *
+     * The clock's origin came from its injectable `now`, while the draw pass called
+     * `System.currentTimeMillis()` directly. Any test injecting a fake `now` was
+     * therefore computing `(wallClockNow - fakeOrigin) % period` — a phase built
+     * from two unrelated epochs — and in production the two agreed only by
+     * coincidence, because both happened to be wall clock.
+     *
+     * That coincidence ended when the origin moved to `SystemClock.elapsedRealtime`
+     * to stop an NTP correction jumping every mounted overlay mid-sweep. This test
+     * is what makes the pairing a property of the code rather than of that
+     * coincidence: with a fake clock parked at exactly half a period, the sweep has
+     * to sit at the centre of its travel.
+     */
+    @Test
+    fun theDrawPassReadsTheClockOwnTimeBaseAndNotItsOwn() {
+        val scheduler = AutoskeletonRecordingFrameScheduler()
+        val surface = FrameLayout(RuntimeEnvironment.getApplication())
+        surface.layout(0, 0, 100, 100)
+        // Origin 0, "now" 750 of a 1500ms period => phase 0.5 exactly.
+        var fakeNow = 0.0
+        val clock = AutoskeletonShimmerClock(periodMs = 1500.0, now = { fakeNow })
+        AutoskeletonRendererTier1().mount(
+            surface,
+            listOf(
+                AutoskeletonShapeInfo(
+                    0f, 0f, 100f, 100f, 0f,
+                    AutoskeletonShapeSource.CONTAINER, AutoskeletonRadiusSource.MEASURED,
+                ),
+            ),
+            theme(),
+            clock,
+            AutoskeletonOverlayView.ANIMATION_SHIMMER,
+            scheduler = scheduler,
+        )
+        val overlay = surface.getChildAt(0) as AutoskeletonShimmerOverlayView
+
+        fakeNow = 750.0
+        overlay.draw(android.graphics.Canvas())
+
+        // At phase 0.5 the sweep sits dead centre: ((0.5 * 2) - 1) * width == 0.
+        assertEquals(
+            "the draw pass must derive its phase from the clock's own base",
+            0f,
+            overlay.lastShaderTranslateX,
+            0.001f,
+        )
+    }
 }

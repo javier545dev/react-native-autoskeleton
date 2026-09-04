@@ -265,11 +265,8 @@ class AutoskeletonShimmerOverlayView internal constructor(
      *  shows the new state. */
     fun setAnimation(value: String) {
         animation = value
-        if (value == AutoskeletonOverlayView.ANIMATION_NONE) {
-            stopAnimating()
-        } else {
-            startAnimating()
-        }
+        wantsAnimation = value != AutoskeletonOverlayView.ANIMATION_NONE
+        syncAnimationState()
         postInvalidateOnAnimation()
     }
 
@@ -291,6 +288,64 @@ class AutoskeletonShimmerOverlayView internal constructor(
     fun destroySelf() {
         stopAnimating()
         (parent as? ViewGroup)?.removeView(this)
+    }
+
+    /** Whether the RESOLVED animation kind wants a running loop. Separate from
+     *  [animating], which is whether the loop is actually running: the kind is a
+     *  prop, and being on screen is a lifecycle fact, and the loop may only run
+     *  when both agree. */
+    private var wantsAnimation = true
+
+    /** Reconciles the loop with the two conditions that govern it. Called from the
+     *  animation setter and from every lifecycle hook, so neither can strand the
+     *  other's intent.
+     *
+     *  The shimmer phase is not a casualty of stopping: it is derived from the
+     *  SHARED clock through `phaseAt(now)` on each draw, never accumulated across
+     *  frames, so a resumed overlay lands wherever its siblings already are rather
+     *  than where it happened to leave off. */
+    private var detachedFromWindow = false
+
+    /** Tracks the last visibility the PLATFORM reported, defaulting to visible.
+     *
+     *  Deliberately not `windowVisibility`: that getter reads `mAttachInfo`, and
+     *  returns `GONE` for a view which is not attached yet — which is every view
+     *  at the moment `mount` runs. Gating on it directly would refuse to start the
+     *  loop at mount and wait for an attach callback, which is a different and
+     *  wrong behaviour. The rule is "stop when the platform tells us we are not
+     *  visible", not "refuse to start until it tells us we are". */
+    private var windowVisible = true
+
+    private fun syncAnimationState() {
+        if (wantsAnimation && !detachedFromWindow && windowVisible) {
+            startAnimating()
+        } else {
+            stopAnimating()
+        }
+    }
+
+    /** The overlay left the hierarchy — scrolled out of a `ScrollView`, or its
+     *  screen was popped. Nothing it invalidates can be seen. */
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        detachedFromWindow = false
+        syncAnimationState()
+    }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        detachedFromWindow = true
+        stopAnimating()
+    }
+
+    /** The app was backgrounded, or the window went behind another. This is the
+     *  case that actually drains a battery: the view stays attached, so
+     *  [onDetachedFromWindow] never fires, and the loop used to keep posting a
+     *  frame callback for a window nobody is looking at. */
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        windowVisible = visibility == VISIBLE
+        syncAnimationState()
     }
 
     private fun startAnimating() {
@@ -382,7 +437,10 @@ class AutoskeletonShimmerOverlayView internal constructor(
             if (isNone) {
                 lastHighlightAlpha = 0
             } else {
-                val phase = clock.phaseAt(System.currentTimeMillis().toDouble())
+                // `clock.nowMs()`, never a clock source of this class's own: the
+                // phase is `(now - startedAt) % period`, so both halves must come
+                // from the same base or the sweep is computed across two epochs.
+                val phase = clock.phaseAt(clock.nowMs())
                 // `((phase * 2) - 1) * w` sweeps `-w -> +w` across one
                 // period; RTL traverses the SAME span the other way, which is
                 // that expression negated. Nothing else about the frame
