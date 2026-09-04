@@ -104,7 +104,7 @@ production DOM sensor against each route at every entry in `WIDTH_BUCKETS`
   server ever needing to know the viewport.
 
 ```bash
-node cli/capture.js registry.json https://your-dev-server.example ./generated/autoskeleton-ssr
+npx autoskeleton-capture registry.json https://your-dev-server.example ./generated/autoskeleton-ssr
 ```
 
 `registry.json` is plain JSON:

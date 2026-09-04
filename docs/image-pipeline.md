@@ -130,7 +130,7 @@ the natural way and there is nothing rendered to derive it from:
 
 ```tsx
 // No skeleton paints. onMetrics reports shapeCount: 0.
-<AutoSkeleton isLoading={product === null} expectsPlaceholder>
+<AutoSkeleton skeletonKey="product-hero" isLoading={product === null} expectsPlaceholder>
   {product !== null && <Image source={{ uri: product.imageUrl }} … />}
 </AutoSkeleton>
 ```
@@ -149,7 +149,7 @@ on all three platforms.
 Mount the slot unconditionally and give it a background:
 
 ```tsx
-<AutoSkeleton isLoading={product === null} expectsPlaceholder>
+<AutoSkeleton skeletonKey="product-hero" isLoading={product === null} expectsPlaceholder>
   <View style={{ width: 180, height: 180, borderRadius: 12, overflow: 'hidden',
                  backgroundColor: '#1f2430' }}>
     {product !== null && <Image source={{ uri: product.imageUrl }} … />}
@@ -180,7 +180,7 @@ Gated as behaviour rather than left to prose — the shared
 directions case in `test/web/dom-sensor.spec.ts`).
 
 `examples/expo/demos/ImagePipelineDemo.tsx` runs this on a device, and
-`docs-examples/ImagePipelineExample.tsx` is the typechecked version of the
+`examples/expo/docs-examples/ImagePipelineExample.tsx` is the typechecked version of the
 snippet above.
 
 ## 4. Current implementation status — read this before wiring `onSuccessorPainted`

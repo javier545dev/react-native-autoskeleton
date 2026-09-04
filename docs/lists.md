@@ -19,7 +19,7 @@ So the list API inverts the flow. **One** invisible template cell is measured
 settle, and every skeleton row after that is drawn from the cached snapshot.
 Binding a cell does nothing but a synchronous cache read.
 
-Three problems that look like one:
+Four problems that look like one:
 
 | Component | Problem it solves |
 |---|---|
@@ -28,8 +28,11 @@ Three problems that look like one:
 | `<SkeletonListFooter>` | **Pagination** — same `itemType` as the rows above, so the shapes are already cached by the time it mounts. |
 | `useSkeletonCell()` | The hook the components are built on, for a cell that needs the cache state itself. |
 
-All four share one module-scope `templateRegistry`, so "at most once, ever"
-holds across every entry point.
+`SkeletonList`, `SkeletonCell` and `useSkeletonCell` share one module-scope
+`templateRegistry`, so "at most once, ever" holds across those entry points.
+`SkeletonListFooter` never touches the registry at all — it only reads the
+shared snapshot store, which is why it cannot resolve an `itemType` nothing
+else has measured.
 
 ---
 
@@ -170,8 +173,12 @@ read.
 
 **If you never supply a `renderTemplate`, the fallback renders forever.** That
 is a documented v1 limitation, not a bug: nothing is ever crashed or wrong, but
-that `itemType` never resolves to real measured geometry. `SkeletonList`,
-`SkeletonListFooter` and `SkeletonCell` all behave this way.
+that `itemType` never resolves to real measured geometry. Both `SkeletonList`
+and `SkeletonCell` behave this way.
+
+`SkeletonListFooter` has no `renderTemplate` prop to supply — passing one is a
+type error. It reaches the same outcome by a different route: it can only ever
+draw what another entry point already measured for that `itemType`.
 
 ---
 

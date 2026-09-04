@@ -980,11 +980,12 @@ AutoSkeleton.Hint = Hint;
 // Measured here: attaching them pushed the NFR-6 gzip gate from 7674 B to
 // 8187 B (of the then-8192 B hard-failing budget, since revised to 9216 B —
 // see spec.md NFR-6) even though most consumers never touch SSR.
-// `AutoSkeletonSSR`/`AutoSkeletonSSRHydrate` are exported as
-// PLAIN NAMED exports from `index.web.ts` instead (import them directly:
-// `import { AutoSkeletonSSR } from 'autoskeleton'`) — a bundler CAN
-// tree-shake an unused named re-export from a side-effect-free barrel file,
-// unlike a property write. See `src/web/ssr/AutoSkeletonSSR.tsx` and
-// `src/web/ssr/hydrate.tsx`.
+// `AutoSkeletonSSR`/`AutoSkeletonSSRHydrate` are plain named exports rather
+// than statics hung off `AutoSkeleton` — a bundler CAN tree-shake an unused
+// named re-export from a side-effect-free barrel file, unlike a property
+// write. They are NOT on this `.` entry, though: they live only at the
+// `autoskeleton/ssr` subpath (`src/index.ssr.ts`), for the NFR-6 reason
+// `src/index.web.ts`'s own header sets out at length. See
+// `src/web/ssr/AutoSkeletonSSR.tsx` and `src/web/ssr/hydrate.tsx`.
 
 export { IGNORE_ATTRIBUTE };

@@ -316,7 +316,7 @@ Perfetto/`systrace` and filter on the section names above.
 | Prop | Native | Web |
 |---|---|---|
 | `id` (required) | stamps `nativeID` (**overwriting any existing one**), and `testID` only when the child set none | stamps `data-autoskeleton-id` |
-| `radius` | primary radius mechanism on Android (ADR-2 R0); overrides `layer.cornerRadius` on iOS | stamps `data-autoskeleton-radius`, the same self-sufficient attribute you could already set by hand |
+| `radius` | top rung of Android's ladder (ADR-2 R0), and the answer for the cases rung R1b cannot recover — per-corner radii; overrides `layer.cornerRadius` on iOS | stamps `data-autoskeleton-radius`, the same self-sufficient attribute you could already set by hand |
 | `lines` | consulted by both native sensors, but only reachable for a collapsed text leaf ([§5a](./platform-support.md)) | **not a prop on web at all — a real, documented gap** |
 
 ### 5.1 Your `testID` is never overwritten (native)

@@ -21,6 +21,12 @@ the same everywhere.
 | `autoskeleton` | `react-native` | `index.native.js` | Core + virtualized-list API + native error types |
 | `autoskeleton` | `browser` | `index.web.js` | Core + `IGNORE_ATTRIBUTE` |
 | `autoskeleton` | `default` | `index.js` | Re-exports the web entry verbatim |
+
+Every subpath additionally carries explicit `require` and `import` conditions,
+so a CommonJS caller resolves the `lib/commonjs/**` build and its matching
+declarations rather than being handed ESM. `./cli`'s types point at
+`lib/typescript/commonjs/`, because `dist-cli` is bundled as CommonJS.
+
 | `autoskeleton/skia` | any | `index.skia.js` | Tier-2 opt-in factory. **Native only** |
 | `autoskeleton/uniwind` | any | `interop/uniwind.js` | `ThemedAutoSkeleton`. **Native only** |
 | `autoskeleton/ssr` | any | `index.ssr.js` | Server-render replay. **Web only** |
@@ -34,11 +40,13 @@ There is also a binary: `autoskeleton-capture`.
 
 ```ts
 export { AutoSkeleton, SkeletonProvider, IGNORE_ATTRIBUTE };
+export { MemoryShapeStore };          // the class behind SkeletonProvider's `store` prop
+export { isExactRadiusSource };       // see §8 before aggregating radiusSourceHistogram
 export type {
   AutoSkeletonProps, SkeletonProviderProps,
   AnimationKind, DegradationFlag, HandoffReason, OnMetrics, Platform,
   RadiusSource, RendererKind, ShapeInfo, ShapeSnapshot, ShapeSource,
-  SkeletonMetrics,
+  SkeletonMetrics, MemoryShapeStoreOptions, ShapeStore,
 };
 ```
 
@@ -81,7 +89,8 @@ export { isReplayableManifest, SSR_MANIFEST_VERSION };
 export { assertSsrManifestIntegrity, computeSsrManifestIntegrity,
          SSR_BUILD_ATTRIBUTE, SSR_BUILD_CSS_VARIABLE };
 export type { AutoSkeletonSSRProps, AutoSkeletonSSRHydrateProps,
-              AutoSkeletonSSRManifest, AutoSkeletonSSRManifestEntry };
+              AutoSkeletonSSRManifest, AutoSkeletonSSRManifestEntry,
+              ShapeStore };
 ```
 
 **`autoskeleton/cli`**
@@ -260,7 +269,8 @@ To get a skeleton on every load:
 
 ```tsx
 <AutoSkeleton.Ignore>{/* exactly one element child */}</AutoSkeleton.Ignore>
-<AutoSkeleton.Hint id="avatar" radius={24} lines={3}>{/* one child */}</AutoSkeleton.Hint>
+<AutoSkeleton.Hint id="avatar" radius={24}>{/* one child */}</AutoSkeleton.Hint>
+{/* `lines` is native-only — see the prop table below */}
 ```
 
 `AutoSkeleton.Ignore` and `AutoSkeleton.Hint` exist on both platforms. There is
@@ -314,6 +324,12 @@ store (test isolation), a theme, the budgets, or to opt into tier-2.
 | Prop | Type | Default | Platforms |
 |---|---|---|---|
 | `store` | `MemoryShapeStore` | module-level shared store | all |
+
+`MemoryShapeStore` is exported from the same entry, so you can construct a
+scoped store — `new MemoryShapeStore()` — when you want one screen's snapshots
+not to share the app-wide cache. The `ShapeStore` interface is exported too, if
+you would rather supply your own implementation.
+
 | `theme` | `Partial<{ baseColor; highlightColor; defaultRadius; speedMs }>` | see below | all |
 | `budgetMs` | `number` | `2` | all |
 | `maxShapes` | `number` | `60` | all |
@@ -364,8 +380,10 @@ catch a misuse, and [`lists.md`](./lists.md) for how to use these.
 
 ### `<SkeletonListFooter>`
 
-Same props as `SkeletonList`. Intended as a `ListFooterComponent` during
-pagination.
+Same props as `SkeletonList` **except `renderTemplate`**, which it does not
+accept. The footer never schedules a template measurement of its own — it draws
+what the rows above it already measured for the same `itemType`, which is the
+whole reason it is cheap during pagination.
 
 ### `<SkeletonCell>`
 
@@ -388,6 +406,7 @@ const {
   cacheHit,            // boolean
   isFallback,          // true while resolving via the generic fallback block
   cacheKey,            // string
+  direction,           // Direction — the one `cacheKey` was composed with
   pendingTemplateNode, // render this somewhere invisible while measuring
   templateRef,
   onTemplateLayout,
@@ -557,6 +576,31 @@ type DegradationFlag =
 CSS px (web) or density-independent points (native). `r` is a single uniform
 corner radius; per-corner radii are out of scope. `source` and `radiusSource`
 are dev-build sidecars and are absent in production snapshots.
+
+### `isExactRadiusSource(source: RadiusSource): boolean`
+
+Use this instead of reading one `radiusSourceHistogram` bucket by name.
+
+The buckets name **which rung answered**, and the rungs differ per platform:
+the same rounded view reports `'measured'` on iOS (`layer.cornerRadius`) and on
+web (computed style), but `'style'` on Android
+(`BackgroundStyleApplicator.getBorderRadius`). All three recovered the author's
+exact value, so summing `histogram.measured` across platforms would report
+Android's rounded views as lost.
+
+`isExactRadiusSource` returns `true` for every rung that recovered a real
+radius — `'measured'`, `'outline'`, `'style'`, `'hint'`, `'raster-probe'` — and
+`false` only for `'default'`, the substituted one. That grouping is the same
+one the built-in degradation warning uses.
+
+```ts
+import { isExactRadiusSource } from 'autoskeleton';
+
+const total = Object.values(m.radiusSourceHistogram).reduce((a, b) => a + b, 0);
+const exact = Object.entries(m.radiusSourceHistogram)
+  .filter(([source]) => isExactRadiusSource(source as RadiusSource))
+  .reduce((sum, [, count]) => sum + count, 0);
+```
 
 ---
 

@@ -199,7 +199,7 @@ The subtree under `<AutoSkeleton>` had nothing detectable in it at the moment
 it was measured. Almost always this:
 
 ```tsx
-<AutoSkeleton isLoading={data === null}>
+<AutoSkeleton skeletonKey="product-hero" isLoading={data === null}>
   {data !== null && <Image … />}   {/* empty while loading */}
 </AutoSkeleton>
 ```
@@ -377,9 +377,11 @@ the first one fails **silently**.
 
 The example apps install `autoskeleton` from
 `file:../../.tarball/autoskeleton-0.1.0.tgz`. The path and the version never
-change, so npm considers the dependency already satisfied — and the lockfile
-pins an integrity hash whose matching bytes are already in the npm content
-cache.
+change, so npm considers the dependency already satisfied — and if the lockfile
+pins an integrity hash, its matching bytes are already in the npm content
+cache. No committed lockfile carries that pin any more, but `npm install`
+writes it back every time it resolves the tarball, which is why the strip runs
+on `postinstall`.
 
 **Verified by running, 2026-08-30**, in an isolated scratch project:
 
@@ -391,13 +393,18 @@ cache.
 | Drop the lockfile `integrity` for the local `file:` tarball, then `npm install` | `changed 1 package`, **fresh bytes installed** |
 
 Deleting `node_modules` is not enough. The lockfile pin is the load-bearing
-part, and this repository ships the fix:
+part, and this repository ships the fix — now wired to run by itself:
 
 ```bash
 npm run pack:tarball                       # repack (runs prepare -> bob build)
-npm run examples:unpin                     # drop the file: tarball pin in every examples/*/package-lock.json
-cd examples/vite && npm install            # now installs the bytes you just packed
+cd examples/vite && npm install            # postinstall strips the pin; fresh bytes installed
 ```
+
+Each example declares `"postinstall": "node ../../scripts/unpin-local-tarball.mjs"`,
+so the strip happens at the moment npm would otherwise leave a stale pin behind.
+`npm run examples:unpin` still exists for running it by hand, and
+`test/packaging/local-tarball-pin.test.ts` fails the suite if a pin is ever
+committed again.
 
 `scripts/unpin-local-tarball.mjs` touches **only** entries whose `resolved` is a
 local `file:` `.tgz`. Every registry dependency keeps its real pin. Pass

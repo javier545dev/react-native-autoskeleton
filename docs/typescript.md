@@ -31,8 +31,11 @@ per platform. For TypeScript to honour them your `tsconfig.json` must:
 
 Jest's module resolver does **not** apply `package.json#exports` conditions at
 all — a Jest limitation, independent of `moduleResolution`. A bare
-`require('autoskeleton')` under Jest falls through to `default` (the web build)
-even in a React Native test environment:
+`require('autoskeleton')` under Jest therefore never sees the `react-native`
+condition — nor the `require` condition the package now declares. Resolution
+falls back to `package.json#main`, which is the CommonJS build of the
+platform-neutral entry, and that re-exports the web build. So you get the web
+build even in a React Native test environment:
 
 ```js
 module.exports = {

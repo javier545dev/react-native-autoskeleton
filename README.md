@@ -6,9 +6,10 @@
      [![npm](https://img.shields.io/npm/v/autoskeleton)](https://www.npmjs.com/package/autoskeleton)
      It is deliberately absent until then, because an unpublished package renders
      it as a broken "invalid" badge. -->
-<!-- The two workflow badges read live from GitHub Actions. Both workflows run on
+<!-- The three workflow badges read live from GitHub Actions. All three run on
      every push to `main`; until the first such run they render "no status". -->
 [![Native build matrix](https://github.com/javier545dev/react-native-autoskeleton/actions/workflows/native-matrix.yml/badge.svg?branch=main)](https://github.com/javier545dev/react-native-autoskeleton/actions/workflows/native-matrix.yml)
+[![Unit suite and typecheck](https://github.com/javier545dev/react-native-autoskeleton/actions/workflows/unit.yml/badge.svg?branch=main)](https://github.com/javier545dev/react-native-autoskeleton/actions/workflows/unit.yml)
 [![Playwright](https://github.com/javier545dev/react-native-autoskeleton/actions/workflows/playwright.yml/badge.svg?branch=main)](https://github.com/javier545dev/react-native-autoskeleton/actions/workflows/playwright.yml)
 [![License](https://img.shields.io/github/license/javier545dev/react-native-autoskeleton)](LICENSE)
 [![Runtime dependencies: 0](https://img.shields.io/badge/runtime%20dependencies-0-informational)](package.json)
@@ -114,7 +115,7 @@ line is short.</sub>
   `test/packaging/web-bundle.test.ts` builds a real consumer app, gzips the web
   entry, and fails CI above the ceiling in
   [`benchmarks/budgets.json`](benchmarks/budgets.json) — the single home of that
-  number. On this commit: 7733 B against a 7933 B ceiling.
+  number. On this commit: 7898 B against a 7933 B ceiling.
 
 What it does **not** replace is a loading state you deliberately designed to
 look *unlike* the content it precedes. If that is what you want, draw it by
@@ -148,7 +149,7 @@ v4 — [an explicit, evidence-backed exclusion](docs/theming.md), not a gap).
 > **`autoskeleton` is not on npm yet.** The `npm install autoskeleton` lines
 > below describe the published package; they do not work today. Until the first
 > release, build the artifact and install it from the tarball — which is exactly
-> how the four example apps in this repository consume it:
+> how the five example apps in this repository consume it:
 >
 > ```bash
 > git clone https://github.com/javier545dev/react-native-autoskeleton
@@ -324,7 +325,7 @@ Two of these bite hardest:
 
 ## Examples
 
-Four real apps, each installing the library from a packed tarball rather than a
+Five real apps, each installing the library from a packed tarball rather than a
 workspace symlink, so what they exercise is the published artifact:
 
 - [`examples/bare-rn`](examples/bare-rn) — bare RN, the full demo gallery, the
@@ -333,6 +334,9 @@ workspace symlink, so what they exercise is the published artifact:
   `expo-image`, Expo Web.
 - [`examples/next`](examples/next) — server rendering.
 - [`examples/vite`](examples/vite) — an ordinary web SPA.
+- [`examples/rn-077`](examples/rn-077) — the RN 0.77 floor app. It exists to
+  prove the declared `peerDependencies` floor still builds and runs, and the
+  native matrix builds it on every push.
 
 The rest of this section is one worked example per surface.
 

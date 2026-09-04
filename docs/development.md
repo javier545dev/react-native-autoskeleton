@@ -19,7 +19,8 @@ ios/ android/  the native sensor, renderer, shape cache and observability.
 cli/           the build-time SSR capture CLI.
 test/          Vitest suites that need no browser + Playwright specs that do.
 benchmarks/    the CI budget suite; budgets.json is the single source of truth.
-examples/      four real consuming apps, installed from a packed tarball.
+examples/      five real consuming apps, installed from a packed tarball
+               (bare-rn, expo, next, vite, and rn-077 — the RN 0.77 floor app).
 ```
 
 `plan.md`, `spec.md` and `tasks.md` at the repository root are the planning
@@ -38,7 +39,8 @@ why there are three files:
   specifiers anywhere in its transitive graph.
 - `src/index.native.ts` — iOS and Android.
 - `src/index.ts` — exists only so a filename-preserving build emits
-  `lib/index.js` for the `default` export condition. It re-exports the web
+  `lib/module/index.js` and `lib/commonjs/index.js` for the `default`,
+  `import` and `require` export conditions. It re-exports the web
   entry, which keeps it web-safe.
 
 `test/packaging/entries.test.ts` guards the transitive import graph, and
@@ -55,7 +57,7 @@ build.
 | `npm run typecheck` | `tsc` for `src`/`cli` and `tsc -p tsconfig.tests.json`. |
 | `npm run bench` / `bench:run` / `bench:check` | The benchmark suite and its budget gate. |
 | `npm run pack:tarball` | `npm pack` into `.tarball/` (runs `prepare` → `bob build` + `build:cli`). |
-| `npm run examples:unpin` | Drops the local `file:` tarball integrity pin from every `examples/*/package-lock.json`. **Read the next section before skipping this.** |
+| `npm run examples:unpin` | Drops the local `file:` tarball integrity pin from every `examples/*/package-lock.json`. Each example now runs this on `postinstall`, so you rarely invoke it by hand — read the next section for why it exists. |
 | `npm run clean` | Removes `android/build`, `ios/build`, `lib`, `.tarball`. |
 
 Native suites:
@@ -98,8 +100,11 @@ buys real fidelity and costs one non-obvious failure mode: **a stale install
 is silent**.
 
 The path and the version never change, so npm considers the dependency already
-satisfied, and the lockfile pins an integrity hash whose matching bytes are
-already in npm's content cache.
+satisfied, and if the lockfile pins an integrity hash, its matching bytes are
+already in npm's content cache. **No committed lockfile carries that pin any
+more** — `postinstall` strips it in every example, and
+`test/packaging/local-tarball-pin.test.ts` fails the suite if one comes back.
+The measurements below are what that guard exists to prevent.
 
 **Measured in an isolated scratch project on 2026-08-30**, by repacking with
 genuinely different bytes and reinstalling:
@@ -112,13 +117,18 @@ genuinely different bytes and reinstalling:
 | Drop the lockfile `integrity` for the `file:` tarball, then `npm install` | `changed 1 package`, **fresh bytes** |
 
 Deleting `node_modules` does **not** fix it. The lockfile pin is the
-load-bearing part. So the loop is:
+load-bearing part, which is why it is no longer committed. The loop is now:
 
 ```bash
 npm run pack:tarball
-npm run examples:unpin           # or: node scripts/unpin-local-tarball.mjs examples/next
-cd examples/vite && npm install
+cd examples/vite && npm install   # postinstall re-strips the pin npm just wrote
 ```
+
+`npm install` writes the pin back every time it resolves the tarball; the
+`postinstall` hook removes it again, so the committed lockfile stays clean
+without anyone remembering. **Any native change needs this loop**: each
+`examples/*/node_modules/autoskeleton` is a COPY of the tarball, so Gradle and
+Xcode compile those bytes, not your working tree.
 
 `scripts/unpin-local-tarball.mjs` touches only entries whose `resolved` is a
 local `file:` `.tgz`; every registry dependency keeps its real pin, and a
@@ -130,7 +140,7 @@ Why unpinning is the right call rather than a weakened guarantee: an
 this repository's own `npm pack` output, produced from the working tree the
 lockfile lives in — pinning it guarantees nothing about provenance and instead
 asserts "the library will re-pack to exactly these bytes", which every source
-edit falsifies. Keeping it true means repacking and hand-syncing four tracked
+edit falsifies. Keeping it true would mean repacking and hand-syncing five tracked
 lockfiles after every change; this repository already carries a commit whose
 entire content is that chore, and it still drifted, which is how `docs.yml`
 died with `EINTEGRITY` on a runner whose own tarball was byte-for-byte correct.
@@ -197,8 +207,13 @@ Flagged so nobody re-derives them as facts:
 - **NFR-1's tier-2 120 Hz target is not measured.** `benchmarks.yml`'s
   `bench-ios-traversal` job is marked "AUTHORED ONLY" in its own header and the
   frame-drop job that exists is Android.
-- **The native build matrix has run against one pinned RN version**, not the
-  full supported range `native-matrix.yml` expresses.
+- **The native build matrix now BUILDS the range it expresses.**
+  `native-matrix.yml` carries `genuine-app-android-matrix` and
+  `genuine-app-ios-matrix` scaffolding a real app per minor from 0.78.3 to
+  0.86.3, plus 0.87.1 rows and `floor-rn-077-android` for the declared floor.
+  What is worth re-checking before quoting a result is the Actions history: a
+  workflow that expresses a range and a run that went green across it are
+  different claims, and only the second one is evidence.
 - **The baseline-vs-candidate ratio gate** has been exercised on hand-fed
   results, not on two real commits in a real Actions run.
 

@@ -1,6 +1,6 @@
 // test/packaging/workflows.test.ts
 //
-// WHY THIS FILE EXISTS. Every one of the five workflows in
+// WHY THIS FILE EXISTS. Every one of the workflows then in
 // `.github/workflows/` was red, and nobody noticed, because the entire suite
 // has only ever been run on one laptop. Four of those five failures are
 // STATIC properties of the workflow files — a YAML parse error, an artifact
