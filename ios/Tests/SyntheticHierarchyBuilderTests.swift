@@ -58,6 +58,21 @@ final class SyntheticHierarchyBuilderTests: XCTestCase {
         try assertShapes(shapes, matchExpected: "scrolled-ancestor")
     }
 
+    /// The offset test above proves the sensor accounts for `contentOffset`.
+    /// It did not clip: a child scrolled past the viewport kept its full frame
+    /// and became a shape nobody can see — and those shapes are charged
+    /// against `maxShapes`, so a long list could spend its budget below the
+    /// fold and truncate what is actually on screen.
+    ///
+    /// The fixture holds three leaves on purpose — fully visible, half past
+    /// the fold, entirely below it. A fix that dropped everything outside the
+    /// viewport would pass with only the third; one that clipped nothing would
+    /// pass with only the first. Shared byte-for-byte with the Android suite.
+    func testScrollContainerClipsChildrenToItsViewport() throws {
+        let shapes = try measure(fixtureNamed: "scroll-clipping")
+        try assertShapes(shapes, matchExpected: "scroll-clipping")
+    }
+
     // MARK: - Container rule, both branches
 
     func testContainerRuleLeavesWin() throws {
@@ -68,6 +83,44 @@ final class SyntheticHierarchyBuilderTests: XCTestCase {
     func testContainerRuleEmitsContainerWhenNoLeaves() throws {
         let shapes = try measure(fixtureNamed: "container-rule-no-leaves")
         try assertShapes(shapes, matchExpected: "container-rule-no-leaves")
+    }
+
+    /// The container rule's THIRD branch, previously ungated on every platform
+    /// even though all three implement it: a container that reserves real
+    /// layout space but paints nothing of its own, and holds no detectable
+    /// leaf, contributes NOTHING.
+    ///
+    /// Stated as a decision rather than an accident (2026-08-30). It was
+    /// challenged as a possible defect, because a subtree written the natural
+    /// way — `{data !== null && <Image />}` — is empty while loading, and its
+    /// sized wrapper looks exactly like the thing a skeleton should cover. It
+    /// is not a defect: a non-transparent background is the ONLY observable
+    /// difference between a box that is content and a box that is structure,
+    /// and transparent sized boxes are how every React Native layout expresses
+    /// spacers, flex fillers, safe-area padding and gap shims. Emitting a shape
+    /// for them would paint grey blocks over the gaps in every loading screen.
+    /// The consumer-side answer is an always-mounted opaque slot, documented in
+    /// `docs/image-pipeline.md`.
+    func testASizedButTransparentContainerWithNoLeavesEmitsNothing() throws {
+        let shapes = try measure(fixtureNamed: "container-rule-sized-but-transparent")
+        try assertShapes(shapes, matchExpected: "container-rule-sized-but-transparent")
+    }
+
+    /// The parity twin of Android's `roundedButUnfilledContainerWithNoLeavesEmitsNothing`,
+    /// reading the SAME shared fixture.
+    ///
+    /// iOS has always answered this correctly — it reads `view.backgroundColor`'s
+    /// alpha, and a corner radius does not give a view a colour. Android used to
+    /// test `view.background != null`, which RN makes non-null for
+    /// `borderRadius` alone, so a bare rounded spacer painted a grey block there
+    /// and nothing here.
+    ///
+    /// This test is therefore green on the day it is written, and that is the
+    /// point: it pins iOS as the reference answer so the two platforms cannot
+    /// drift apart again without one of the two failing.
+    func testARoundedButUnfilledContainerWithNoLeavesEmitsNothing() throws {
+        let shapes = try measure(fixtureNamed: "container-rule-rounded-but-unfilled")
+        try assertShapes(shapes, matchExpected: "container-rule-rounded-but-unfilled")
     }
 
     // MARK: - Ignore subtree

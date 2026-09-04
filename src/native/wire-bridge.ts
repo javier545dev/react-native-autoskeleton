@@ -57,12 +57,41 @@ export function fetchShapesOnce(
   tracing: WireBridgeTracing = noopTracing,
 ): FetchShapesResult | null {
   const token = tracing.begin(JSI_SERIALIZATION_TRACE_SECTION);
-  const raw = nativeModule.getShapes(reactTag, cacheKey, config);
-  tracing.end(JSI_SERIALIZATION_TRACE_SECTION, token);
-  if (!raw || raw.length === 0) {
+  try {
+    const raw = nativeModule.getShapes(reactTag, cacheKey, config);
+    if (!raw || raw.length === 0) {
+      return null;
+    }
+    return { data: Float32Array.from(raw) };
+  } catch {
+    // Adversarial-review finding (2026-08-29): `getShapes` is a SYNCHRONOUS
+    // Turbo Module call into platform traversal code and it can throw — a
+    // codegen argument-conversion failure, or a native-side exception
+    // surfaced across the bridge. Both call sites run this inside a
+    // `requestAnimationFrame` / `InteractionManager` callback
+    // (`AutoSkeleton.tsx`'s `useColdMeasurement`, `useTemplateMeasurement`'s
+    // `attemptMeasure`), which is WORSE than the render-phase throw the
+    // report described: no React error boundary sits above a host callback,
+    // so the exception reached RN's `ExceptionsManager` as an unhandled JS
+    // error — a redbox in dev, a reported fatal in release.
+    //
+    // `null` is ADR-15's established fail-open posture (children rendered, no
+    // skeleton, no crash) expressed in this function's OWN existing
+    // vocabulary — the same value it already returns for an unavailable
+    // module or an unlaid-out target, and the value both call sites already
+    // handle. Deliberately scoped to the bridge call and its conversion,
+    // which are the foreign-input hazards; `sensor.ts`'s own
+    // `WireMalformedLengthError` congruence assertion is OUR authored
+    // invariant and stays loud, outside this boundary.
     return null;
+  } finally {
+    // Second defect of the same class, found by grepping the class rather
+    // than the instance: a throw between `begin` and `end` leaked the
+    // signpost/trace interval, so the exact profiling channel
+    // REQ-OBS-PROFILE-1 depends on would report a JSI-serialization phase
+    // that never closed.
+    tracing.end(JSI_SERIALIZATION_TRACE_SECTION, token);
   }
-  return { data: Float32Array.from(raw) };
 }
 
 /** ADR-9: JS is the sole authority for invalidation — mirrors
@@ -72,5 +101,14 @@ export function evictNativeShapes(nativeModule: Pick<Spec, 'evictShapes'>, cache
   if (cacheKeys.length === 0) {
     return;
   }
-  nativeModule.evictShapes(Array.from(cacheKeys));
+  try {
+    nativeModule.evictShapes(Array.from(cacheKeys));
+  } catch {
+    // Same class as `fetchShapesOnce`'s bridge throw, closed by the same
+    // grep. A failed eviction leaves a stale NATIVE entry that JS has already
+    // discarded — strictly better than crashing an app to purge a cache, and
+    // the same ADR-15 fail-open posture. (This function has no production
+    // call site yet; the guard exists so wiring ADR-9's eviction up later
+    // cannot reopen the class.)
+  }
 }

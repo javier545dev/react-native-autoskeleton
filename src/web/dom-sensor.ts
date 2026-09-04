@@ -153,13 +153,22 @@ interface RelativeFrame {
   readonly h: number;
 }
 
-function frameOf(rect: DOMRect, rootRect: DOMRect): RelativeFrame {
+function frameOf(rect: DOMRect, ctx: TraversalContext): RelativeFrame {
   return {
-    x: rect.left - rootRect.left,
-    y: rect.top - rootRect.top,
-    w: rect.width,
-    h: rect.height,
+    x: (rect.left - ctx.rootRect.left) / ctx.sx,
+    y: (rect.top - ctx.rootRect.top) / ctx.sy,
+    w: rect.width / ctx.sx,
+    h: rect.height / ctx.sy,
   };
+}
+
+/** Accumulated scale between the root's own layout box and its composed
+ *  viewport rect, so `frameOf` reports the space the overlay is drawn in.
+ *  Ratio-based, so `transform`, the `scale` property and `zoom` are all
+ *  covered by one rule. `offsetWidth` is integer-rounded, so a difference of
+ *  at most 1px is that rounding, never a transform. */
+function axisScale(extent: number, box: number): number {
+  return box > 0 && Math.abs(extent - box) > 1 ? extent / box : 1;
 }
 
 /** `true` when `el` establishes a CSS clipping context for its own content
@@ -179,7 +188,11 @@ function intersectFrames(a: RelativeFrame, b: RelativeFrame): RelativeFrame {
   return { x, y, w: Math.max(0, right - x), h: Math.max(0, bottom - y) };
 }
 
-/** Walks from `el` (inclusive — a leaf can carry `overflow:hidden` directly,
+/** Used by EVERY geometry-producing path in this module (`leafShape` and
+ *  `textLeafShapes` alike) — see `leafShape`'s comment for why restricting it
+ *  to text was the original defect.
+ *
+ *  Walks from `el` (inclusive — a leaf can carry `overflow:hidden` directly,
  *  with no separate wrapper) up through every ancestor, INTERSECTING the box
  *  of every clipping ancestor found, stopping at (and including) the
  *  traversal root. Returns `undefined` when nothing on the path clips, the
@@ -196,20 +209,38 @@ function intersectFrames(a: RelativeFrame, b: RelativeFrame): RelativeFrame {
  *  already the coordinate origin every shape is relative to, so walking
  *  further up the real page's DOM would clip against boxes the caller never
  *  asked this sensor to reason about. The root itself is still checked
- *  (`overflow:hidden` on the root legitimately clips its own descendants). */
+ *  (`overflow:hidden` on the root legitimately clips its own descendants).
+ *
+ *  Memoized per `measure()` call (`ctx.clips`, discarded with the context, so
+ *  it can never serve a stale box across two layouts). Without it, extending
+ *  this from text-only to EVERY leaf would have made the ancestor walk cost
+ *  O(leaves x depth) computed-style reads — leaves in one subtree share their
+ *  whole ancestor chain, so each element's own clip is resolved once and every
+ *  later descendant reads it back. Measured on a 60-leaf x 20-deep tree: the
+ *  unmemoized version ran the reference traversal at 1.67x its previous cost,
+ *  the memoized one at 1.49x, and the flat 60-shape CI reference screen (the
+ *  one the benchmark's 1.5x regression-ratio gate actually measures) at 1.20x,
+ *  0.15 ms against NFR-3's 2 ms budget. Note `undefined` is a MEANINGFUL
+ *  cached value here ("nothing on this chain clips"), hence `has` before
+ *  `get`. */
 function computeClipBox(el: Element, ctx: TraversalContext): RelativeFrame | undefined {
-  let clip: RelativeFrame | undefined;
-  let node: Element | null = el;
-  while (node) {
-    if (clipsOverflow(node)) {
-      const rect = frameOf(node.getBoundingClientRect(), ctx.rootRect);
-      clip = clip ? intersectFrames(clip, rect) : rect;
-    }
-    if (node === ctx.root) {
-      break;
-    }
-    node = node.parentElement;
+  const memo = ctx.clips;
+  if (memo.has(el)) {
+    return memo.get(el);
   }
+  const own = clipsOverflow(el) ? frameOf(el.getBoundingClientRect(), ctx) : undefined;
+  // `parentElement` is null for an element sitting directly under a shadow
+  // root (its parent node is the `ShadowRoot`, which is not an Element), so
+  // walking it alone would stop the clip chain at the shadow boundary and let
+  // a shadow child leak straight back out of an `overflow:hidden` HOST. The
+  // host is the shadow tree's real layout parent, so the chain continues
+  // through it. `getRootNode()` returns the `Document` for a light-DOM
+  // element, which has no `host`, so the `??` collapses to `null` there.
+  const parent =
+    el === ctx.root ? null : (el.parentElement ?? (el.getRootNode() as ShadowRoot).host ?? null);
+  const up = parent ? computeClipBox(parent, ctx) : undefined;
+  const clip = own && up ? intersectFrames(own, up) : (own ?? up);
+  memo.set(el, clip);
   return clip;
 }
 
@@ -220,6 +251,8 @@ function applyClip(frame: RelativeFrame, clip: RelativeFrame | undefined): Relat
 interface TraversalContext {
   readonly root: Element;
   readonly rootRect: DOMRect;
+  readonly sx: number;
+  readonly sy: number;
   readonly hints: HintRegistry;
   readonly maxShapes: number;
   readonly budgetMs: number;
@@ -227,6 +260,7 @@ interface TraversalContext {
   readonly shapes: ShapeInfo[];
   readonly shapeSources: ShapeSource[];
   readonly shapeRadiusSources: RadiusSource[];
+  readonly clips: Map<Element, RelativeFrame | undefined>;
   readonly degraded: Set<DegradationFlag>;
   truncated: boolean;
 }
@@ -313,7 +347,73 @@ function pushShape(
 
 function leafShape(el: Element, ctx: TraversalContext, source: ShapeSource, styleIn?: CSSStyleDeclaration): boolean {
   const style = styleIn ?? getComputedStyle(el);
-  const frame = frameOf(el.getBoundingClientRect(), ctx.rootRect);
+  // A fully transparent leaf paints nothing, so covering it with an opaque
+  // skeleton block draws a shape where the user sees empty space. Found
+  // empirically against react-native-web (tasks.md G.17): every RNW `<Image>`
+  // renders a `background-image` div AND a full-size `opacity: 0` `<img>`
+  // kept only so the browser's image context menu works, so an image used to
+  // produce TWO exactly-coincident shapes — invisible in a screenshot,
+  // but double the shape count against `maxShapes`, double the traversal
+  // work, and double the clip-path payload on an image-heavy screen.
+  //
+  // Deliberately checked HERE and not at the top of `traverse()`: every
+  // caller of this function has already paid for `getComputedStyle`, so this
+  // rule is free, whereas hoisting it would force a `getComputedStyle` on
+  // every text leaf and every recursing container in the tree — a real NFR-3
+  // traversal-budget regression to catch a rarer case. Consequences,
+  // recorded rather than hidden: an `opacity: 0` TEXT leaf is still shaped,
+  // and an `opacity: 0` CONTAINER still has its descendants shaped.
+  // `getComputedStyle` normalizes the property to a bare number string, so
+  // `'0'` is the whole domain of "invisible" here.
+  if (style.opacity === '0') {
+    return false;
+  }
+  // `visibility: hidden` is the same mistake by a different property, and it
+  // needs no caveat of its own. Unlike `opacity`, `visibility` INHERITS, and
+  // `getComputedStyle` resolves that inheritance before you read it — verified
+  // in Chromium rather than taken from the spec: a leaf inside a
+  // `visibility: hidden` container computes `hidden`, a leaf that sets
+  // `visibility: visible` inside one computes `visible`, and the hidden leaf
+  // still reports a non-zero `getBoundingClientRect()`, which is exactly why
+  // it used to be shaped. So this single leaf-level check is complete for
+  // every shape this module emits: there is no "a hidden CONTAINER still has
+  // its descendants shaped" hole to record, because those descendants compute
+  // hidden too and take this same branch.
+  //
+  // A hidden container is still recursed into, which is wasted traversal but
+  // never a wrong shape. Skipping the subtree would need a `getComputedStyle`
+  // on every container, the same NFR-3 cost the rule above declines to pay.
+  //
+  // This is HALF the rule. `traverse` sends text leaves to `textLeafShapes`
+  // before ever reaching here, so the same check lives there too — found by
+  // building the demo, not by reading: a `visibility: hidden` <span> kept
+  // producing its shape with only this branch in place. Structurally the same
+  // split that once left clipping applied to text leaves and nothing else.
+  if (style.visibility === 'hidden') {
+    return false;
+  }
+  // Clipping is a property of the LEAF's ancestor chain, not of the leaf's
+  // kind: `getBoundingClientRect()` reports the laid-out box even when an
+  // ancestor's `overflow` clips it away entirely, so every geometry-producing
+  // path in this module has to intersect against `computeClipBox` — not just
+  // the text path that first needed it. The original ellipsis fix was applied
+  // only at `textLeafShapes`, which left this function (images, inputs,
+  // buttons, and background/container elements) reporting full off-screen
+  // frames: a horizontally scrollable image carousel produced one full-size
+  // shape per off-screen item, painted over whatever sat beside it inside the
+  // wrapper. Same rule, same helper, now at every call site that turns a rect
+  // into a shape.
+  //
+  // Fully clipped away => zero-area frame => `pushShape` drops it as
+  // degenerate and returns `false`, which is exactly the right container-rule
+  // signal: an off-screen leaf contributed nothing, so an ancestor with its
+  // own background may legitimately fall back to drawing itself.
+  //
+  // Known fidelity nuance, shared with the text path: the clip box is the
+  // clipping ancestor's BORDER box, while `overflow` actually clips at its
+  // padding box. The difference is a border width, and erring outward keeps a
+  // bordered container's own edge covered rather than leaving a seam.
+  const frame = applyClip(frameOf(el.getBoundingClientRect(), ctx), computeClipBox(el, ctx));
   const hintRadius = hintRadiusAttr(el);
   const r = hintRadius ?? parseRadius(style);
   const radiusSource: RadiusSource = hintRadius !== undefined ? 'hint' : 'measured';
@@ -327,6 +427,14 @@ function leafShape(el: Element, ctx: TraversalContext, source: ShapeSource, styl
  *  regardless of the leaf element's own `display`. This is real DOM geometry
  *  jsdom cannot produce at all (jsdom #653, #3729), on either API. */
 function textLeafShapes(el: Element, ctx: TraversalContext): boolean {
+  // The text-path half of `leafShape`'s `visibility` rule — see there for why
+  // computed `visibility` needs no container-level counterpart. This is the
+  // one place in this module that pays for a `getComputedStyle` it did not
+  // already need, so the cost is stated rather than hidden: one call per TEXT
+  // leaf, where image, input and container leaves were already paying one.
+  if (getComputedStyle(el).visibility === 'hidden') {
+    return false;
+  }
   // Computed once per leaf (invariant across every line box below), not
   // per-line: `Range.getClientRects()` reports the text's LAID-OUT box, not
   // its visually clipped box — an `overflow:hidden` + `text-overflow:
@@ -341,15 +449,9 @@ function textLeafShapes(el: Element, ctx: TraversalContext): boolean {
 
   if (rects.length === 0) {
     ctx.degraded.add('clientrects-empty');
-    const rect = el.getBoundingClientRect();
-    const style = getComputedStyle(el);
-    const lineHeight = parseLineHeight(style);
     const lines = synthesizeLines({
-      x: rect.left - ctx.rootRect.left,
-      y: rect.top - ctx.rootRect.top,
-      w: rect.width,
-      h: rect.height,
-      lineHeight,
+      ...frameOf(el.getBoundingClientRect(), ctx),
+      lineHeight: parseLineHeight(getComputedStyle(el)) / ctx.sy,
     });
     for (const line of lines) {
       if (overBudget(ctx)) break;
@@ -363,7 +465,7 @@ function textLeafShapes(el: Element, ctx: TraversalContext): boolean {
 
   for (let i = 0; i < rects.length; i++) {
     if (overBudget(ctx)) break;
-    const frame = applyClip(frameOf(rects[i]!, ctx.rootRect), clip);
+    const frame = applyClip(frameOf(rects[i]!, ctx), clip);
     const pushed = pushShape(ctx, frame, 0, 'text', 'measured');
     if (pushed) {
       pushedAny = true;
@@ -403,7 +505,11 @@ function traverse(el: Element, ctx: TraversalContext, depth: number = 0): boolea
   }
 
   let childContributed = false;
-  for (const child of Array.from(el.children)) {
+  // An open shadow root is laid out but invisible to `el.children`. Slotted
+  // light children are reached through `el.children` only, so still shaped
+  // once. Closed roots report `null`, indistinguishable from having none.
+  const shadow = el.shadowRoot;
+  for (const child of shadow ? [...shadow.children, ...el.children] : Array.from(el.children)) {
     if (traverse(child, ctx, depth + 1)) {
       childContributed = true;
     }
@@ -467,6 +573,8 @@ export function createDomSensor(): Sensor<HTMLElement> {
       const ctx: TraversalContext = {
         root: target,
         rootRect,
+        sx: axisScale(rootRect.width, target.offsetWidth),
+        sy: axisScale(rootRect.height, target.offsetHeight),
         hints: options.hints,
         maxShapes: options.maxShapes,
         budgetMs: options.budgetMs,
@@ -474,6 +582,7 @@ export function createDomSensor(): Sensor<HTMLElement> {
         shapes: [],
         shapeSources: [],
         shapeRadiusSources: [],
+        clips: new Map(),
         degraded: new Set(),
         truncated: false,
       };
@@ -489,8 +598,8 @@ export function createDomSensor(): Sensor<HTMLElement> {
       const snapshot = buildSnapshot(
         ctx,
         options.key,
-        rootRect.width,
-        rootRect.height,
+        rootRect.width / ctx.sx,
+        rootRect.height / ctx.sy,
         options.collectDebugSidecars,
       );
       return { snapshot, traversalMs, degraded: Array.from(ctx.degraded) };

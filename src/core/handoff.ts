@@ -4,8 +4,18 @@
 // that prevents the flash — reveal-before-hide, never hide-then-reveal: on
 // `requestHandoff()` the content is considered revealed underneath the still-
 // painted overlay, the overlay is retained until `notifyPainted()` fires or
-// `handoffTimeoutMs` elapses, then cross-fades out over `handoffFadeMs`. There
-// is no instant at which neither the skeleton nor the successor is painted.
+// `handoffTimeoutMs` elapses, then is REMOVED after a further `handoffFadeMs`.
+// There is no instant at which neither the skeleton nor the successor is
+// painted.
+//
+// `handoffFadeMs` is NOT a fade, despite its name (corrected 2026-08-30 after a
+// fresh-eyes review). Nothing on either platform's teardown path animates
+// opacity or sets a transition: the timer elapses, the phase flips to
+// `'content'`, and the overlay is removed in a single frame. The name and the
+// word "cross-fade" survived from a design that was never built, and a
+// consumer tuning this value is tuning how much longer a fully opaque skeleton
+// stays on screen, not how gradually it disappears. The anti-flash guarantee
+// above is real and independent of it; only the fade is fiction.
 //
 // Observability: this module produces the `handoffMs`/`handoffReason` split
 // that `assembleMetrics` (task 1.8) folds into `onMetrics` — makes REQ-IMG-2
@@ -34,7 +44,8 @@ export interface ImageLeafDescriptor {
 export interface HandoffOptions {
   /** upper bound on how long the skeleton is retained past isLoading=false */
   readonly handoffTimeoutMs: number; // default 250 (ASSUMPTION plan.md §11.8)
-  /** overlay cross-fade duration once the successor has painted */
+  /** how much longer the overlay stays fully painted once the successor has
+   *  painted. Not a fade — see this file's header. */
   readonly handoffFadeMs: number; // default 120 (ASSUMPTION plan.md §11.8)
 }
 
@@ -105,11 +116,31 @@ export function createHandoffController(
     }
   }
 
-  /** Begins the cross-fade for a known outcome. Cancels a still-pending wait
+  /** Commits the cycle's outcome and starts the removal timer. (Named for a
+   *  cross-fade that does not exist — see the header.) Cancels a still-pending wait
    *  timeout (the successor-painted-before-timeout case); a no-op when there
    *  was none (the immediate no-successor case, or the timeout callback
-   *  itself, which is already past firing). */
+   *  itself, which is already past firing).
+   *
+   *  Adversarial-review defect (2026-08-29): idempotent for the WHOLE cycle.
+   *  `notifyPainted()`'s own `phase !== 'placeholder'` guard cannot close
+   *  this window, because `phase` stays `'placeholder'` for the full
+   *  `handoffFadeMs` removal delay — so a teardown already begun for one reason
+   *  could be re-begun for another (timeout fires, THEN the successor
+   *  paints; or `expectsSuccessor: false` fades immediately and a paint
+   *  signal lands mid-fade). The live `handoffReason` getter then reported a
+   *  different outcome than `settled` resolved with, because `settleResolve`
+   *  captures its own `reason` argument while the getter reads the last
+   *  write — and a second, orphaned fade timer rewrote `handoffMs` and
+   *  re-notified every subscriber after teardown. `web/AutoSkeleton.tsx`'s
+   *  `usePaintDetectionHeuristic` guarded exactly ONE sub-case of this at
+   *  its own call site; this is the same fix at the source, covering every
+   *  caller on every platform. `handoffReason` is the cycle's commit point:
+   *  once set, the outcome is decided. */
   function beginFade(reason: HandoffReason): void {
+    if (handoffReason !== undefined) {
+      return;
+    }
     handoffReason = reason;
     if (waitTimeoutHandle !== undefined) {
       clearTimeout(waitTimeoutHandle);

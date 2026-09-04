@@ -16,8 +16,8 @@
 // contract, and is never called by this renderer's own mount/update path).
 
 import type { ClockPhase, Renderer, RenderProps, RendererHandle, ShimmerClock } from '../core/contracts';
+import { effectiveAnimation, PULSE_MIN_OPACITY } from '../core/animation';
 import { buildClipPath } from '../core/clip-path';
-import type { AnimationKind } from '../core/types';
 import { decodeWire } from '../core/wire';
 
 const STYLE_ELEMENT_ID = 'autoskeleton-css-renderer-styles';
@@ -52,13 +52,24 @@ export function buildShimmerStylesheet(): string {
     '.askl-anim-shimmer .askl-shimmer-layer{animation-name:askl-shimmer;',
     'animation-timing-function:linear;animation-iteration-count:infinite;',
     'animation-duration:var(--askl-speed, 1400ms);}',
-    '.askl-anim-pulse .askl-overlay-base{animation-name:askl-pulse;',
+    // `core/animation.ts`'s 'pulse': the HIGHLIGHT breathes in place. It is
+    // deliberately the same element the shimmer travels on, because that is
+    // the only element carrying the highlight — the previous rule targeted
+    // `.askl-overlay-base`, a div with no background of any kind, so the
+    // animation ran perfectly and moved zero pixels. Pulsing `.askl-overlay`
+    // instead would be the OTHER wrong answer: it holds the opaque base fill,
+    // so the whole skeleton would go translucent at the trough and let real
+    // content bleed through (the mistake `ios/AutoskeletonRendererTier1.swift`
+    // `applyPulse()`'s own doc comment already warns about). With no transform
+    // applied, the layer's `left:-50%;width:200%` box puts the gradient's 50%
+    // stop exactly at the overlay's centre — the named resting position every
+    // renderer parks at.
+    '.askl-anim-pulse .askl-shimmer-layer{animation-name:askl-pulse;',
     'animation-timing-function:ease-in-out;animation-iteration-count:infinite;',
     'animation-duration:var(--askl-speed, 1400ms);}',
-    '.askl-anim-pulse .askl-shimmer-layer{animation:none;opacity:0;}',
     '.askl-anim-none .askl-shimmer-layer{animation:none;opacity:0;}',
     '@keyframes askl-shimmer{from{transform:translateX(-50%);}to{transform:translateX(50%);}}',
-    '@keyframes askl-pulse{0%,100%{opacity:0.45;}50%{opacity:1;}}',
+    `@keyframes askl-pulse{0%,100%{opacity:${PULSE_MIN_OPACITY};}50%{opacity:1;}}`,
   ].join('');
 }
 
@@ -132,26 +143,36 @@ export function createShimmerClock(periodMs: number = DEFAULT_PERIOD_MS): Shimme
   };
 }
 
-function effectiveAnimation(animation: AnimationKind, reducedMotion: boolean): AnimationKind {
-  if (!reducedMotion) {
-    return animation;
-  }
-  // REQ-A11Y-3 / spec §1.10: reduce-motion degrades shimmer to pulse; 'none'
-  // stays 'none'. No transform-based shimmer sweep is ever applied here.
-  return animation === 'none' ? 'none' : 'pulse';
-}
-
 function applyGeometry(overlay: HTMLDivElement, props: RenderProps): void {
   const decoded = decodeWire(props.snapshot.data);
+
+  // A snapshot with no shapes must paint NOTHING, and saying so explicitly is
+  // load-bearing rather than defensive. `buildClipPath([])` returns
+  // `path("")` — `[].join(' ')` is the empty string — which is not a valid
+  // `clip-path` value, so Chromium drops the declaration and the property
+  // computes to `none`. With no clip, `.askl-overlay`'s `inset: 0` plus its
+  // `background-color: var(--skl-base, …)` fills the ENTIRE wrapper with the
+  // base colour.
+  //
+  // That is worst precisely where it is most likely: the empty-snapshot path
+  // is the one `fallback` exists to cover, so a consumer's hand-authored
+  // fallback was being painted over by a plain grey block — measured at
+  // 296x111 with `computed clip-path: none` while the fallback sat underneath
+  // it. Found by `examples/vite`'s `#/cold-fallback` demo, 2026-09-02.
+  if (decoded.shapes.length === 0) {
+    overlay.style.display = 'none';
+    return;
+  }
+  overlay.style.display = '';
+
   const path = buildClipPath(
     decoded.shapes.map((s) => ({ x: s.x, y: s.y, w: s.w, h: s.h, r: s.r })),
     {
       defaultRadius: props.theme.defaultRadius,
       // Live web measurement already reflects the page's actual direction
-      // (getBoundingClientRect returns final visual coordinates), so no
-      // additional RTL mirroring is applied here — see dom-sensor.ts's
-      // module doc. `buildClipPath`'s mirroring exists for platforms/replays
-      // where shapes are captured in a canonical space.
+      // (real laid-out geometry, mirrored by the browser), so no additional
+      // RTL mirroring is applied here. `buildClipPath`'s mirroring exists
+      // for platforms/replays captured in a canonical space.
       direction: 'ltr',
       containerWidth: props.snapshot.frameWidth,
     },
@@ -161,12 +182,34 @@ function applyGeometry(overlay: HTMLDivElement, props: RenderProps): void {
   overlay.style.clipPath = path;
 }
 
-function applyAnimation(overlay: HTMLDivElement, shimmerLayer: HTMLDivElement, props: RenderProps): void {
+/** ADR-8 phase lock. Writing a negative `animation-delay` seeks the element's
+ *  CSS animation to the shared clock's current phase, so a skeleton mounting
+ *  now lands mid-sweep exactly where every already-mounted skeleton is.
+ *
+ *  This is correct ONLY at the instant the element's animation starts, where
+ *  the browser sets `startTime ≈ now` and effective progress is therefore
+ *  `(t − clockStart) mod period`. `startTime` is never re-set afterwards, so
+ *  re-deriving the delay from a fresh `Date.now()` on an update subtracts the
+ *  elapsed time a SECOND time and the sweep teleports — measured at 287px
+ *  (~72% of a 400px overlay, period 1400ms) when it was rewritten 500ms after
+ *  mount, which also drops that instance out of phase with its siblings, i.e.
+ *  destroys the one guarantee the shared clock exists to provide. It used to
+ *  live inside `applyAnimation()`, which `setAnimation()` also calls on ANY
+ *  provider re-render (see `useOverlayRenderer` in `web/AutoSkeleton.tsx`), so
+ *  the jump was on an ordinary steady-state path rather than an edge case.
+ *  Hence: called from `mount()` and nowhere else. */
+function anchorPhase(shimmerLayer: HTMLDivElement, props: RenderProps): void {
+  const delayMs = props.clock.phaseOffsetMs(Date.now());
+  shimmerLayer.style.animationDelay = `${-delayMs}ms`;
+}
+
+/** Everything that is safe to (re)write on every update: the animation KIND,
+ *  the period, and the theme custom properties. Deliberately does NOT touch
+ *  `animation-delay` — see `anchorPhase()` above. */
+function applyAnimation(overlay: HTMLDivElement, props: RenderProps): void {
   overlay.classList.remove('askl-anim-shimmer', 'askl-anim-pulse', 'askl-anim-none');
   overlay.classList.add(`askl-anim-${effectiveAnimation(props.animation, props.reducedMotion)}`);
   overlay.style.setProperty('--askl-speed', `${props.clock.periodMs}ms`);
-  const delayMs = props.clock.phaseOffsetMs(Date.now());
-  shimmerLayer.style.animationDelay = `${-delayMs}ms`;
 
   // REQ-THEME-1 / tasks.md 7.1: an inline style on this element beats ANY
   // stylesheet declaration of the same custom property, no matter how it
@@ -208,18 +251,20 @@ export function createCssRenderer(): Renderer<HTMLElement> {
       const overlay = document.createElement('div');
       overlay.className = 'askl-overlay';
       overlay.setAttribute('aria-hidden', 'true');
-      const baseLayer = document.createElement('div');
-      baseLayer.className = 'askl-overlay-base';
-      baseLayer.style.position = 'absolute';
-      baseLayer.style.inset = '0';
+      // `.askl-overlay-base` used to be created here. It never had a
+      // background, existed only to be the pulse's target, and therefore only
+      // ever painted nothing — deleting it removes the element AND the bytes
+      // rather than leaving a dead div in every skeleton on every page.
       const shimmerLayer = document.createElement('div');
       shimmerLayer.className = 'askl-shimmer-layer';
-      overlay.appendChild(baseLayer);
       overlay.appendChild(shimmerLayer);
       surface.appendChild(overlay);
 
       applyGeometry(overlay, initialProps);
-      applyAnimation(overlay, shimmerLayer, initialProps);
+      applyAnimation(overlay, initialProps);
+      // Mount-only, and it must stay that way: `anchorPhase`'s doc comment
+      // explains why re-running it on an update makes the sweep jump.
+      anchorPhase(shimmerLayer, initialProps);
 
       performance.mark('autoskeleton-draw-end');
       performance.measure('autoskeleton-draw', 'autoskeleton-draw-start', 'autoskeleton-draw-end');
@@ -233,7 +278,7 @@ export function createCssRenderer(): Renderer<HTMLElement> {
         },
         setAnimation(kind) {
           latest = { ...latest, animation: kind };
-          applyAnimation(overlay, shimmerLayer, latest);
+          applyAnimation(overlay, latest);
         },
         destroy() {
           overlay.remove();

@@ -37,3 +37,19 @@ export type {
   ShapeSource,
   SkeletonMetrics,
 } from './core/types';
+
+// The scoped-store surface behind `<SkeletonProvider store>` — see
+// `index.native.ts` for the full account. `MemoryShapeStore` is already in
+// this entry's transitive graph (`web/AutoSkeleton.tsx` instantiates the
+// module-level `defaultStore` from it), so naming it here adds an export
+// binding rather than a new class body; `test/packaging/web-bundle.test.ts`
+// holds the NFR-6 gzip gate that keeps that claim honest.
+export { MemoryShapeStore } from './core/snapshot';
+export type { MemoryShapeStoreOptions } from './core/snapshot';
+export type { ShapeStore } from './core/contracts';
+
+// Cross-platform radius telemetry. The same rounded view reports `measured` on
+// iOS and web but `style` on Android — all three exact, different rungs — so a
+// consumer aggregating the histogram needs this predicate rather than a single
+// bucket name. See `isExactRadiusSource`'s own doc comment.
+export { isExactRadiusSource } from './core/types';

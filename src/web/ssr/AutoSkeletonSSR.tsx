@@ -97,7 +97,6 @@ export function AutoSkeletonSSR(props: AutoSkeletonSSRProps): ReactElement {
       className="askl-overlay askl-anim-shimmer"
       style={{ position: 'relative', overflow: 'hidden' }}
     >
-      <div className="askl-overlay-base" style={{ position: 'absolute', inset: 0 }} />
       <div className="askl-shimmer-layer" />
       <span style={SR_ONLY_STYLE}>Loading</span>
     </div>

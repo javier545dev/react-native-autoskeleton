@@ -26,6 +26,11 @@ enum class AutoskeletonShapeSource(val wireValue: String) {
 enum class AutoskeletonRadiusSource(val wireValue: String) {
     MEASURED("measured"),
     OUTLINE("outline"),
+    /** Read back through `BackgroundStyleApplicator.getBorderRadius` — the same
+     *  public RN API that WROTE the radius. Distinct from OUTLINE because the
+     *  outline rung can only ever report an exact 0; anything rounded is
+     *  RADIUS_UNDEFINED there. */
+    STYLE("style"),
     RASTER_PROBE("raster-probe"),
     HINT("hint"),
     DEFAULT("default"),

@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { DegradationFlag, RadiusSource, ShapeInfo, ShapeSnapshot } from './types';
-import { RADIUS_SOURCES } from './types';
+import { isExactRadiusSource, RADIUS_SOURCES } from './types';
 import type { SerializedShapeSnapshot } from './types';
 
 // Task 1.9 (tasks.md Phase 1): consolidation only — no new logic. `types.ts`
@@ -41,13 +41,49 @@ describe('DegradationFlag — drift guard', () => {
   });
 });
 
+describe('isExactRadiusSource — the grouping the histogram already relies on', () => {
+  // WHY THIS EXISTS. `checkRadiusFallback` decides degradation with
+  // `histogram.default / total` — so the histogram has always had TWO levels: a
+  // binary exact-vs-fallback grouping that carries the meaning, and per-rung
+  // granularity layered on top for diagnostics. That grouping lived only inside
+  // one function body, so nothing in the public type said which buckets belong
+  // together.
+  //
+  // It became load-bearing when Android gained the `style` rung: for one rounded
+  // avatar, iOS and web report `measured` while Android reports `style`. All
+  // three recovered the exact authored radius — but a consumer aggregating
+  // `histogram.measured` across platforms would see Android's rounded views
+  // vanish from the bucket and conclude the radius was lost.
+  //
+  // Exporting the predicate makes cross-platform aggregation correct by
+  // construction WITHOUT collapsing the rungs, which would throw away the one
+  // signal that tells you which rung answered — and that signal is how a future
+  // RN release fixing `Outline.getRadius()` would become visible.
+  it('treats every rung that recovered a real radius as exact', () => {
+    for (const source of ['measured', 'outline', 'style', 'hint', 'raster-probe'] as const) {
+      expect(isExactRadiusSource(source), source).toBe(true);
+    }
+  });
+
+  it('treats only the default rung as a fallback', () => {
+    expect(isExactRadiusSource('default')).toBe(false);
+  });
+
+  it('classifies every member of RADIUS_SOURCES, so a new rung cannot be silently unclassified', () => {
+    const classified = RADIUS_SOURCES.filter(
+      (source) => isExactRadiusSource(source) || source === 'default',
+    );
+    expect(classified).toHaveLength(RADIUS_SOURCES.length);
+  });
+});
+
 describe('RadiusSource / RADIUS_SOURCES — stay in sync', () => {
   it('RADIUS_SOURCES enumerates every RadiusSource exactly once', () => {
     expectTypeOf<RadiusSource>().toEqualTypeOf<
-      'measured' | 'outline' | 'raster-probe' | 'hint' | 'default'
+      'measured' | 'outline' | 'raster-probe' | 'hint' | 'default' | 'style'
     >();
-    expect(RADIUS_SOURCES).toHaveLength(5);
-    expect(new Set(RADIUS_SOURCES).size).toBe(5);
+    expect(RADIUS_SOURCES).toHaveLength(6);
+    expect(new Set(RADIUS_SOURCES).size).toBe(6);
   });
 });
 

@@ -12,6 +12,7 @@
 
 import type { composeCacheKey } from '../../../src/core/cache-key';
 import type { createHintRegistry } from '../../../src/core/hint-registry';
+import type { MemoryShapeStore } from '../../../src/core/snapshot';
 import type { AnimationKind, RadiusSource, ShapeSnapshot } from '../../../src/core/types';
 import type { decodeWire, encodeWire } from '../../../src/core/wire';
 import type { createCssRenderer, createShimmerClock, buildShimmerStylesheet } from '../../../src/web/css-renderer';
@@ -40,8 +41,25 @@ export interface AutoskeletonTestGlobal {
   RADIUS_SOURCES?: readonly RadiusSource[];
 }
 
+/** Per-test control surface a spec's own mounted React tree publishes so the
+ *  Playwright side can drive it (`setLoading`) and inspect what the real
+ *  production component actually cached (`store`). Declared here rather than
+ *  cast inline in each spec, for the same reason the block above is shared. */
+export interface AutoskeletonHarness {
+  store: MemoryShapeStore;
+  setLoading: (isLoading: boolean) => void;
+  setSized: (sized: boolean) => void;
+  /** Optional, additive: `data-fallback.spec.ts` drives the `data` prop
+   *  rather than `isLoading`, and counts how often a function child actually
+   *  ran. Optional so no existing harness has to grow fields it never uses —
+   *  the same reason every field in `AutoskeletonTestGlobal` above is. */
+  setData?: (data: unknown) => void;
+  functionChildCalls?: () => number;
+}
+
 declare global {
   interface Window {
     Autoskeleton: AutoskeletonTestGlobal;
+    __autoskeletonHarness: AutoskeletonHarness;
   }
 }

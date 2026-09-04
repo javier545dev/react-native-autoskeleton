@@ -28,9 +28,17 @@ jobs:
           node-version: 22
       - run: npm ci
       - run: mkdir -p .tarball && npm pack --pack-destination ./.tarball
-      - run: npm install
-        working-directory: examples/expo
-      - run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
+      # This job is where the EINTEGRITY failure surfaced: `examples/expo`'s
+      # committed lockfile pinned the integrity of a PRE-REPACK tarball, so a
+      # runner that had just built perfectly good bytes was told they were
+      # corrupt. That pin is a hash of this repo's own build output, not a
+      # supply-chain guarantee — see `scripts/unpin-local-tarball.mjs` for the
+      # full argument. Dropping it lets npm derive the integrity from the bytes
+      # this run actually packed.
+      - name: Unpin the locally built tarball before installing (see scripts/unpin-local-tarball.mjs)
+        run: node scripts/unpin-local-tarball.mjs examples/expo
+      - name: Install examples/expo against THIS run's packed tarball
+        run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
         working-directory: examples/expo
       - name: Typecheck the worked expo-image example against real installed types
         run: npm run typecheck:docs-examples

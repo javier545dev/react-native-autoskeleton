@@ -9,12 +9,34 @@
 // is what Vitest proves, deterministically, with no React/RN runtime
 // required (ADR-4: `src/core/` has zero platform imports).
 
+import type { ShapeCacheKey } from './cache-key';
 import type { ShapeInfo } from './types';
 
-/** A never-seen `itemType` is measured from exactly one template cell, at
- *  most once (per successful measurement), ever — tracked per `itemType` so
- *  N cells binding concurrently never each schedule their own traversal
- *  (RISK-3's explicit assertion: "the traversal counter stays flat").
+/** A never-seen cell geometry is measured from exactly one template cell, at
+ *  most once (per successful measurement), ever — tracked per COMPOSITE
+ *  CACHE KEY so N cells binding concurrently never each schedule their own
+ *  traversal (RISK-3's explicit assertion: "the traversal counter stays
+ *  flat"): concurrent siblings of one list share one cache key, so RISK-3's
+ *  guarantee is exactly preserved.
+ *
+ *  Adversarial-review defect (2026-08-29): this was keyed by `itemType`
+ *  while the cache it guards is keyed by the full composite key, so one
+ *  `'measured'` mark suppressed measurement for EVERY other cache key
+ *  sharing that itemType. Two reachable consequences, both permanent for the
+ *  app session: (1) two lists with the same `itemType` but different
+ *  `skeletonKey` — the public `useSkeletonCell` API allows exactly this —
+ *  where the second never measures; (2) far more common, ANY change to a
+ *  dimension of the cache key (a rotation crossing a `bucketWidth`, a font-
+ *  scale change, an RTL flip) produces a cache MISS whose measurement the
+ *  itemType-keyed `'measured'` mark then blocks, pinning that list to
+ *  `FallbackSkeletonBlock` forever in the new configuration.
+ *
+ *  Keying by the composite key cannot cost extra traversals: a distinct
+ *  cache key is by definition distinct geometry that needs its own
+ *  measurement anyway, and the shared mark was never preventing a
+ *  traversal — it was preventing the CORRECT one. `ShapeCacheKey` is
+ *  branded, so passing a bare `itemType` here is now a compile error rather
+ *  than a silent behavioural bug.
  *  Re-measurement after cache eviction is a deliberate v1 non-goal,
  *  mirroring the LRU-eviction ASSUMPTION in plan.md §3.3 — `reset()` exists
  *  for tests and explicit invalidation only.
@@ -46,20 +68,20 @@ export type TemplateMeasurementState = 'idle' | 'scheduled' | 'measured' | 'fail
 export const MAX_MEASUREMENT_ATTEMPTS = 3;
 
 export interface TemplateRegistry {
-  stateFor(itemType: string): TemplateMeasurementState;
+  stateFor(cacheKey: ShapeCacheKey): TemplateMeasurementState;
   /** Number of `markFailed` calls recorded for this `itemType` so far
    *  (`0` for an itemType that has never failed). Pure observability seam
    *  (mirrors `TraversalCounter`'s established pattern) so the
    *  `MAX_MEASUREMENT_ATTEMPTS` ceiling is inspectable, never silent. */
-  attemptsFor(itemType: string): number;
-  markScheduled(itemType: string): void;
-  markMeasured(itemType: string): void;
+  attemptsFor(cacheKey: ShapeCacheKey): number;
+  markScheduled(cacheKey: ShapeCacheKey): void;
+  markMeasured(cacheKey: ShapeCacheKey): void;
   /** Records a "gave up" outcome — DISTINCT from `markMeasured`, never
    *  writes/implies a cache entry exists. Increments `attemptsFor`.
    *  Adversarial-review defect, 2026-08-28: the give-up branches used to
    *  call `markMeasured` with nothing cached, permanently poisoning the
    *  itemType. */
-  markFailed(itemType: string): void;
+  markFailed(cacheKey: ShapeCacheKey): void;
   /** Releases a `'scheduled'` claim back to `'idle'` WITHOUT touching
    *  `attemptsFor` — the measurement was neither a success nor a failure,
    *  it simply never got to run (the claiming cell was recycled to a
@@ -71,46 +93,46 @@ export interface TemplateRegistry {
    *  exist at all — a cancelled/recycled measurement had NO way to release
    *  its claim, permanently stranding that itemType at `'scheduled'` for
    *  the rest of the app session. */
-  releaseClaim(itemType: string): void;
+  releaseClaim(cacheKey: ShapeCacheKey): void;
   /** Reverts a single `itemType` (or, with no argument, every `itemType`)
    *  back to `'idle'`, ALSO clearing its `attemptsFor` count. Test seam and
    *  explicit-invalidation seam — unlike `releaseClaim`, this is a hard
    *  reset, not a production cancellation signal. */
-  reset(itemType?: string): void;
+  reset(cacheKey?: ShapeCacheKey): void;
 }
 
 export function createTemplateRegistry(): TemplateRegistry {
   const state = new Map<string, TemplateMeasurementState>();
   const attempts = new Map<string, number>();
   return {
-    stateFor(itemType) {
-      return state.get(itemType) ?? 'idle';
+    stateFor(cacheKey) {
+      return state.get(cacheKey) ?? 'idle';
     },
-    attemptsFor(itemType) {
-      return attempts.get(itemType) ?? 0;
+    attemptsFor(cacheKey) {
+      return attempts.get(cacheKey) ?? 0;
     },
-    markScheduled(itemType) {
-      state.set(itemType, 'scheduled');
+    markScheduled(cacheKey) {
+      state.set(cacheKey, 'scheduled');
     },
-    markMeasured(itemType) {
-      state.set(itemType, 'measured');
+    markMeasured(cacheKey) {
+      state.set(cacheKey, 'measured');
     },
-    markFailed(itemType) {
-      state.set(itemType, 'failed');
-      attempts.set(itemType, (attempts.get(itemType) ?? 0) + 1);
+    markFailed(cacheKey) {
+      state.set(cacheKey, 'failed');
+      attempts.set(cacheKey, (attempts.get(cacheKey) ?? 0) + 1);
     },
-    releaseClaim(itemType) {
-      if (state.get(itemType) === 'scheduled') {
-        state.set(itemType, 'idle');
+    releaseClaim(cacheKey) {
+      if (state.get(cacheKey) === 'scheduled') {
+        state.set(cacheKey, 'idle');
       }
     },
-    reset(itemType) {
-      if (itemType === undefined) {
+    reset(cacheKey) {
+      if (cacheKey === undefined) {
         state.clear();
         attempts.clear();
       } else {
-        state.delete(itemType);
-        attempts.delete(itemType);
+        state.delete(cacheKey);
+        attempts.delete(cacheKey);
       }
     },
   };
@@ -126,17 +148,17 @@ export interface CellBindDecision {
 }
 
 /** REQ-LIST-CELL-1 / ADR-13's direct decision function: given whether this
- *  bind's composite cache key is already cached, the itemType's current
+ *  bind's composite cache key is already cached, that KEY's current
  *  template-measurement state, and how many times it has already failed
  *  (`registry.attemptsFor`), decide whether THIS bind may schedule the
- *  itemType's deferred template measurement.
+ *  deferred template measurement for that key.
  *
  *  `'idle'` always schedules (the first-ever attempt). `'failed'` schedules
  *  again ONLY while `failedAttempts < MAX_MEASUREMENT_ATTEMPTS` — a bounded
  *  retry, never a silent infinite loop (adversarial-review defect,
  *  2026-08-28: see `MAX_MEASUREMENT_ATTEMPTS`'s own doc comment). Once
- *  exhausted, a `'failed'` itemType behaves exactly like `'measured'`:
- *  never scheduled again. */
+ *  exhausted, a `'failed'` key behaves exactly like `'measured'`: never
+ *  scheduled again. */
 export function decideCellBind(
   cacheHit: boolean,
   templateState: TemplateMeasurementState,

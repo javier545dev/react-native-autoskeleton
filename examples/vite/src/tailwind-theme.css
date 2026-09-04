@@ -1,0 +1,66 @@
+/* tasks.md 7.1 (spec REQ-THEME-1): this app's Tailwind v4 entry stylesheet.
+   Compiled by the real `@tailwindcss/vite` plugin as part of `vite build`, and
+   gated end to end by `test/web/tailwind-app-theme.spec.ts`, which asserts on
+   the PIXELS the skeleton paints — not on the tokens declared here.
+
+   Preflight is deliberately NOT imported. This is an existing, fully styled
+   demo app that adopts Tailwind for its theme system; pulling in Tailwind's
+   base reset would restyle every heading, button and list on the page, which
+   would be a real regression in the example rather than a demonstration. The
+   theme and utilities layers are the parts this app actually uses, and they
+   are what REQ-THEME-1 is about. */
+
+@layer theme, base, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* Explicit, because automatic source detection is a behaviour of the umbrella
+   `@import "tailwindcss"` we are not using here. */
+@source "./";
+
+/* spec.md §1.9's scenario allows the skeleton contract to be defined "inside
+   `@theme` OR `:root`". Tailwind v4 only preserves NAMESPACED custom
+   properties out of an `@theme` block (verified against the real compiler in
+   tasks.md 7.1: an arbitrary `--skl-highlight` key inside `@theme` is silently
+   dropped), so the tokens are declared under the `--color-*` namespace and
+   aliased onto the library's contract names at `:root` below.
+
+   Literal hexes rather than Tailwind's own palette tokens (`--color-blue-800`
+   etc.) on purpose: the default v4 palette is authored in `oklch()`, whose
+   sRGB round-trip is not byte-stable across Chromium versions. The gate must
+   fail for theming reasons, never for colour-space drift. */
+@theme {
+  --color-skl-base: #1e40af;
+  --color-skl-highlight: #f59e0b;
+  --color-skl-base-dark: #065f46;
+  --color-skl-highlight-dark: #a7f3d0;
+}
+
+/* The whole REQ-THEME-1 contract, in four declarations: `<AutoSkeleton>` is
+   given no colour prop anywhere in this app, and no `SkeletonProvider` is
+   mounted. Everything it paints resolves through these variables, and dark
+   mode is a pure cascade flip — `App.tsx`'s theme button toggles this class on
+   `<html>` and changes nothing else. */
+/* SCOPED to this demo's own subtree, not `:root` (2026-08-29). A consuming app
+   would rightly alias these globally — that IS the everyday case. But this app
+   is a showcase whose page carries eleven demos at once, and a `:root` alias
+   inherits into every one of them: the "cold load" demo painted Tailwind blue
+   instead of the library's own default, and "theming with CSS variables"
+   demonstrated nothing, because its scoped override was overriding a colour
+   that was already this one. Nine demos were quietly showing this demo's
+   theme.
+
+   The REQ-THEME-1 contract is unchanged and still exactly what is being
+   proven: `<AutoSkeleton>` is given no colour prop, no `SkeletonProvider` is
+   mounted, and everything it paints still resolves purely through the cascade
+   — just from a container instead of the document root. */
+[data-testid='themed-demo'] {
+  --skl-base: var(--color-skl-base);
+  --skl-highlight: var(--color-skl-highlight);
+}
+
+.dark [data-testid='themed-demo'] {
+  --skl-base: var(--color-skl-base-dark);
+  --skl-highlight: var(--color-skl-highlight-dark);
+}

@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "boot-smoke": "next build && echo 'next: production build succeeds with autoskeleton in the dependency tree'"
+    "capture": "autoskeleton-capture ./autoskeleton.capture-registry.json http://127.0.0.1:3000 ./generated/autoskeleton-ssr",
+    "boot-smoke": "next build && echo 'next: production build succeeds with autoskeleton in the dependency tree'",
+    "postinstall": "node ../../scripts/unpin-local-tarball.mjs"
   },
   "dependencies": {
     "autoskeleton": "file:../../.tarball/autoskeleton-0.1.0.tgz",

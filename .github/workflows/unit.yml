@@ -1,0 +1,55 @@
+name: Unit suite and typecheck
+
+# The gate that was missing.
+#
+# Before this workflow existed, no job in `.github/workflows/` ran `vitest` or
+# the root `npm run typecheck`. The only match across all five files was
+# `typecheck:docs-examples`, which covers the Expo example's doc snippets and
+# nothing in `src/`. That left 109 test files — 25 under `src/`, 84 under
+# `test/` — and both `tsc` projects enforced by nothing but a maintainer
+# remembering to run them on one laptop.
+#
+# The cost was not hypothetical. `test/packaging/workflows.test.ts` already
+# contained a block named "example apps are installed in a way a committed
+# integrity pin cannot break", written to catch exactly the lockfile drift that
+# later shipped anyway — because the guard passed locally and ran nowhere.
+#
+# WHY UBUNTU. Nothing in this suite touches a simulator, an emulator, Xcode or
+# Gradle; it is Node and a headless bundler. The macOS runners in
+# `examples.yml`, `docs.yml` and `native-matrix.yml` are billed at 10x, so
+# putting this job on ubuntu keeps the highest-value gate in the repo also the
+# cheapest one.
+#
+# WHY node-version-file. `.nvmrc` and the other workflows disagreed (v24.13.0
+# vs `node-version: 22`), and `engines.node` declares `>= 22.11.0` — a range
+# straddling the 22.12 boundary where unflagged `require(esm)` landed. Reading
+# the pinned file keeps CI on the same major the maintainer develops against;
+# `test/packaging/cjs-conditions.test.ts` is what guards the resolution
+# behaviour across that boundary.
+#
+# `npm ci` runs `prepare` (`bob build && npm run build:cli`), so `lib/` and
+# `dist-cli/` exist by the time the packaging tests read them.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  unit:
+    name: typecheck + vitest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      # Both tsc projects: the build sources and the test sources. A type error
+      # in a test file is a real failure — the tests are the specification.
+      - run: npm run typecheck
+      # The full suite. Scoping this to a path would reintroduce exactly the
+      # partial coverage this job exists to end, so it stays unscoped;
+      # `test/packaging/workflows.test.ts` asserts that it does.
+      - run: npm test

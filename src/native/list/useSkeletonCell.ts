@@ -26,7 +26,7 @@ import { useContext, type ReactNode } from 'react';
 import { I18nManager, PixelRatio, Platform, useWindowDimensions } from 'react-native';
 import { bucketWidth, composeCacheKey } from '../../core/cache-key';
 import { quantizeFontScale } from '../../core/cache-key';
-import type { ShapeSnapshot } from '../../core/types';
+import type { Direction, ShapeSnapshot } from '../../core/types';
 import { SkeletonContext } from '../AutoSkeleton';
 import { templateRegistry } from './listRuntime';
 import { useTemplateMeasurement } from './useTemplateMeasurement';
@@ -52,6 +52,12 @@ export interface UseSkeletonCellResult {
    *  flag" for the unseen-itemType path. */
   readonly isFallback: boolean;
   readonly cacheKey: string;
+  /** The writing direction `cacheKey` was composed with. Returned — rather
+   *  than left as a local — because the renderer that paints this cell's
+   *  snapshot has to sweep in the SAME direction the snapshot was measured
+   *  for, and the only way to guarantee that is to hand it the very value the
+   *  key was built from instead of letting it re-read `I18nManager`. */
+  readonly direction: Direction;
   /** Render this (if non-null) somewhere invisible while a template
    *  measurement is in flight for this itemType. */
   readonly pendingTemplateNode: ReactNode | null;
@@ -63,7 +69,7 @@ export function useSkeletonCell(options: UseSkeletonCellOptions): UseSkeletonCel
   const ctx = useContext(SkeletonContext);
   const { width: windowWidth } = useWindowDimensions();
   const widthBucket = bucketWidth(windowWidth);
-  const direction = I18nManager.isRTL ? 'rtl' : 'ltr';
+  const direction: Direction = I18nManager.isRTL ? 'rtl' : 'ltr';
   const platform: 'ios' | 'android' = Platform.OS === 'android' ? 'android' : 'ios';
 
   const cacheKey = composeCacheKey({
@@ -97,6 +103,7 @@ export function useSkeletonCell(options: UseSkeletonCellOptions): UseSkeletonCel
     cacheHit,
     isFallback: !cacheHit,
     cacheKey,
+    direction,
     pendingTemplateNode,
     templateRef,
     onTemplateLayout,

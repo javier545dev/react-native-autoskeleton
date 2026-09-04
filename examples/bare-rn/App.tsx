@@ -28,7 +28,22 @@ import {
   SafeAreaProvider,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
-import { AutoSkeleton, SkeletonCell, SkeletonList, SkeletonListFooter, templateTraversalCounter } from 'autoskeleton';
+import {
+  AutoSkeleton,
+  SkeletonCell,
+  SkeletonList,
+  SkeletonListFooter,
+  SkeletonProvider,
+  templateTraversalCounter,
+  useSkeletonCell,
+} from 'autoskeleton';
+// ADR-5/RISK-8 tier-2 opt-in, spelled exactly the way a consumer spells it.
+// The optional peers are imported in the app's own module graph, never the
+// library's — see `skiaOverlay.ts` for the full argument and the single
+// module-scope `createSkiaOverlay` call this fixture and the browsable
+// tier-2 demo both use.
+import { SKIA_OVERLAY } from './skiaOverlay';
+import { DemoGallery } from './demos/DemoGallery';
 
 /** Exported so the fixture and any future test/tooling share one source of
  *  truth for the deterministic colors the paint gate asserts against. */
@@ -36,6 +51,10 @@ export const PAINT_GATE_FIXTURE = {
   skeletonKey: 'paint-gate-card',
   labels: {
     toggle: 'paint-gate-toggle',
+    /** RISK-8 tier-detection readout. The element's accessibility label is
+     *  `paint-gate-renderer:<kind>` so a gate can assert the tier that
+     *  ACTUALLY ran without scraping visible text. */
+    renderer: 'paint-gate-renderer',
     content: 'paint-gate-content',
     text: 'paint-gate-text',
     image: 'paint-gate-image',
@@ -106,6 +125,12 @@ export const PAINT_GATE_LIST_FIXTURE = {
     // per-cell rows above — by the time the footer mounts, that itemType
     // is already cached, so the footer must resolve purely from cache.
     footerRowPrefix: 'paint-gate-list-footer-row-',
+    // 2026-08-30: the readout that makes the off-screen template's MEASURED
+    // width observable from outside the app. Reports the header itemType's
+    // cached snapshot width against the width of the very container the
+    // `SkeletonList` is mounted in — a direct parent/child pair, so the two
+    // numbers must agree.
+    templateWidth: 'paint-gate-list-template-width',
   },
   colors: {
     text: '#101010',
@@ -115,6 +140,13 @@ export const PAINT_GATE_LIST_FIXTURE = {
 
 function PaintGateScreen() {
   const [isLoading, setIsLoading] = useState(true);
+  // RISK-8's own stated detection signal: "the without-peers build asserts
+  // `renderer: 'native'` in `onMetrics`". This readout is the WITH-peers half
+  // of that matrix, surfaced through the real public `onMetrics` API — never a
+  // test-only import of the library's internal peer probe. `onMetrics` fires
+  // once the handoff settles, so this reads `pending` until the toggle is
+  // tapped, which is exactly when the paired gate reads it.
+  const [renderer, setRenderer] = useState<string>('pending');
 
   return (
     <View style={styles.screen} testID="paint-gate-root">
@@ -131,7 +163,29 @@ function PaintGateScreen() {
         </Text>
       </Pressable>
 
-      <AutoSkeleton isLoading={isLoading} skeletonKey={PAINT_GATE_FIXTURE.skeletonKey}>
+      <Text
+        accessible
+        accessibilityLabel={`${PAINT_GATE_FIXTURE.labels.renderer}:${renderer}`}
+        testID="paint-gate-renderer"
+        style={styles.toggleLabel}
+      >
+        {`renderer: ${renderer}`}
+      </Text>
+
+      {/* `skeletonOnRefresh` is REQUIRED for the toggle to show anything on a
+          SECOND load. Without it, REQ-PTR-1's stale-while-revalidate default
+          suppresses the skeleton on every load AFTER the first — deliberately,
+          so a refresh does not blank out content the reader is already looking
+          at. Opting in here is what makes the loading state observable on
+          demand, which is what a fixture needs to be able to demonstrate (and
+          is why this file could not show the empty-snapshot defect at all).
+          Matches `examples/vite/src/App.tsx`. */}
+      <AutoSkeleton
+        isLoading={isLoading}
+        skeletonKey={PAINT_GATE_FIXTURE.skeletonKey}
+        onMetrics={(m) => setRenderer(m.renderer)}
+        skeletonOnRefresh
+      >
         <View
           accessible
           accessibilityLabel={PAINT_GATE_FIXTURE.labels.content}
@@ -230,9 +284,22 @@ function ListCardContent({ accessibilityLabel }: { accessibilityLabel: string })
       accessibilityLabel={accessibilityLabel}
       style={[styles.listCard, { height: PAINT_GATE_LIST_FIXTURE.rowHeight }]}
     >
-      <View
-        style={[styles.listCardText, { backgroundColor: PAINT_GATE_LIST_FIXTURE.colors.text }]}
-      />
+      <View style={styles.listCardRow}>
+        <View
+          style={[styles.listCardAvatar, { backgroundColor: PAINT_GATE_LIST_FIXTURE.colors.accent }]}
+        />
+        {/* DELIBERATELY `flex: 1`, not a fixed pixel width (2026-08-30).
+         *  Every shape in this fixture used to carry an explicit width, which
+         *  meant the whole list paint gate was structurally blind to the ONE
+         *  authoring constraint the list API actually had: the off-screen
+         *  template container had no width of its own, so it laid out at its
+         *  INTRINSIC width and any width-inheriting child collapsed. A fixture
+         *  that never inherits a width can never observe that. This bar is the
+         *  fixture's only load-bearing width, and it is inherited. */}
+        <View
+          style={[styles.listCardText, { backgroundColor: PAINT_GATE_LIST_FIXTURE.colors.text }]}
+        />
+      </View>
       <View
         accessible
         accessibilityLabel={PAINT_GATE_LIST_FIXTURE.labels.accent}
@@ -293,8 +360,44 @@ function useTraversalCounterDisplay(): number {
   return count;
 }
 
+/** Renders the header itemType's MEASURED template width next to the width of
+ *  the container that `SkeletonList` is actually mounted in.
+ *
+ *  Why this readout exists (2026-08-30): the list paint gate could see WHAT
+ *  was painted but never at what width, and every fixture shape carried a
+ *  fixed pixel width, so a template that laid out at its intrinsic width
+ *  instead of the row's width was invisible to every assertion in the suite.
+ *  `useSkeletonCell` with no `renderTemplate` is a pure cache read — it never
+ *  claims the itemType and never schedules a traversal — so surfacing this
+ *  costs the thing under test nothing. The value is re-read on the traversal
+ *  counter's own 150ms poll, which is what re-renders this screen. */
+function TemplateWidthReadout({ containerWidth }: { containerWidth: number }) {
+  const cell = useSkeletonCell({
+    itemType: PAINT_GATE_LIST_FIXTURE.headerItemType,
+    skeletonKey: PAINT_GATE_LIST_FIXTURE.headerItemType,
+  });
+  const measured = cell.snapshot === null ? -1 : cell.snapshot.frameWidth;
+  const value = `${Math.round(measured)}/${Math.round(containerWidth)}`;
+  return (
+    <Text
+      accessible
+      // The value rides in the accessibility LABEL, exactly like
+      // `paint-gate-renderer:<kind>` above. Android could read the rendered
+      // text off the node, but iOS cannot: an explicit `accessibilityLabel`
+      // replaces the text content in the accessibility tree XCUITest queries.
+      // One encoding both gates can read beats two divergent ones.
+      accessibilityLabel={`${PAINT_GATE_LIST_FIXTURE.labels.templateWidth}:${value}`}
+      testID={PAINT_GATE_LIST_FIXTURE.labels.templateWidth}
+      style={styles.counterLabel}
+    >
+      {`templateWidth:${value}`}
+    </Text>
+  );
+}
+
 function PaintGateListScreen() {
   const traversalCount = useTraversalCounterDisplay();
+  const [headerBlockWidth, setHeaderBlockWidth] = useState(0);
 
   return (
     <View
@@ -303,18 +406,33 @@ function PaintGateListScreen() {
       testID="paint-gate-list-root"
       style={styles.screen}
     >
-      <Text
-        accessible
-        accessibilityLabel={PAINT_GATE_LIST_FIXTURE.labels.traversalCounter}
-        testID="paint-gate-list-traversal-counter"
-        style={styles.counterLabel}
-      >
-        {`traversalCount:${traversalCount}`}
-      </Text>
+      {/* Both readouts share ONE line on purpose. Every pixel assertion in
+       *  `PaintGateListInstrumentedTest` is calibrated against this screen's
+       *  vertical layout, and the dev LogBox notification bar sits over the
+       *  bottom of the viewport: adding a second full-width line pushed a
+       *  skeleton row underneath it, and the shared-clock assertion sampled
+       *  the banner's #333333 instead of the shimmer. A readout must not move
+       *  the thing it reports on. */}
+      <View style={styles.counterRow}>
+        <Text
+          accessible
+          accessibilityLabel={PAINT_GATE_LIST_FIXTURE.labels.traversalCounter}
+          testID="paint-gate-list-traversal-counter"
+          style={styles.counterLabel}
+        >
+          {`traversalCount:${traversalCount}`}
+        </Text>
+        <TemplateWidthReadout containerWidth={headerBlockWidth} />
+      </View>
       {/* task 6.1 (REQ-LIST-EMPTY-1/2): a standalone `SkeletonList`, own
        *  itemType, own first-ever template measurement — independent of
        *  the per-cell `SkeletonCell` rows in the FlashList below. */}
-      <View accessible accessibilityLabel="paint-gate-list-header-block" testID="paint-gate-list-header-block">
+      <View
+        accessible
+        accessibilityLabel="paint-gate-list-header-block"
+        testID="paint-gate-list-header-block"
+        onLayout={(event) => setHeaderBlockWidth(event.nativeEvent.layout.width)}
+      >
         <SkeletonList
           itemType={PAINT_GATE_LIST_FIXTURE.headerItemType}
           skeletonKey={PAINT_GATE_LIST_FIXTURE.headerItemType}
@@ -345,43 +463,257 @@ function PaintGateListScreen() {
   );
 }
 
+/** Tier-2 (Skia + Reanimated) fixture. Deliberately a SEPARATE screen from
+ *  `PaintGateScreen` rather than a flag on it: the existing card/list gates
+ *  must keep exercising tier-1, which is the default every consumer gets.
+ *  Turning tier-2 on app-wide would have silently deleted tier-1's on-device
+ *  coverage while every one of its gates stayed green.
+ *
+ *  Two `<AutoSkeleton>` trees, the second mounted `TIER2_FIXTURE.lateMountMs`
+ *  AFTER the first. ADR-8 says every instance shares one clock, so the two
+ *  must shimmer in lock-step despite starting at different wall-clock times —
+ *  the single most direct on-device expression of that guarantee, and one no
+ *  single-instance gate can see. */
+const TIER2_FIXTURE = {
+  skeletonKeyEarly: 'tier2-card-early',
+  skeletonKeyLate: 'tier2-card-late',
+  lateMountMs: 700,
+  labels: {
+    root: 'tier2-root',
+    toggle: 'tier2-toggle',
+    renderer: 'tier2-renderer',
+    early: 'tier2-early-block',
+    late: 'tier2-late-block',
+  },
+  colors: {
+    // Both content colours must be far outside the grey shimmer ramp AND far
+    // from each other, exactly like the tier-1 fixture's. Both have R = 0,
+    // which is 58 units below the tier-2 ramp's darkest channel — a margin no
+    // compositor noise can cross, and one that survives the RGBA/BGRA channel
+    // ambiguity the pixel reader documents.
+    early: '#0000FF',
+    late: '#00A651',
+  },
+  /** A DELIBERATELY HIGH-CONTRAST theme, passed through the ordinary public
+   *  `SkeletonProvider theme` prop.
+   *
+   *  This is not decoration. The default theme's ramp spans #E2E2E2..#F5F5F5 —
+   *  NINETEEN units per channel, end to end. Any pixel comparison with a
+   *  tolerance at all comparable to simulator compositor noise is therefore
+   *  wider than the entire signal, so two skeletons a full half-period out of
+   *  phase compare EQUAL and an ADR-8 phase gate passes vacuously. That was
+   *  observed here, not theorised: the first version of
+   *  `testTier2InstancesMountedAtDifferentTimesShimmerInPhase` passed against a
+   *  deliberately planted "ignore the shared origin" defect.
+   *
+   *  #3A3A3A..#E8E8E8 spans 174 units instead, so an out-of-phase pair differs
+   *  by an order of magnitude more than the noise floor. The period is left at
+   *  the default 1400 ms because the gate's sampling window is expressed in it. */
+  theme: {
+    baseColor: '#3A3A3A',
+    highlightColor: '#E8E8E8',
+  },
+} as const;
+
+function Tier2Block({
+  label,
+  color,
+  skeletonKey,
+  isLoading,
+  onMetrics,
+}: {
+  label: string;
+  color: string;
+  skeletonKey: string;
+  isLoading: boolean;
+  onMetrics?: (m: { renderer: string }) => void;
+}) {
+  return (
+    // `skeletonOnRefresh`: same rationale as `PaintGateScreen` above — without
+    // it REQ-PTR-1 suppresses the skeleton on every load after the first, so
+    // the tier-2 toggle could never put the Skia overlay back on screen.
+    <AutoSkeleton isLoading={isLoading} skeletonKey={skeletonKey} onMetrics={onMetrics} skeletonOnRefresh>
+      <View
+        accessible
+        accessibilityLabel={label}
+        testID={label}
+        style={[styles.tier2Block, { backgroundColor: color }]}
+      />
+    </AutoSkeleton>
+  );
+}
+
+function PaintGateTier2Screen() {
+  const [isLoading, setIsLoading] = useState(true);
+  const [lateMounted, setLateMounted] = useState(false);
+  const [renderer, setRenderer] = useState<string>('pending');
+
+  useEffect(() => {
+    const t = setTimeout(() => setLateMounted(true), TIER2_FIXTURE.lateMountMs);
+    return () => clearTimeout(t);
+  }, []);
+
+  return (
+    <SkeletonProvider overlay={SKIA_OVERLAY} theme={TIER2_FIXTURE.theme}>
+      <View style={styles.screen} testID={TIER2_FIXTURE.labels.root}>
+        <Pressable
+          accessible
+          accessibilityLabel={TIER2_FIXTURE.labels.toggle}
+          accessibilityRole="button"
+          testID={TIER2_FIXTURE.labels.toggle}
+          style={styles.toggle}
+          onPress={() => setIsLoading((v) => !v)}
+        >
+          <Text style={styles.toggleLabel}>
+            {isLoading ? 'isLoading: true (tap to reveal content)' : 'isLoading: false (tap to reload)'}
+          </Text>
+        </Pressable>
+
+        <Text
+          accessible
+          accessibilityLabel={`${TIER2_FIXTURE.labels.renderer}:${renderer}`}
+          testID={TIER2_FIXTURE.labels.renderer}
+          style={styles.toggleLabel}
+        >
+          {`renderer: ${renderer}`}
+        </Text>
+
+        <Tier2Block
+          label={TIER2_FIXTURE.labels.early}
+          color={TIER2_FIXTURE.colors.early}
+          skeletonKey={TIER2_FIXTURE.skeletonKeyEarly}
+          isLoading={isLoading}
+          onMetrics={(m) => setRenderer(m.renderer)}
+        />
+        {lateMounted ? (
+          <Tier2Block
+            label={TIER2_FIXTURE.labels.late}
+            color={TIER2_FIXTURE.colors.late}
+            skeletonKey={TIER2_FIXTURE.skeletonKeyLate}
+            isLoading={isLoading}
+          />
+        ) : null}
+      </View>
+    </SkeletonProvider>
+  );
+}
+
 function App() {
-  const isDarkMode = useColorScheme() === 'dark';
-  const [screen, setScreen] = useState<'card' | 'list'>('card');
+  const [screen, setScreen] = useState<Screen>('card');
+  // The gallery is a SEPARATE route, never a fourth entry in the `Screen`
+  // cycle: the on-device gates reach the list and tier-2 fixtures by tapping
+  // `paint-gate-screen-toggle` exactly once and exactly twice from launch, so
+  // the cycle's length and order are part of the fixture contract.
+  const [galleryOpen, setGalleryOpen] = useState(false);
 
   return (
     <SafeAreaProvider>
-      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-      <AppContent screen={screen} onToggleScreen={() => setScreen((s) => (s === 'card' ? 'list' : 'card'))} />
+      {/* `StatusBar` moved down into `AppContent` (2026-08-30): the two
+          branches paint different backgrounds, and one app-wide bar style
+          could only ever be right for one of them. See the comments there. */}
+      <AppContent
+        screen={screen}
+        onToggleScreen={() => setScreen(nextScreen)}
+        galleryOpen={galleryOpen}
+        onOpenGallery={() => setGalleryOpen(true)}
+        onCloseGallery={() => setGalleryOpen(false)}
+      />
     </SafeAreaProvider>
   );
+}
+
+type Screen = 'card' | 'list' | 'tier2';
+
+/** Cycles card -> list -> tier2 -> card. Exported shape kept trivial so the
+ *  UI tests can reach the tier-2 screen with a known number of taps. */
+function nextScreen(current: Screen): Screen {
+  if (current === 'card') return 'list';
+  if (current === 'list') return 'tier2';
+  return 'card';
 }
 
 function AppContent({
   screen,
   onToggleScreen,
+  galleryOpen,
+  onOpenGallery,
+  onCloseGallery,
 }: {
-  screen: 'card' | 'list';
+  screen: Screen;
   onToggleScreen: () => void;
+  galleryOpen: boolean;
+  onOpenGallery: () => void;
+  onCloseGallery: () => void;
 }) {
   const safeAreaInsets = useSafeAreaInsets();
+  const isDarkMode = useColorScheme() === 'dark';
+  const galleryCanvas = isDarkMode ? GALLERY_DARK_CANVAS : GALLERY_LIGHT_CANVAS;
+
+  if (galleryOpen) {
+    // The gallery is the only branch that HAS a dark mode, so it is the only
+    // branch whose status bar follows the colour scheme. Before this the bar
+    // style followed the scheme app-wide while `styles.container` was always
+    // `#ffffff`, so in dark mode the OS painted white-on-white: the clock,
+    // battery and signal simply vanished on both platforms.
+    return (
+      <View style={[styles.container, { backgroundColor: galleryCanvas, paddingTop: safeAreaInsets.top }]}>
+        {/* `backgroundColor` is gone from RN 0.87's `StatusBar` props, so the
+            bar's own fill follows the theme via the container behind it and
+            only the CONTENT style is set here. */}
+        <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
+        <DemoGallery onExit={onCloseGallery} />
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.container, { paddingTop: safeAreaInsets.top }]}>
-      <Pressable
-        accessible
-        accessibilityLabel={PAINT_GATE_LIST_FIXTURE.labels.screenToggle}
-        accessibilityRole="button"
-        testID="paint-gate-screen-toggle"
-        style={styles.screenToggle}
-        onPress={onToggleScreen}
-      >
-        <Text style={styles.toggleLabel}>{`screen: ${screen} (tap to switch)`}</Text>
-      </Pressable>
-      {screen === 'card' ? <PaintGateScreen /> : <PaintGateListScreen />}
+      {/* The fixture branch's background is ALWAYS `#ffffff` — the pixel gates
+          sample it, so it is not themed and must not become themed. A constant
+          background needs a constant bar style; `dark-content` is the one that
+          is legible on it. */}
+      <StatusBar barStyle="dark-content" />
+      {/* One 40pt row, exactly the height `screenToggle` occupied on its own
+          before the gallery existed — so every fixture below keeps its
+          previous vertical position and the pixel gates keep their framing.
+          The switcher itself is unchanged: same accessibilityLabel, same
+          testID, same cycle, still the app's first interactive element. */}
+      <View style={styles.headerRow}>
+        <Pressable
+          accessible
+          accessibilityLabel={PAINT_GATE_LIST_FIXTURE.labels.screenToggle}
+          accessibilityRole="button"
+          testID="paint-gate-screen-toggle"
+          style={styles.screenToggle}
+          onPress={onToggleScreen}
+        >
+          <Text style={styles.toggleLabel}>{`screen: ${screen} (tap to switch)`}</Text>
+        </Pressable>
+        <Pressable
+          accessible
+          accessibilityLabel="demo-open-gallery"
+          accessibilityRole="button"
+          testID="demo-open-gallery"
+          style={styles.galleryButton}
+          onPress={onOpenGallery}
+        >
+          <Text style={styles.galleryButtonLabel}>Demos ›</Text>
+        </Pressable>
+      </View>
+      {screen === 'card' ? <PaintGateScreen /> : null}
+      {screen === 'list' ? <PaintGateListScreen /> : null}
+      {screen === 'tier2' ? <PaintGateTier2Screen /> : null}
     </View>
   );
 }
+
+/** `demos/theme.ts`'s `canvas` token, duplicated as two literals rather than
+ *  imported. This file is the fixture app: it must keep building and running
+ *  even if `demos/` is deleted wholesale, and the gallery-only import surface
+ *  is deliberately one module (`DemoGallery`). Two colours are cheaper than a
+ *  second coupling. */
+const GALLERY_LIGHT_CANVAS = '#f8fafc';
+const GALLERY_DARK_CANVAS = '#0b1220';
 
 const styles = StyleSheet.create({
   flashList: {
@@ -396,11 +728,25 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 16,
   },
-  screenToggle: {
+  headerRow: {
     height: 40,
+    flexDirection: 'row',
+  },
+  screenToggle: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#cccccc',
+  },
+  galleryButton: {
+    width: 110,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#2f6fed',
+  },
+  galleryButtonLabel: {
+    color: '#ffffff',
+    fontWeight: '700',
   },
   toggle: {
     height: 48,
@@ -414,6 +760,10 @@ const styles = StyleSheet.create({
   },
   content: {
     gap: 16,
+  },
+  tier2Block: {
+    width: 260,
+    height: 120,
   },
   textBlock: {
     width: 260,
@@ -449,6 +799,10 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
   },
+  counterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   counterLabel: {
     color: '#000000',
     padding: 8,
@@ -457,13 +811,22 @@ const styles = StyleSheet.create({
     padding: 12,
     gap: 8,
   },
+  listCardRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  listCardAvatar: {
+    width: 40,
+    height: 40,
+  },
   listCardText: {
-    width: 200,
-    height: 24,
+    // Inherits the row's width. See `ListCardContent`'s own comment.
+    flex: 1,
+    height: 40,
   },
   listCardAccent: {
     width: 120,
-    height: 40,
+    height: 24,
   },
 });
 

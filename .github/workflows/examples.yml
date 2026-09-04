@@ -27,10 +27,20 @@ jobs:
           node-version: 22
       - run: npm ci
       - run: mkdir -p .tarball && npm pack --pack-destination ./.tarball
+      # `include-hidden-files` and `if-no-files-found` are BOTH load-bearing.
+      # `@actions/glob` skips every path segment matching /^\./ — including the
+      # search root it derives from the pattern's literal prefix — so
+      # `.tarball/*.tgz` matched ZERO files with the tarball sitting right
+      # there. With the default `if-no-files-found: warn` this job then passed
+      # green while uploading nothing, and all four consumers below died with
+      # "Artifact not found for name: autoskeleton-tarball", three jobs away
+      # from the cause. Gated by `test/packaging/workflows.test.ts`.
       - uses: actions/upload-artifact@v4
         with:
           name: autoskeleton-tarball
           path: .tarball/*.tgz
+          include-hidden-files: true
+          if-no-files-found: error
 
   bare-rn:
     needs: pack-library
@@ -44,7 +54,10 @@ jobs:
         with:
           name: autoskeleton-tarball
           path: .tarball
-      - run: npm install
+      - name: Unpin the locally built tarball before installing (see scripts/unpin-local-tarball.mjs)
+        run: node scripts/unpin-local-tarball.mjs examples/bare-rn
+      - name: Install against THIS run's packed tarball, never a committed integrity pin
+        run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
         working-directory: examples/bare-rn
       - name: Zero-Expo-packages guard (ADR-14 / RISK-5)
         run: |
@@ -70,7 +83,10 @@ jobs:
         with:
           name: autoskeleton-tarball
           path: .tarball
-      - run: npm install
+      - name: Unpin the locally built tarball before installing (see scripts/unpin-local-tarball.mjs)
+        run: node scripts/unpin-local-tarball.mjs examples/expo
+      - name: Install against THIS run's packed tarball, never a committed integrity pin
+        run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
         working-directory: examples/expo
       - run: npm run boot-smoke
         working-directory: examples/expo
@@ -87,7 +103,10 @@ jobs:
         with:
           name: autoskeleton-tarball
           path: .tarball
-      - run: npm install
+      - name: Unpin the locally built tarball before installing (see scripts/unpin-local-tarball.mjs)
+        run: node scripts/unpin-local-tarball.mjs examples/vite
+      - name: Install against THIS run's packed tarball, never a committed integrity pin
+        run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
         working-directory: examples/vite
       - run: npm run boot-smoke
         working-directory: examples/vite
@@ -104,7 +123,10 @@ jobs:
         with:
           name: autoskeleton-tarball
           path: .tarball
-      - run: npm install
+      - name: Unpin the locally built tarball before installing (see scripts/unpin-local-tarball.mjs)
+        run: node scripts/unpin-local-tarball.mjs examples/next
+      - name: Install against THIS run's packed tarball, never a committed integrity pin
+        run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
         working-directory: examples/next
       - run: npm run boot-smoke
         working-directory: examples/next

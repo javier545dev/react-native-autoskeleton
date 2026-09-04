@@ -9,11 +9,14 @@
 // host component (task 3.2/4.4, wired through
 // `AutoskeletonOverlayNativeComponent.ts`) instead of a CSS overlay.
 //
-// Tier selection (task 5.4/ADR-5): tier-2 (Skia+Reanimated) is used ONLY
-// when BOTH optional peers are present at a compatible version
-// (`tier2PeersAvailable()`); otherwise tier-1 (the always-available native
-// draw pass) renders, and `onMetrics.renderer` reports which one actually
-// ran (RISK-8's detection signal).
+// Tier selection (task 5.4/ADR-5): tier-2 (Skia+Reanimated) draws ONLY when
+// the consumer explicitly opted in by passing `<SkeletonProvider overlay>` an
+// overlay built with `createSkiaOverlay` from the `autoskeleton/skia` subpath;
+// otherwise tier-1 (the always-available native draw pass) renders.
+// `onMetrics.renderer` reports which one actually ran (RISK-8's detection
+// signal) — see the comment at the `rendererKind` assignment below for why
+// this is no longer a runtime peer probe, and for what the probe actually did
+// on a real device.
 //
 // `delay` (this session's brief: "the delay prop is a lie in the public
 // API"): the skeleton overlay is withheld until `delay` ms have elapsed
@@ -34,14 +37,15 @@
 import type { ComponentRef, ReactNode } from 'react';
 import {
   createContext,
+  createElement,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
 } from 'react';
 import {
-  AccessibilityInfo,
   findNodeHandle,
   I18nManager,
   PixelRatio,
@@ -51,22 +55,27 @@ import {
   View,
   type LayoutChangeEvent,
 } from 'react-native';
+import { useReducedMotion } from './reducedMotion';
+import { effectiveAnimation } from '../core/animation';
 import { bucketWidth, composeCacheKey, quantizeFontScale } from '../core/cache-key';
 import type { SkeletonTheme } from '../core/contracts';
+import { isLoadingFromProps, resolveSkeletonChildren } from '../core/data-props';
+import type { SkeletonLoadingSource } from '../core/data-props';
 import { createHandoffController, type HandoffController } from '../core/handoff';
 import { assembleMetrics } from '../core/metrics';
 import { shouldRunHandoffCycle } from '../core/refresh-gate';
-import { MemoryShapeStore } from '../core/snapshot';
+import { isEmptySnapshot, MAX_EMPTY_MEASUREMENTS, MemoryShapeStore } from '../core/snapshot';
 import { createHintRegistry, snapshotHintEntries } from '../core/hint-registry';
 import { resolveSharedShimmerPeriodMs } from '../core/shimmer-period';
 import { applyThemeOverride } from '../core/theme-override';
 import type { AnimationKind, OnMetrics, RendererKind, ShapeSnapshot } from '../core/types';
+import { decodeWire } from '../core/wire';
 import { Hint } from './Hint';
-import { Ignore } from './Ignore';
+import { AUTOSKELETON_IGNORE_MARKER_ID, Ignore } from './Ignore';
 import { nativeSensor } from './nativeSensorInstance';
 import { resolveAutoskeletonOverlayNativeComponent } from './renderer/AutoskeletonOverlayHostComponent';
 import type { NativeSensorTarget } from './sensor';
-import { tier2PeersAvailable } from './tier2/peerAvailability';
+import type { SkeletonOverlayComponent } from './overlayContract';
 import {
   AutoskeletonNativeModuleUnavailableError,
   logNativeModuleUnavailableOnce,
@@ -98,6 +107,13 @@ export interface SkeletonContextValue {
   readonly maxShapes: number;
   readonly handoffTimeoutMs: number;
   readonly handoffFadeMs: number;
+  /** ADR-5 tier-2 opt-in. `undefined` — the default — means the always-
+   *  available tier-1 native overlay draws, with no optional peer anywhere in
+   *  this module's graph. A consumer opts in by building one with
+   *  `createSkiaOverlay` from the `autoskeleton/skia` subpath and passing it
+   *  here; see `src/index.skia.ts` for why the peers are injected rather than
+   *  detected. */
+  readonly overlay?: SkeletonOverlayComponent;
 }
 
 /** Module-level default store, mirroring `web/AutoSkeleton.tsx`'s rationale
@@ -105,6 +121,10 @@ export interface SkeletonContextValue {
  *  REQ-NAV-1's hot path work without requiring every consumer to wire a
  *  `SkeletonProvider`. */
 const defaultStore = new MemoryShapeStore();
+
+/** Stable empty array so tier-1 (which never decodes shapes here) does not
+ *  churn `useMemo`'s identity on every snapshot change. */
+const EMPTY_SHAPES: readonly import('../core/types').ShapeInfo[] = [];
 const defaultContextValue: SkeletonContextValue = {
   store: defaultStore,
   theme: DEFAULT_THEME,
@@ -123,6 +143,8 @@ export interface SkeletonProviderProps {
   readonly maxShapes?: number;
   readonly handoffTimeoutMs?: number;
   readonly handoffFadeMs?: number;
+  /** ADR-5 tier-2 opt-in; see `SkeletonContextValue.overlay`. */
+  readonly overlay?: SkeletonOverlayComponent;
   readonly children?: ReactNode;
 }
 
@@ -134,12 +156,12 @@ export function SkeletonProvider(props: SkeletonProviderProps): React.JSX.Elemen
     maxShapes: props.maxShapes ?? defaultContextValue.maxShapes,
     handoffTimeoutMs: props.handoffTimeoutMs ?? defaultContextValue.handoffTimeoutMs,
     handoffFadeMs: props.handoffFadeMs ?? defaultContextValue.handoffFadeMs,
+    overlay: props.overlay,
   };
   return <SkeletonContext.Provider value={value}>{props.children}</SkeletonContext.Provider>;
 }
 
-export interface AutoSkeletonProps {
-  readonly isLoading: boolean;
+interface AutoSkeletonBaseProps {
   readonly skeletonKey: string;
   readonly itemType?: string;
   readonly animation?: AnimationKind;
@@ -161,25 +183,21 @@ export interface AutoSkeletonProps {
   readonly shimmerBaseColor?: string;
   readonly shimmerHighlightColor?: string;
   readonly defaultRadius?: number;
-  readonly children?: ReactNode;
+  /** Shown ONLY on a cold miss: this cycle would paint a skeleton, and there
+   *  is no usable measured geometry for the cache key yet. Identical prop
+   *  name, identical gate and identical semantics to `web/AutoSkeleton.tsx`
+   *  — the shared contract lives in `core/data-props.ts`, which also records
+   *  WHY the hole exists (the sensor can only measure a subtree that is
+   *  already mounted, and on the first loading cycle of a session it is not).
+   *
+   *  Omitting it changes nothing: the render gate starts with
+   *  `props.fallback !== undefined`, so no existing tree gains a `View`, and
+   *  the native paint-gate fixtures — which pass no `fallback` — cannot be
+   *  affected. */
+  readonly fallback?: ReactNode;
 }
 
-function useReducedMotion(): boolean {
-  return useSyncExternalStore(
-    (onChange) => {
-      const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', onChange);
-      return () => sub.remove();
-    },
-    () => reducedMotionSnapshot,
-    () => false,
-  );
-}
-let reducedMotionSnapshot = false;
-AccessibilityInfo.isReduceMotionEnabled?.()
-  .then((v) => {
-    reducedMotionSnapshot = v;
-  })
-  .catch(() => undefined);
+export type AutoSkeletonProps<T = unknown> = AutoSkeletonBaseProps & SkeletonLoadingSource<T, ReactNode>;
 
 /** Withholds the skeleton until `delayMs` has elapsed since this loading
  *  cycle started (see file header: "the delay prop is a lie" gap closure).
@@ -236,6 +254,7 @@ function useSkeletonDelayGate(delayMs: number, cycleId: number): boolean {
 function useColdMeasurement(
   active: boolean,
   cacheKey: string,
+  cycleId: number,
   budgetMs: number,
   maxShapes: number,
   defaultRadius: number,
@@ -306,8 +325,12 @@ function useColdMeasurement(
 
     const frameHandle = requestAnimationFrame(measure);
     return () => cancelAnimationFrame(frameHandle);
+    // `cycleId` PACES the bounded empty-measurement retry (`layoutTick` cannot:
+    // a subtree that is laid out but not yet populated fires no new layout
+    // event when its content finally arrives). Same rationale, same bound and
+    // same shared-core budget as `web/AutoSkeleton.tsx`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, cacheKey, layoutTick, platform]);
+  }, [active, cacheKey, cycleId, layoutTick, platform]);
 
   return { viewRef, onLayout };
 }
@@ -384,7 +407,7 @@ function useHandoffAndMetrics(
           handoffReason: reason,
           platform: latest.platform,
           renderer: latest.renderer,
-          radiusSourceHistogram: { measured: 0, outline: 0, 'raster-probe': 0, hint: 0, default: 0 },
+          radiusSourceHistogram: { measured: 0, outline: 0, 'raster-probe': 0, hint: 0, default: 0, style: 0 },
           degraded: latest.degraded,
           cacheKey: '',
         });
@@ -412,7 +435,7 @@ function useHandoffAndMetrics(
   }, [controller, runCycle]);
 }
 
-export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
+export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JSX.Element {
   const ctx = useContext(SkeletonContext);
   // tasks.md 7.2/7.3: per-instance overrides (plain props OR whatever a
   // theming interop resolved from `className`) layer on top of the
@@ -424,20 +447,33 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
     defaultRadius: props.defaultRadius,
   });
   const reducedMotion = useReducedMotion();
-  const requestedAnimation = props.animation ?? 'shimmer';
-  const animation: AnimationKind = reducedMotion && requestedAnimation === 'shimmer' ? 'pulse' : requestedAnimation;
+  // One shared definition of what `animation` means, rather than this
+  // component's own inline ternary. The ternary was subtly narrower than the
+  // renderers it fed: it only ever rewrote 'shimmer', which was correct, but it
+  // left every renderer downstream to re-derive the same rule for itself, and
+  // none of them agreed. See `core/animation.ts`.
+  const animation: AnimationKind = effectiveAnimation(props.animation ?? 'shimmer', reducedMotion);
   const debugOverlayEnabled = props.debugOverlay === true && typeof __DEV__ !== 'undefined' && __DEV__;
 
-  const [everShownContent, setEverShownContent] = useState(!props.isLoading);
-  if (!props.isLoading && !everShownContent) {
+  // The `data` form's two derivations, from `core/data-props.ts` — the same
+  // two calls `web/AutoSkeleton.tsx` makes, in the same order, so the two
+  // platforms cannot drift on what "loading" means or on when a function
+  // child runs. With neither `data` nor a function child (every call site
+  // that predates this change) `isLoading` is `props.isLoading` and
+  // `children` is `props.children` by reference.
+  const isLoading = isLoadingFromProps(props.isLoading, props.data);
+  const children = resolveSkeletonChildren<T, ReactNode>(props.children, props.data);
+
+  const [everShownContent, setEverShownContent] = useState(!isLoading);
+  if (!isLoading && !everShownContent) {
     setEverShownContent(true);
   }
 
-  const [wasLoading, setWasLoading] = useState(props.isLoading);
+  const [wasLoading, setWasLoading] = useState(isLoading);
   const [cycleId, setCycleId] = useState(0);
-  if (props.isLoading !== wasLoading) {
-    setWasLoading(props.isLoading);
-    if (props.isLoading && !wasLoading) {
+  if (isLoading !== wasLoading) {
+    setWasLoading(isLoading);
+    if (isLoading && !wasLoading) {
       setCycleId((c) => c + 1);
     }
   }
@@ -491,11 +527,33 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   const [coldSnapshot, setColdSnapshot] = useState<{ key: string; snapshot: ShapeSnapshot } | null>(null);
   const [nativeUnavailable, setNativeUnavailable] = useState(false);
   const coldSnapshotForKey = coldSnapshot?.key === cacheKey ? coldSnapshot.snapshot : null;
-  const snapshot = cacheHit ? cacheStateRef.current.snapshot : coldSnapshotForKey;
+  // A fresh traversal this instance just took ALWAYS wins over whatever the
+  // store answered with when this `cacheKey` was first seen — see the
+  // identically-shaped comment in `web/AutoSkeleton.tsx`.
+  const snapshot = coldSnapshotForKey ?? cacheStateRef.current.snapshot;
+
+  // A zero-shape snapshot is provisional, not the truth about this subtree:
+  // it is equally the signature of a subtree the native sensor reached before
+  // it had any laid-out, mounted content to report. Re-measure on the next
+  // loading cycle while the key's bounded, inspectable budget lasts. Shared
+  // policy with web, by construction — see `core/snapshot.ts`'s
+  // `MAX_EMPTY_MEASUREMENTS`.
+  //
+  // `noUsableGeometry` names the same fact for the `fallback` gate below, and
+  // is deliberately NOT `snapshot === null` — see the identically-shaped
+  // comment in `web/AutoSkeleton.tsx` for the reasoning (an unmounted subtree
+  // measures EMPTY, not missing, and an empty snapshot paints zero shapes).
+  const noUsableGeometry = snapshot === null || isEmptySnapshot(snapshot);
+  const remeasureEmpty =
+    snapshot !== null &&
+    noUsableGeometry &&
+    ctx.store.emptyMeasurementsFor(cacheKey) < MAX_EMPTY_MEASUREMENTS;
+  const cacheHitForCycle = cacheHit && !remeasureEmpty;
 
   const { viewRef, onLayout } = useColdMeasurement(
-    showSkeleton && !cacheHit && snapshot === null && !nativeUnavailable,
+    showSkeleton && (snapshot === null || remeasureEmpty) && !nativeUnavailable,
     cacheKey,
+    cycleId,
     ctx.budgetMs,
     ctx.maxShapes,
     theme.defaultRadius,
@@ -511,15 +569,34 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
     },
   );
 
-  const rendererKind: RendererKind = tier2PeersAvailable() ? 'skia' : 'native';
+  // ADR-5/RISK-8 tier selection. This used to be `tier2PeersAvailable()`, a
+  // runtime probe. It is now purely "did the consumer opt in", for two
+  // independent reasons, both established on a real device this session:
+  //
+  //  1. The probe could never return true. It resolved both peers through a
+  //     `require()` with a VARIABLE specifier, which Metro rewrites into an
+  //     unconditional `throw new Error('Dynamic require … not supported by
+  //     Metro')`; the probe's own `try/catch` turned that into "peer absent".
+  //     Verified with both peers genuinely installed, pods built and linked:
+  //     `onMetrics.renderer` reported `native`.
+  //  2. Even if it had worked, it selected the tier without asking. Reanimated
+  //     is a hard requirement of React Navigation, so "the peers are installed"
+  //     says nothing about whether the consumer wants a Skia skeleton.
+  //
+  // `renderer` in `onMetrics` therefore now reports the tier that ACTUALLY
+  // drew, which is what RISK-8 uses it for. Before this change it reported
+  // whatever the probe said while tier-1 drew regardless, because
+  // `SkiaShimmerOverlay` had no call site anywhere in the library.
+  const overlayRenderer = ctx.overlay;
+  const rendererKind: RendererKind = overlayRenderer ? 'skia' : 'native';
 
   useHandoffAndMetrics(
-    props.isLoading,
+    isLoading,
     controller,
     skeletonSuppressed,
     {
       snapshot,
-      cacheHit,
+      cacheHit: cacheHitForCycle,
       loadStartedAt,
       platform,
       renderer: nativeUnavailable ? 'native' : rendererKind,
@@ -530,11 +607,33 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
 
   const OverlayComponent = resolveAutoskeletonOverlayNativeComponent();
 
+  // Decoded once per snapshot, only for tier-2. Tier-1 never needs it: the
+  // native view reads geometry straight out of the native shape cache by
+  // `cacheKey` (ADR-9), so decoding here for tier-1 would be pure waste.
+  //
+  // THIS MUST STAY ABOVE THE FAIL-OPEN RETURN BELOW. It used to sit next to
+  // its only consumer in the JSX, which put it below that return and made it
+  // the one hook of fifteen that did not run unconditionally. `nativeUnavailable`
+  // starts `false` and is flipped to `true` from `useColdMeasurement`'s
+  // callback, so the render that discovers the missing module ran one hook
+  // fewer than the render before it and React aborted the tree with "Rendered
+  // fewer hooks than expected" — turning ADR-15's fail-open into a hard crash,
+  // in production only, since `__DEV__` throws the named error earlier and
+  // never reaches this branch. Both dependencies are computed well above here
+  // (`snapshot`, `overlayRenderer`), so position is the only thing that
+  // changed. `test/native/native-module-unavailable-fail-open.test.ts` mounts
+  // the component with the module absent and fails on the hook-count error if
+  // this is ever moved back down.
+  const overlayShapes = useMemo(
+    () => (overlayRenderer !== undefined && snapshot !== null ? decodeWire(snapshot.data).shapes : EMPTY_SHAPES),
+    [overlayRenderer, snapshot],
+  );
+
   // ADR-15 production fail-open: render children unwrapped, no skeleton,
   // no crash. `__DEV__` never reaches here — `useColdMeasurement`'s
   // `onNativeModuleUnavailable` callback throws first.
   if (nativeUnavailable) {
-    return <>{props.children}</>;
+    return <>{children}</>;
   }
 
   // REQ-A11Y-1 (G.15). `overlayVisible` is the single predicate for "the
@@ -554,7 +653,21 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   //    BEFORE any snapshot exists and therefore before any overlay is mounted.
   //    Hiding content that is still plainly visible on screen is the same class
   //    of bug in the other direction.
-  const overlayVisible = showSkeleton && snapshot !== null && OverlayComponent !== null;
+  //
+  // Tier-2 (`overlayRenderer`) needs no native host component: it draws with
+  // Skia into its own canvas. Tier-1 still requires `OverlayComponent`, so the
+  // two arms of this predicate differ only in what "there is something that
+  // can draw" means for the selected tier.
+  const overlayVisible = showSkeleton && snapshot !== null && (overlayRenderer !== undefined || OverlayComponent !== null);
+
+  // The cold-miss gate, term for term the same expression `web/AutoSkeleton
+  // .tsx` uses. `props.fallback !== undefined` leads, which is what makes
+  // this addition unable to touch an existing render path: with the prop
+  // omitted it is `false` in every state, and `false` mounts no `View`. The
+  // on-device paint gates and every existing fixture pass no `fallback`, so
+  // the native view hierarchy they assert against is unchanged by
+  // construction rather than by luck.
+  const showFallback = props.fallback !== undefined && showSkeleton && noUsableGeometry;
 
   // ADR-16 reveal-before-hide: children are ALWAYS mounted underneath the
   // still-painted overlay.
@@ -600,8 +713,74 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
         importantForAccessibility={overlayVisible ? 'no-hide-descendants' : 'auto'}
         style={styles.wrapper}
       >
-        {props.children}
-        {overlayVisible && (
+        {children}
+        {/* IN FLOW, above the absolutely-positioned overlays below: on a cold
+         *  miss the real content is typically not mounted yet, so an
+         *  `absoluteFill` box would have a zero-height parent to fill —
+         *  exactly the blank state `fallback` exists to escape.
+         *
+         *  The marker `nativeID`/`testID` is `<AutoSkeleton.Ignore>`'s own
+         *  channel (see `Ignore.tsx` for why BOTH props are needed: Android
+         *  reads `nativeID`, iOS reads `testID` via `accessibilityIdentifier`),
+         *  and both native sensors skip an ignored view's whole subtree. That
+         *  is not optional here: the cold traversal runs during precisely this
+         *  window, so without the marker the library would measure the
+         *  hand-authored skeleton and cache a skeleton OF a skeleton.
+         *
+         *  A real wrapping `View` — not `Ignore`'s `cloneElement` — because
+         *  `fallback` is an arbitrary `ReactNode`, not the single element child
+         *  `Children.only` demands. It is layout-visible by design (it must
+         *  occupy the space the missing content would), and it only ever exists
+         *  for a consumer who passed the prop. `accessibilityElementsHidden` /
+         *  `no-hide-descendants` keep a decorative placeholder out of the
+         *  accessibility tree; the sibling "Loading" element below is what a
+         *  screen-reader user gets instead. */}
+        {showFallback && (
+          <View
+            nativeID={AUTOSKELETON_IGNORE_MARKER_ID}
+            testID={AUTOSKELETON_IGNORE_MARKER_ID}
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+          >
+            {props.fallback}
+          </View>
+        )}
+        {overlayVisible && overlayRenderer !== undefined && snapshot !== null && (
+          <View
+            accessible={false}
+            importantForAccessibility="no-hide-descendants"
+            pointerEvents="none"
+            style={StyleSheet.absoluteFill}
+          >
+            {createElement(overlayRenderer, {
+              shapes: overlayShapes,
+              baseColor: theme.baseColor,
+              highlightColor: theme.highlightColor,
+              // ADR-8: the shared clock has ONE period, arbitrated in JS
+              // upstream of every renderer — identical call to tier-1's below.
+              speedMs: resolveSharedShimmerPeriodMs(theme.speedMs),
+              width: snapshot.frameWidth,
+              height: snapshot.frameHeight,
+              // Tier-2 used to receive ONLY `reducedMotion`, so an explicit
+              // `animation="none"` — and `"pulse"` — never reached it at all
+              // and it drew the full travelling shimmer for both. Already
+              // resolved above; `effectiveAnimation` is idempotent, so tier-2
+              // re-deriving it changes nothing.
+              animation,
+              reducedMotion,
+              // THE SAME LOCAL that went into `composeCacheKey` above, passed
+              // by reference rather than re-derived. `direction` was already
+              // part of the cache key — an RTL snapshot is different geometry
+              // — but no renderer read it, so the highlight swept
+              // left-to-right for an RTL reader too. Reusing the local (rather
+              // than having each renderer ask the platform) is what makes "the
+              // sweep's direction and the snapshot's direction are the same
+              // value" true by construction instead of by agreement.
+              direction,
+            })}
+          </View>
+        )}
+        {overlayVisible && overlayRenderer === undefined && OverlayComponent !== null && (
           <OverlayComponent
             cacheKey={cacheKey}
             baseColor={theme.baseColor}
@@ -616,6 +795,11 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
             speedMs={resolveSharedShimmerPeriodMs(theme.speedMs)}
             animation={animation}
             reducedMotion={reducedMotion}
+            // Same local, same reason as the tier-2 arm above. The prop is
+            // named `writingDirection` on the native side only because
+            // `direction` is already Yoga's — see the spec file for the
+            // collision this avoids.
+            writingDirection={direction}
             debugOverlay={debugOverlayEnabled}
             accessible={false}
             importantForAccessibility="no-hide-descendants"
@@ -647,7 +831,14 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
        *  nothing. `pointerEvents="none"` keeps it out of the touch path.
        *  Deliberately no `testID`: it is identified by the string a screen reader
        *  actually speaks, so no production identifier exists purely for a test. */}
-      {overlayVisible && (
+      {/* `|| showFallback` (parity with web, which reaches this state already):
+       *  web's `role="status"` host is gated on `showSkeleton`, so it announces
+       *  during a cold miss whether or not geometry exists. Native's gate is
+       *  `overlayVisible`, which is false while a `fallback` is the only thing
+       *  painted — a screen-reader user would get silence in front of a visible
+       *  placeholder. `showFallback` is false whenever the prop is omitted, so
+       *  no existing tree changes. */}
+      {(overlayVisible || showFallback) && (
         <View
           accessible
           accessibilityLabel={LOADING_ACCESSIBILITY_LABEL}

@@ -93,3 +93,24 @@ describe('buildClipPath — RTL mirroring', () => {
     expect(rtl).toBe('path("M140 0H190V20H140Z")');
   });
 });
+
+describe('buildClipPath — the empty list', () => {
+  // This case had no coverage until 2026-09-02, and the gap had a visible
+  // consequence. `[].join(' ')` is the empty string, so an empty rect list
+  // produces `path("")` — not a valid `clip-path` value. Chromium drops the
+  // declaration, the property computes to `none`, and an unclipped
+  // `.askl-overlay` (which carries `inset: 0` and a `--skl-base` background)
+  // fills the whole wrapper with a grey block. That is exactly the
+  // empty-snapshot path `fallback` exists to cover, so the consumer's
+  // fallback was being painted over.
+  //
+  // The renderer now refuses to paint a shapeless overlay
+  // (`src/web/css-renderer.ts`'s `applyGeometry`), which is where the fix
+  // belongs — "no shapes" is a rendering decision, not a path-syntax one.
+  // This test pins the input that made it necessary, so the next reader knows
+  // the string is degenerate rather than assuming it is a valid empty clip.
+  it('produces a syntactically empty path — callers must not hand it to clip-path', () => {
+    const path = buildClipPath([], { defaultRadius: 0, direction: 'ltr', containerWidth: 100 });
+    expect(path).toBe('path("")');
+  });
+});

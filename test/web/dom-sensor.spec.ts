@@ -11,7 +11,7 @@
 
 import path from 'node:path';
 import { expect, test as base } from '@playwright/test';
-import { loadHarness } from './helpers/page';
+import { expectCloseTo, GEOMETRY_TOLERANCE_PX, loadHarness } from './helpers/page';
 
 const ENTRY = path.join(__dirname, 'helpers/dom-sensor-entry.ts');
 
@@ -41,7 +41,7 @@ const test = base.extend<{ measure: (bodyHtml: string, opts?: MeasureOpts) => Pr
           collectDebugSidecars: options.collectDebugSidecars ?? true,
         });
         if (result === null) {
-          return { shapes: null, degraded: [], traversalMs: 0, hasProfileMarks: false };
+          return { shapes: null, frame: null, degraded: [], traversalMs: 0, hasProfileMarks: false };
         }
         const decoded = decodeWire!(result.snapshot.data);
         const marks = performance.getEntriesByName('autoskeleton-traversal', 'measure');
@@ -50,6 +50,7 @@ const test = base.extend<{ measure: (bodyHtml: string, opts?: MeasureOpts) => Pr
           : undefined;
         return {
           shapes: decoded.shapes.map((s) => ({ x: s.x, y: s.y, w: s.w, h: s.h, r: s.r })),
+          frame: { w: result.snapshot.frameWidth, h: result.snapshot.frameHeight },
           degraded: result.degraded,
           traversalMs: result.traversalMs,
           hasProfileMarks: marks.length > 0,
@@ -70,6 +71,7 @@ interface MeasureOpts {
 
 interface MeasureResult {
   readonly shapes: { x: number; y: number; w: number; h: number; r: number }[] | null;
+  readonly frame: { w: number; h: number } | null;
   readonly degraded: readonly string[];
   readonly traversalMs: number;
   readonly hasProfileMarks: boolean;
@@ -155,6 +157,50 @@ test.describe('DOM sensor — container-vs-leaf resolution (spec §1.1)', () => 
     for (const shape of shapes!) {
       expect(shape.w).toBeLessThan(300);
     }
+  });
+
+  // The rule's THIRD branch, and the one a consumer is most likely to hit
+  // without knowing it exists. Gated in both directions in the same test so the
+  // ONLY difference between "nothing" and "a shape" is the background, which is
+  // exactly the claim.
+  //
+  // Stated as a decision rather than an accident (2026-08-30). It was
+  // challenged as a possible defect, because a subtree written the natural
+  // way — `{data !== null && <img />}` — is empty while loading and its sized
+  // wrapper looks like the thing a skeleton should cover. It is not a defect: a
+  // non-transparent background is the only observable difference between a box
+  // that is content and a box that is structure, and transparent sized boxes
+  // are how layouts express spacers, flex fillers and gap shims. Emitting a
+  // shape for them would paint blocks over the gaps in every loading screen.
+  // The consumer-side answer is an always-mounted opaque slot — see
+  // `docs/image-pipeline.md`. Mirrored on native by the shared
+  // `container-rule-sized-but-transparent` fixture.
+  test('a sized but transparent container with no leaves contributes nothing, and the same box with a background contributes one shape', async ({
+    measure,
+  }) => {
+    const transparent = await measure(
+      `<div id="root" style="position:relative;width:300px;height:200px;">
+         <div style="width:180px;height:180px;"></div>
+       </div>`,
+    );
+    expect(
+      transparent.shapes,
+      'a box that reserves layout space but paints nothing, holding no detectable leaf, must ' +
+        'contribute no shape — the skeleton is derived from what is rendered',
+    ).toHaveLength(0);
+
+    const opaque = await measure(
+      `<div id="root" style="position:relative;width:300px;height:200px;">
+         <div style="width:180px;height:180px;background:#00ff00;"></div>
+       </div>`,
+    );
+    expect(
+      opaque.shapes,
+      'the identical box with a non-transparent background is content, not structure, so it ' +
+        'contributes its own shape',
+    ).toHaveLength(1);
+    expect(opaque.shapes![0]!.w).toBeCloseTo(180, 0);
+    expect(opaque.shapes![0]!.h).toBeCloseTo(180, 0);
   });
 
   test('a container with no detectable leaves renders its own shape instead', async ({ measure }) => {
@@ -333,6 +379,116 @@ test.describe('DOM sensor — overflow clipping (text-overflow ellipsis leak fix
   });
 });
 
+test.describe('DOM sensor — overflow clipping applies to NON-text leaves too (carousel leak)', () => {
+  // 1x1 transparent PNG. Explicit width/height means layout does not depend on
+  // the decode, but a real `src` keeps this an ordinary <img> leaf rather than
+  // a broken-image special case.
+  const PIXEL =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+
+  /** A 100px-wide horizontally scrollable strip holding three 100px items, so
+   *  items 2 and 3 are laid out entirely outside the strip's visible box.
+   *  `getBoundingClientRect()` still reports their full laid-out position —
+   *  which is exactly the leak under test. */
+  const carousel = (items: string): string =>
+    `<div id="root" style="position:relative;width:300px;">
+       <div style="width:100px;height:60px;overflow-x:auto;overflow-y:hidden;white-space:nowrap;font-size:0;">${items}</div>
+     </div>`;
+
+  const IMG = `<img src="${PIXEL}" style="width:100px;height:60px;display:inline-block;vertical-align:top;">`;
+  const INPUT = `<input style="width:100px;height:60px;display:inline-block;vertical-align:top;border:0;padding:0;">`;
+  const BLOCK = `<div style="width:100px;height:60px;display:inline-block;vertical-align:top;background:#333;"></div>`;
+
+  test('an off-screen image inside an overflow-x:auto strip produces no shape outside the strip box', async ({
+    measure,
+  }) => {
+    const { shapes } = await measure(carousel(IMG + IMG + IMG));
+    expect(shapes!.length).toBeGreaterThan(0);
+    for (const shape of shapes!) {
+      expect(shape.x + shape.w).toBeLessThanOrEqual(100 + GEOMETRY_TOLERANCE_PX);
+    }
+  });
+
+  test('the same strip of inputs is clipped identically (leaf class, not element type)', async ({ measure }) => {
+    const { shapes } = await measure(carousel(INPUT + INPUT + INPUT));
+    expect(shapes!.length).toBeGreaterThan(0);
+    for (const shape of shapes!) {
+      expect(shape.x + shape.w).toBeLessThanOrEqual(100 + GEOMETRY_TOLERANCE_PX);
+    }
+  });
+
+  test('the same strip of background blocks is clipped identically', async ({ measure }) => {
+    const { shapes } = await measure(carousel(BLOCK + BLOCK + BLOCK));
+    expect(shapes!.length).toBeGreaterThan(0);
+    for (const shape of shapes!) {
+      expect(shape.x + shape.w).toBeLessThanOrEqual(100 + GEOMETRY_TOLERANCE_PX);
+    }
+  });
+
+  test('a partially scrolled-out image keeps only its visible slice', async ({ measure }) => {
+    const { shapes } = await measure(
+      `<div id="root" style="position:relative;width:300px;">
+         <div style="width:100px;height:60px;overflow-x:auto;overflow-y:hidden;white-space:nowrap;font-size:0;">
+           <div style="width:60px;height:60px;display:inline-block;vertical-align:top;"></div>${IMG}
+         </div>
+       </div>`,
+    );
+    expect(shapes).toHaveLength(1);
+    expectCloseTo(shapes![0]!.x, 60);
+    expectCloseTo(shapes![0]!.w, 40);
+  });
+
+  // A shadow child's `parentElement` is null — its parent NODE is the
+  // `ShadowRoot`, which is not an Element — so an ancestor walk that only
+  // follows `parentElement` stops dead at the shadow boundary and never sees
+  // the host. That is the same leak as the carousel above, reached from the
+  // other side: the box that clips is real and laid out, the walk just never
+  // reaches it.
+  test('an overflow:hidden shadow HOST clips its shadow children — the clip chain crosses the shadow boundary', async ({
+    page,
+  }) => {
+    await loadHarness(
+      page,
+      ENTRY,
+      `<div id="root" style="position:relative;width:300px;">
+         <div id="host" style="width:100px;height:60px;overflow:hidden;"></div>
+       </div>`,
+    );
+    const shapes = await page.evaluate(() => {
+      document.getElementById('host')!.attachShadow({ mode: 'open' }).innerHTML =
+        '<div style="width:300px;height:60px;background:#333"></div>';
+      const { createDomSensor, createEmptyHintRegistry, composeCacheKey, decodeWire } = window.Autoskeleton;
+      const result = createDomSensor!().measure(document.getElementById('root')!, {
+        key: composeCacheKey!({
+          skeletonKey: 'shadow-clip',
+          viewportWidth: 375,
+          fontScale: 1,
+          direction: 'ltr',
+          platform: 'web',
+        }),
+        hints: createEmptyHintRegistry!(),
+        budgetMs: 50,
+        maxShapes: 60,
+        defaultRadius: 4,
+        collectDebugSidecars: false,
+      });
+      return result === null ? [] : decodeWire!(result.snapshot.data).shapes.map((s) => ({ x: s.x, w: s.w }));
+    });
+    expect(shapes).toHaveLength(1);
+    expectCloseTo(shapes[0]!.x, 0);
+    expectCloseTo(shapes[0]!.w, 100);
+  });
+
+  test('no clipping ancestor: an image keeps its full laid-out frame (no regression)', async ({ measure }) => {
+    const { shapes } = await measure(
+      `<div id="root" style="position:relative;width:300px;">${IMG}</div>`,
+    );
+    expect(shapes).toHaveLength(1);
+    expectCloseTo(shapes![0]!.w, 100);
+    expectCloseTo(shapes![0]!.h, 60);
+  });
+});
+
 test.describe('DOM sensor — budgets and observability', () => {
   test('maxShapes truncates and reports shape-cap-reached', async ({ measure }) => {
     const boxes = Array.from(
@@ -365,5 +521,91 @@ test.describe('DOM sensor — budgets and observability', () => {
   test('returns null for a zero-size target', async ({ measure }) => {
     const { shapes } = await measure(`<div id="root" style="width:0;height:0;overflow:hidden;"></div>`);
     expect(shapes).toBeNull();
+  });
+});
+
+// The sensor's output is consumed as the root's OWN coordinate space:
+// `ShapeInfo` is documented as "in the root/wrapper coordinate space, in CSS
+// px", the snapshot is cached and replayed under that assumption, and
+// `css-renderer.ts` writes `frameWidth`/`frameHeight` straight onto an
+// overlay that lives INSIDE the measured subtree. `getBoundingClientRect()`
+// does not return that space — it returns fully composed viewport
+// coordinates. Under a scaling ancestor the two differ, the scale is applied
+// once by the measurement and again by the ancestor's own transform when the
+// overlay paints, and the skeleton renders at scale**2 of the layout it is
+// supposed to cover.
+//
+// Three separate CSS mechanisms produce the same composition, which is why
+// all three are pinned here rather than only the one that was reported:
+// `transform: scale()`, the independent `scale` property (for which computed
+// `transform` is the string `'none'`, so any guard written against
+// `transform` alone silently misses it), and `zoom` (whose computed value
+// appears on the ANCESTOR, never on the measured root).
+const SCALED_CHILDREN = `<div id="a" style="width:100px;height:20px;background:#f00;"></div>
+   <div id="b" style="width:60px;height:30px;background:#00f;"></div>`;
+
+function scaledTree(wrapperStyle: string): string {
+  return `<div style="${wrapperStyle}"><div id="root" style="position:relative;width:200px;">${SCALED_CHILDREN}</div></div>`;
+}
+
+/** The untransformed layout truth of `scaledTree`: a 200x50 root holding a
+ *  100x20 box above a 60x30 one. Every scaling case must reproduce exactly
+ *  this, because that is the space the overlay is drawn in. */
+const LOCAL_SHAPES = [
+  { x: 0, y: 0, w: 100, h: 20 },
+  { x: 0, y: 20, w: 60, h: 30 },
+];
+const LOCAL_FRAME = { w: 200, h: 50 };
+
+function expectLocalGeometry(result: MeasureResult): void {
+  expect(result.shapes).not.toBeNull();
+  expect(result.shapes!.length).toBe(LOCAL_SHAPES.length);
+  LOCAL_SHAPES.forEach((expected, i) => {
+    const actual = result.shapes![i]!;
+    expectCloseTo(actual.x, expected.x, `shape ${i} x`);
+    expectCloseTo(actual.y, expected.y, `shape ${i} y`);
+    expectCloseTo(actual.w, expected.w, `shape ${i} w`);
+    expectCloseTo(actual.h, expected.h, `shape ${i} h`);
+  });
+  expectCloseTo(result.frame!.w, LOCAL_FRAME.w, 'frame width');
+  expectCloseTo(result.frame!.h, LOCAL_FRAME.h, 'frame height');
+}
+
+test.describe('DOM sensor — scaled ancestor (coordinate-space double-application)', () => {
+  test('no scaling ancestor: the baseline this whole group is measured against', async ({ measure }) => {
+    expectLocalGeometry(await measure(scaledTree('')));
+  });
+
+  test('transform: scale(2) ancestor', async ({ measure }) => {
+    expectLocalGeometry(await measure(scaledTree('transform:scale(2);transform-origin:0 0;')));
+  });
+
+  test('the independent `scale` property (computed `transform` is "none")', async ({ measure }) => {
+    expectLocalGeometry(await measure(scaledTree('scale:2;transform-origin:0 0;')));
+  });
+
+  test('zoom (computed only on the ancestor, never on the measured root)', async ({ measure }) => {
+    expectLocalGeometry(await measure(scaledTree('zoom:2;')));
+  });
+
+  test('a non-uniform scale is normalised per axis, not by one shared factor', async ({ measure }) => {
+    expectLocalGeometry(await measure(scaledTree('transform:scale(2,3);transform-origin:0 0;')));
+  });
+
+  test('a scale BELOW the measured root is real visual geometry and must survive untouched', async ({
+    measure,
+  }) => {
+    // The transform is INSIDE the traversal root, so the overlay — a sibling
+    // of the measured content, outside that transform — genuinely has to draw
+    // the child at its scaled size. Normalising here would be the same bug
+    // pointing the other way.
+    const result = await measure(
+      `<div id="root" style="position:relative;width:200px;">
+         <div style="transform:scale(2);transform-origin:0 0;width:100px;height:20px;background:#f00;"></div>
+       </div>`,
+    );
+    expect(result.shapes!.length).toBe(1);
+    expectCloseTo(result.shapes![0]!.w, 200, 'inner-transform width stays scaled');
+    expectCloseTo(result.shapes![0]!.h, 40, 'inner-transform height stays scaled');
   });
 });

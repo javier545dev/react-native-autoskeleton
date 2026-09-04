@@ -6,6 +6,24 @@ name: Playwright (web + SSR layout tests)
 # The container tag below MUST be bumped in lockstep with `@playwright/test` in
 # package.json — a drifted tag silently reintroduces the machine-variance problem
 # this pinning exists to remove.
+#
+# WHY THE EXAMPLE APPS ARE INSTALLED HERE. Three of the seventeen spec files do
+# not run against a synthetic harness — they run against a REAL consuming app,
+# on purpose, because that is the only thing that proves the shipped artifact
+# works:
+#   * `test/ssr/dashboard.spec.ts`      -> `examples/next`  (`next build && next start`)
+#   * `test/web/expo-web-export.spec.ts`-> `examples/expo`  (`expo export --platform web`)
+#   * `test/web/tailwind-app-theme.spec.ts` -> `examples/vite` (`tsc -b && vite build`)
+# With a root-only `npm ci` those three died in `beforeAll` — `spawn
+# examples/next/node_modules/.bin/next ENOENT`, "the module `expo` is not
+# installed", and `examples/vite npm run build exited with code 1`. Because each
+# of those files is `test.describe.configure({ mode: 'serial' })`, the failing
+# hook took the rest of its own file with it, which is the whole of the "3
+# failed, 12 did not run" signature (8 + 4 + 3 = 15 tests). Reproduced exactly
+# in a clean worktree with a root-only install before this step existed.
+#
+# `examples/bare-rn` is deliberately NOT installed: no Playwright spec touches
+# it, and it is the most expensive tree in the repository.
 
 on:
   pull_request:
@@ -24,6 +42,27 @@ jobs:
           node-version: 22
       - name: Install dependencies
         run: npm ci
+
+      # `npm pack` runs the `prepare` lifecycle (bob build + build:cli), so this
+      # is the real published shape of the library, built from this commit's
+      # `src/`. The three app-level specs consume it exactly as a user would.
+      - name: Pack the library the example apps will consume
+        run: mkdir -p .tarball && npm pack --pack-destination ./.tarball
+      # The committed lockfile pins the integrity of a locally built tarball —
+      # a hash of a build output, which CI can only satisfy by coincidence. See
+      # `scripts/unpin-local-tarball.mjs`.
+      - name: Unpin the locally built tarball before installing (see scripts/unpin-local-tarball.mjs)
+        run: node scripts/unpin-local-tarball.mjs examples/next examples/vite examples/expo
+      - name: Install examples/next (test/ssr/dashboard.spec.ts)
+        run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
+        working-directory: examples/next
+      - name: Install examples/vite (test/web/tailwind-app-theme.spec.ts)
+        run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
+        working-directory: examples/vite
+      - name: Install examples/expo (test/web/expo-web-export.spec.ts)
+        run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
+        working-directory: examples/expo
+
       - name: Run Playwright tests
         run: npx playwright test
       - uses: actions/upload-artifact@v4

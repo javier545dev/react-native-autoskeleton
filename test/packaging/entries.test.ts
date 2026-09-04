@@ -138,6 +138,81 @@ describe('RISK-5 packaging detector (entries.test.ts) — RED until 5.6', () => 
         expect(readFileSync(abs, 'utf8')).not.toContain('SkeletonList');
       });
 
+      // tasks.md G.17. The three assertions above make the Phase 6 list API
+      // invisible to a WEB TypeScript consumer — but only to one that
+      // actually asserts the `browser` condition, or none at all. Expo does
+      // NEITHER. `expo/tsconfig.base.json` (which every Expo app extends,
+      // including `examples/expo`) hard-sets `customConditions:
+      // ['react-native']` with no platform variation, and TypeScript has no
+      // notion of a build platform at all — one tsconfig typechecks a
+      // universal app for iOS, Android AND web at once. So in an Expo app,
+      // `import { SkeletonList } from 'autoskeleton'` resolves the NATIVE
+      // declaration file and typechecks clean, while Metro at
+      // `--platform web` resolves `index.web.js` (which does not export it)
+      // and the binding evaluates to `undefined` at runtime.
+      //
+      // Measured end to end during G.17, not inferred: `tsc --noEmit` in
+      // `examples/expo` reports zero errors for that import, `expo export
+      // --platform web` bundles successfully, and the served page reports
+      // `AutoSkeleton=function SkeletonList=undefined` with no page error.
+      //
+      // This test exists so that stops being folklore. It pins BOTH halves
+      // of the asymmetry, so a future change that alters either one (adding
+      // a web list export, or Expo dropping the unconditional
+      // `react-native` condition) fails here instead of silently changing
+      // what an Expo Web consumer experiences. spec.md §4's Expo Web row
+      // documents the consequence and the `.native.tsx` split that avoids it.
+      it('an Expo consumer gets NO compile-time signal for the native-only list API: Expo asserts react-native unconditionally, so TypeScript resolves the native declarations even for a web build', () => {
+        const expoTsconfigBase = path.join(
+          repoRoot,
+          'examples/expo/node_modules/expo/tsconfig.base.json'
+        );
+        expect(
+          existsSync(expoTsconfigBase),
+          'examples/expo has no installed expo/tsconfig.base.json to read'
+        ).toBe(true);
+        const base = JSON.parse(readFileSync(expoTsconfigBase, 'utf8')) as {
+          compilerOptions?: { customConditions?: string[] };
+        };
+        const customConditions = base.compilerOptions?.customConditions ?? [];
+        expect(
+          customConditions,
+          'Expo no longer asserts the react-native condition unconditionally — re-check spec.md §4 Expo Web'
+        ).toContain('react-native');
+        expect(
+          customConditions,
+          'Expo now asserts browser too, which would give a web consumer a real compile-time signal'
+        ).not.toContain('browser');
+
+        // Under exactly those conditions, TypeScript reaches the NATIVE
+        // declarations, which do declare the list API.
+        const asExpoTypechecks = resolveExportsTarget(conditions, [
+          ...customConditions,
+          'types',
+        ]);
+        expect(asExpoTypechecks).not.toBeNull();
+        expect(
+          readFileSync(tarballPath(asExpoTypechecks!.replace(/^\.\//, '')), 'utf8')
+        ).toContain('SkeletonList');
+
+        // ...while the JS Metro actually bundles for web does not export it,
+        // so the binding is `undefined` at runtime. Read from the packed
+        // tarball, never from `src/`.
+        const webRuntime = resolveExportsTarget(conditions, ['browser']);
+        expect(webRuntime).not.toBeNull();
+        const webSource = readFileSync(
+          tarballPath(webRuntime!.replace(/^\.\//, '')),
+          'utf8'
+        );
+        expect(webSource).not.toContain('SkeletonList');
+        // Anti-vacuity: the same read against the native runtime entry finds
+        // it, so this is not passing because the file was empty or unread.
+        const nativeRuntime = resolveExportsTarget(conditions, ['react-native']);
+        expect(
+          readFileSync(tarballPath(nativeRuntime!.replace(/^\.\//, '')), 'utf8')
+        ).toContain('SkeletonList');
+      });
+
       it('react-native and browser resolve to genuinely different declaration files', () => {
         const native = resolveExportsTarget(conditions, ['react-native', 'types']);
         const web = resolveExportsTarget(conditions, ['browser', 'types']);
@@ -445,5 +520,120 @@ describe('RISK-5 packaging detector (entries.test.ts) — RED until 5.6', () => 
       const testArtifacts = files.filter((f) => f.endsWith('.test.js') || f.endsWith('.test.d.ts'));
       expect(testArtifacts).toEqual([]);
     });
+  });
+});
+
+// A `bob build` on a clean tree failed in CI with "Found incorrect path in
+// 'main' field" — but only in one job of one run, and only sometimes. It was a
+// race, and the race was legible in bob's own source.
+//
+// `react-native-builder-bob` runs its configured targets CONCURRENTLY, and each
+// target validates one legacy entry field (utils/compile.js): with both the
+// `commonjs` and `module` variants configured, the commonjs pass validates
+// `main` and the module pass validates `module`. Validation is `require.resolve`
+// against the file on disk. So a `main` pointing into `lib/module` is checked by
+// the commonjs pass against a file the *module* pass writes — it passes only
+// when module happens to finish first. It did on every developer machine; it did
+// not on one GitHub runner.
+//
+// The whole packaging suite above validates `exports` and never read the legacy
+// fields, which is exactly why a field pointing at the wrong target's output was
+// invisible here while being the thing bob checks. This closes that: each legacy
+// field must live under the output directory of the target that validates it,
+// which makes every pass validate only its own output and removes the race by
+// construction rather than by timing.
+describe('legacy entry fields resolve within their own bob target output', () => {
+  const bobConfig = (
+    packageJson as unknown as {
+      'react-native-builder-bob'?: {
+        output?: string;
+        targets?: (string | [string, unknown])[];
+      };
+    }
+  )['react-native-builder-bob'];
+
+  const targetNames = (bobConfig?.targets ?? []).map((t) =>
+    Array.isArray(t) ? t[0] : t
+  );
+  const output = bobConfig?.output ?? 'lib';
+
+  // Mirrors compile.js's `variants.commonjs && variants.module` branch: the
+  // per-target field split only exists when BOTH variants are built. With a
+  // single variant bob validates `main` for whichever one it is, so the
+  // owner mapping below would not hold.
+  const bothVariants =
+    targetNames.includes('commonjs') && targetNames.includes('module');
+
+  const owners: { field: 'main' | 'module'; dir: string }[] = [
+    { field: 'main', dir: `${output}/commonjs` },
+    { field: 'module', dir: `${output}/module` },
+  ];
+
+  for (const { field, dir } of owners) {
+    it(`${field} points into ${dir}`, () => {
+      if (!bothVariants) return;
+      const value = (packageJson as unknown as Record<string, string>)[field];
+      // bob skips a field it has no value for, so an absent one cannot race.
+      if (value === undefined) return;
+      expect(value).toMatch(new RegExp(`^\\./${dir}/`));
+      expect(
+        existsSync(path.join(repoRoot, value)),
+        `${field} is ${value}, which does not exist — run \`bob build\``
+      ).toBe(true);
+    });
+  }
+});
+
+// THE FLOOR WAS PROVEN AT COMPILE TIME AND BROKEN AT RUNTIME.
+//
+// `examples/rn-077` exists to prove `react-native: ">=0.77.0"`, and it builds.
+// It also could not run: launching it produced
+//
+//     View config getter callback for component `div` must be a function
+//
+// because Metro on RN 0.77 bundled the WEB entry for Android. Measured, not
+// inferred — `getDefaultConfig()` in that app reports
+// `unstable_enablePackageExports: false` and
+// `resolverMainFields: ["react-native", "browser", "main"]`, and a real
+// `react-native bundle --platform android` contained
+// `lib/commonjs/index.web.js` with no `native/` module in it at all.
+//
+// With package exports off, the `exports` map is invisible. Resolution falls
+// through the legacy fields, and this package declared none of them for native,
+// so it landed on `main` — which re-exports the web build.
+//
+// CI never caught it because CI only ASSEMBLES that app. A native build links
+// Kotlin and Swift; it never asks Metro to resolve a JavaScript entry point.
+// Compiling and running are different claims and only one of them was tested.
+describe('legacy resolution for bundlers that ignore `exports`', () => {
+  const pkg = packageJson as unknown as Record<string, string | undefined>;
+
+  // React Native's own order, taken from the 0.77 app rather than assumed.
+  const METRO_MAIN_FIELDS = ['react-native', 'browser', 'main'] as const;
+
+  it('declares a top-level `react-native` field', () => {
+    expect(
+      pkg['react-native'],
+      'without this, Metro with package exports disabled falls through to `main`'
+    ).toBeDefined();
+  });
+
+  it('resolves to the NATIVE entry under Metro\'s field order, not the web one', () => {
+    // The whole defect in one assertion: walk the fields the way a resolver
+    // does and check where a native bundler actually lands.
+    const resolved = METRO_MAIN_FIELDS.map((f) => pkg[f]).find((v) => v !== undefined);
+    expect(resolved).toBeDefined();
+    expect(
+      resolved,
+      `legacy resolution lands on ${resolved}, which is not the native entry`
+    ).toMatch(/index\.native\.js$/);
+  });
+
+  it('that entry exists in the packed tarball', () => {
+    // Asserted against the PACKED artifact, not the working tree: a field
+    // pointing at a file `files` does not ship is the same outage.
+    const target = pkg['react-native'];
+    expect(target).toBeDefined();
+    expect(existsSync(path.join(PACK_EXTRACT_DIR, target as string))).toBe(true);
   });
 });

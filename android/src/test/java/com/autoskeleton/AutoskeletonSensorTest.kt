@@ -67,6 +67,22 @@ class AutoskeletonSensorTest {
         assertShapesMatch(measure("scrolled-ancestor"), "scrolled-ancestor")
     }
 
+    // MARK: - Scroll clipping
+    //
+    // The offset test above proves the sensor SUBTRACTS a scroll offset. It
+    // does not clip: a child scrolled past the viewport keeps its full frame
+    // and becomes a shape nobody can see. That is not only paint — those
+    // shapes are charged against `maxShapes`, so a long list can spend its
+    // whole budget below the fold and truncate the part actually on screen.
+    //
+    // The fixture holds all three cases on purpose. A fix that drops
+    // everything outside the viewport would pass with only the third leaf, and
+    // a fix that clips nothing would pass with only the first.
+    @Test
+    fun scrollContainerClipsChildrenToItsViewport() {
+        assertShapesMatch(measure("scroll-clipping"), "scroll-clipping")
+    }
+
     // MARK: - Container rule, both branches
 
     @Test
@@ -84,6 +100,65 @@ class AutoskeletonSensorTest {
         assertTrue(abs(shapes[0].y - expected[0].y) <= tolerance)
         assertTrue(abs(shapes[0].w - expected[0].w) <= tolerance)
         assertTrue(abs(shapes[0].h - expected[0].h) <= tolerance)
+    }
+
+    /**
+     * The container rule's THIRD branch, previously ungated on every platform
+     * even though all three implement it: a container that reserves real
+     * layout space but paints nothing of its own, and holds no detectable
+     * leaf, contributes NOTHING.
+     *
+     * Stated as a decision rather than an accident (2026-08-30). It was
+     * challenged as a possible defect, because a subtree written the natural
+     * way — `{data !== null && <Image />}` — is empty while loading, and its
+     * sized wrapper looks exactly like the thing a skeleton should cover. It
+     * is not a defect: a non-transparent background is the ONLY observable
+     * difference between a box that is content and a box that is structure,
+     * and transparent sized boxes are how every React Native layout expresses
+     * spacers, flex fillers, safe-area padding and gap shims. Emitting a shape
+     * for them would paint grey blocks over the gaps in every loading screen.
+     * The consumer-side answer is an always-mounted opaque slot, documented in
+     * `docs/image-pipeline.md`.
+     */
+    /**
+     * The iOS/Android parity case, and the one the null check could never see.
+     *
+     * `hasNonTransparentBackground` used to be `view.background != null`, justified
+     * by the fact that `BackgroundStyleApplicator.setBackgroundColor` collapses the
+     * drawable to null for a fully-transparent colour. That is true and it is
+     * incomplete: `setBorderRadius`, `setBorderWidth` and the ripple underlay ALSO
+     * create the composite drawable, with no fill whatsoever. So a
+     * `<View style={{ borderRadius: 12 }} />` spacer — no background at all —
+     * painted a grey block on Android and nothing on iOS, which reads
+     * `view.backgroundColor`'s alpha and correctly sees none.
+     *
+     * The existing `sizedButTransparent` fixture could not catch it: it goes
+     * through `setBackgroundColor`, so only the transparent-COLOUR half of the
+     * rule was ever pinned. This fixture sets a corner radius and no colour.
+     *
+     * The fixture is shared with `ios/Tests/SyntheticHierarchyBuilder.swift`, so
+     * the same JSON pins both platforms to the same answer.
+     */
+    @Test
+    fun roundedButUnfilledContainerWithNoLeavesEmitsNothing() {
+        val shapes = measure("container-rule-rounded-but-unfilled")
+        assertEquals(
+            "A rounded spacer with no fill paints nothing, so it must contribute no shape. " +
+                "RN gives it a non-null background drawable purely to carry the radius.",
+            0,
+            shapes.size,
+        )
+    }
+
+    @Test
+    fun sizedButTransparentContainerWithNoLeavesEmitsNothing() {
+        val shapes = measure("container-rule-sized-but-transparent")
+        assertEquals(
+            "A container that reserves layout space but paints nothing of its own, holding no " +
+                "detectable leaf, must contribute no shape — see this test's own doc comment.",
+            0,
+            shapes.size,
+        )
     }
 
     // MARK: - Ignore subtree

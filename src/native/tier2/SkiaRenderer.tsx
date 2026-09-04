@@ -1,183 +1,470 @@
 // src/native/tier2/SkiaRenderer.tsx
 //
-// Task 5.4 (tasks.md Phase 5) / plan.md ADR-5, RISK-8: the opt-in tier-2
-// renderer. Skia draws the union-of-rounded-rects mask (same geometry rule
-// as tier-1's `unionPath`/`AutoskeletonRendererTier1.unionPath`, brief §4)
-// with a shimmer gradient driven ENTIRELY by Reanimated shared values on
+// Task 5.4 (tasks.md Phase 5) / plan.md ADR-5, ADR-8, RISK-8: the opt-in
+// tier-2 renderer. Skia draws the union-of-rounded-rects mask (same geometry
+// rule as tier-1's `unionPath`/`AutoskeletonRendererTier1.unionPath`, brief
+// §4) with a shimmer gradient driven ENTIRELY by Reanimated shared values on
 // the UI thread — NFR-7 (zero React re-renders attributable to animation):
-// the shared value's frame-by-frame mutation never touches React state, so
-// no commit is ever scheduled by the animation itself. Per-shape stagger
-// uses `withDelay`, keyed by wire shape INDEX (plan.md §4.1: "order is
-// meaningful … the tier-2 Skia renderer staggers `withDelay` by index").
+// the shared value's frame-by-frame mutation never touches React state, so no
+// commit is ever scheduled by the animation itself.
 //
-// Neither `@shopify/react-native-skia` nor `react-native-reanimated` is
-// statically imported anywhere in this file — both are resolved via a
-// single `require()` call, gated behind `tier2PeersAvailable()`, and typed
-// against small LOCAL interfaces covering only the subset of each
-// library's API this file actually uses. This is deliberate: it keeps
-// typechecking in THIS repo (`npm run typecheck`) fully independent of
-// whether either optional peer is actually installed here (RISK-8: "the
-// default tier must work fully without either installed" — including at
-// typecheck time, not merely at runtime), at the cost of losing the
-// libraries' own richer prop types. `SkiaRenderer` is imported by
-// `AutoSkeleton.tsx` unconditionally (a static import of THIS file is
-// always safe — see below), but this file's own top-level scope never
-// requires either peer; only `mountSkiaTier2()`/`SkiaShimmerOverlay`'s
-// render body do, and only after `isAvailable()` has already confirmed
-// both peers resolve.
+// ---------------------------------------------------------------------------
+// HOW THE PEERS GET HERE, AND WHY THAT CHANGED (2026-08-29)
+// ---------------------------------------------------------------------------
+// This file used to resolve `@shopify/react-native-skia` and
+// `react-native-reanimated` through a single `require(specifier)` call with a
+// VARIABLE specifier, gated behind `tier2PeersAvailable()`. That is unusable
+// under Metro and was proven so on a real device this session: Metro's
+// transformer rewrites a dynamic `require` into
 //
-// HONESTLY SCOPED: written and typechecked without either peer installed
-// in this repo (ADR-14/RISK-8's own zero-dependency-default constraint
-// means neither ships here), and without a running Expo/bare example app
-// with the peers installed to visually verify the shimmer/stagger/morph
-// against the real library APIs. Recommended before this tier ships to
-// consumers: a follow-up pass in `examples/expo` (peers installed) to
-// confirm the exact prop names/shapes below against the installed
-// versions and correct any drift from Skia/Reanimated's real APIs.
+//     function (line) { throw new Error('Dynamic require defined at line ' +
+//                       line + '; not supported by Metro'); }(31)
+//
+// so the probe's own `try/catch` swallowed the throw and
+// `tier2PeersAvailable()` returned FALSE unconditionally — including in an app
+// with both peers genuinely installed, pods built and linked. Verified on
+// iPhone 17 / iOS 26.5 with `@shopify/react-native-skia@2.11.1`,
+// `react-native-reanimated@4.6.0` and `react-native-worklets@0.12.1`
+// installed: `onMetrics.renderer` reported `native`. Tier-2 was unreachable
+// in ANY Metro-bundled app, for every consumer, regardless of what they
+// installed.
+//
+// The peers are therefore INJECTED by the consumer now, through the
+// `autoskeleton/skia` subpath entry (`src/index.skia.ts`):
+//
+//     import * as Skia from '@shopify/react-native-skia';
+//     import Reanimated, { Easing } from 'react-native-reanimated';
+//     import { createSkiaOverlay } from 'autoskeleton/skia';
+//
+//     const overlay = createSkiaOverlay({ skia: Skia, reanimated: { ...Reanimated, Easing } });
+//     <SkeletonProvider overlay={overlay}>…</SkeletonProvider>
+//
+// That is a strict improvement on three axes at once:
+//  1. It WORKS under Metro — the peers are statically imported by the
+//     CONSUMER's own module graph, so Metro resolves and bundles them.
+//  2. It is genuinely opt-in (ADR-5, RISK-8: "tier 2 is strictly opt-in").
+//     The old probe made tier-2 turn itself on for anyone who happened to
+//     have both peers installed — and Reanimated is a hard requirement of
+//     React Navigation, so "the consumer installed Reanimated for something
+//     else" is the common case, not the exotic one. Opt-out-by-uninstall is
+//     not opt-in.
+//  3. This repo's own `tsc` and Vitest stay completely independent of whether
+//     either peer is installed HERE (RISK-8's typecheck-time constraint):
+//     nothing in this file, or anywhere in `index.native.ts`'s transitive
+//     graph, names either package. The peer surfaces below are still small
+//     LOCAL interfaces covering only what this file uses; the EXAMPLE app's
+//     own `tsc` is what checks them against the real installed packages,
+//     which is the right boundary for that check.
+//
+// ---------------------------------------------------------------------------
+// PER-SHAPE STAGGER IS STILL NOT IMPLEMENTED
+// ---------------------------------------------------------------------------
+// What ships is ONE union path and ONE gradient for the whole overlay, so
+// there is nothing per-shape to offset. plan.md §4.1's index stagger remains a
+// DROPPED FEATURE. See `staggerDelayForIndex` at the bottom of this file.
 
-import { useMemo, type ReactElement } from 'react';
-import type { Renderer, RendererHandle, RenderProps } from '../../core/contracts';
-import type { ShapeInfo } from '../../core/types';
-import { tier2PeersAvailable, type PeerRequire } from './peerAvailability';
+import { useEffect, useMemo, type ReactElement } from 'react';
+import type { AnimationKind, Direction, ShapeInfo } from '../../core/types';
+import { effectiveAnimation, PULSE_MIN_OPACITY } from '../../core/animation';
+import { tier2PhaseAt } from './shimmerOrigin';
 
 // ---------------------------------------------------------------------------
 // Minimal local surface of each optional peer's API actually used here.
 // ---------------------------------------------------------------------------
 
-interface SkiaPathModule {
-  Skia: { Path: { Make(): SkiaPathBuilder } };
-}
 interface SkiaPathBuilder {
-  addRRect(rect: unknown, dir?: number): SkiaPathBuilder;
-  addRect(rect: unknown): SkiaPathBuilder;
-}
-interface SkiaRRectModule {
-  rrect(rect: { x: number; y: number; width: number; height: number }, rx: number, ry: number): unknown;
-  rect(r: { x: number; y: number; width: number; height: number }): unknown;
+  // Signatures verified against `@shopify/react-native-skia@2.11.1`'s own
+  // `SkPath`: `addRRect(rrect: InputRRect, isCCW?: boolean)` and
+  // `addRect(rect: InputRect, isCCW?: boolean)`. They are declared exactly
+  // this way so the EXAMPLE app's `tsc` — the only place where the real
+  // package and these interfaces coexist — fails loudly on drift. It already
+  // has: `dir?: number` was wrong here and the example's typecheck said so.
+  addRRect(rrect: unknown, isCCW?: boolean): SkiaPathBuilder;
+  addRect(rect: unknown, isCCW?: boolean): SkiaPathBuilder;
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SkiaComponent = any;
-interface SkiaModule extends SkiaPathModule, SkiaRRectModule {
-  Canvas: SkiaComponent;
-  Path: SkiaComponent;
-  LinearGradient: SkiaComponent;
-  vec: (x: number, y: number) => { x: number; y: number };
+
+/** The subset of `@shopify/react-native-skia`'s module namespace this file
+ *  uses. Structural, so passing the real `import * as Skia` satisfies it. */
+export interface SkiaModule {
+  readonly Skia: { readonly Path: { Make(): SkiaPathBuilder } };
+  rrect(rect: { x: number; y: number; width: number; height: number }, rx: number, ry: number): unknown;
+  rect(x: number, y: number, width: number, height: number): unknown;
+  vec(x: number, y: number): { x: number; y: number };
+  readonly Canvas: SkiaComponent;
+  readonly Group: SkiaComponent;
+  readonly Path: SkiaComponent;
+  readonly LinearGradient: SkiaComponent;
 }
 
-interface ReanimatedModule {
-  useSharedValue<T>(initial: T): { value: T };
-  useDerivedValue<T>(updater: () => T, deps?: readonly unknown[]): { value: T };
-  withRepeat: (animation: number, count?: number, reverse?: boolean) => number;
-  withTiming: (toValue: number, config?: { duration?: number }) => number;
-  withDelay: (delayMs: number, animation: number) => number;
+export interface SharedValueLike<T> {
+  value: T;
 }
 
-function requireSkia(requireFn: PeerRequire): SkiaModule {
-  return requireFn('@shopify/react-native-skia') as SkiaModule;
+/** The subset of `react-native-reanimated`'s API this file uses. */
+export interface ReanimatedModule {
+  useSharedValue<T>(initial: T): SharedValueLike<T>;
+  useDerivedValue<T>(updater: () => T, deps?: readonly unknown[]): SharedValueLike<T>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  withRepeat: (animation: any, count?: number, reverse?: boolean) => any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  withTiming: (toValue: number, config?: { duration?: number; easing?: any }) => any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  withSequence: (...animations: any[]) => any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  withDelay: (delayMs: number, animation: any) => any;
+  // METHOD syntax, not a property with a function type, on purpose: TypeScript
+  // checks method parameters bivariantly, so the real
+  // `cancelAnimation<T>(sv: SharedValue<T>)` — whose parameter has strictly
+  // MORE members than `SharedValueLike` — remains assignable here. A property
+  // declaration would be checked contravariantly under `strictFunctionTypes`
+  // and reject it, forcing this library to re-declare Reanimated's whole
+  // `SharedValue` interface just to call one function.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  cancelAnimation(sharedValue: SharedValueLike<any>): void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  readonly Easing: { readonly linear: any };
 }
-function requireReanimated(requireFn: PeerRequire): ReanimatedModule {
-  return requireFn('react-native-reanimated') as ReanimatedModule;
+
+export interface Tier2Peers {
+  readonly skia: SkiaModule;
+  readonly reanimated: ReanimatedModule;
 }
 
 // ---------------------------------------------------------------------------
-// Renderer<TSurface> metadata adapter (mirrors renderer/tier1.ts)
+// The drive animation
 // ---------------------------------------------------------------------------
 
-/** `Renderer.isAvailable()` returns false when either optional peer is
- *  absent or version-mismatched — silent tier-1 fallback (ADR-5/RISK-8).
- *  `mount()` is a documented no-op for the same reason `tier1.ts`'s is:
- *  actual mounting is `<SkiaShimmerOverlay>` rendered directly as JSX by
- *  `AutoSkeleton.tsx`, not an imperative bridge call. */
-export function createSkiaTier2Renderer(requireFn?: PeerRequire): Renderer<never> {
-  return {
-    kind: 'skia',
-    supportsRadius: true,
-    isAvailable(): boolean {
-      return tier2PeersAvailable(requireFn);
-    },
-    mount(_surface: never, _props: RenderProps): RendererHandle {
-      return {
-        update: () => undefined,
-        setAnimation: () => undefined,
-        destroy: () => undefined,
-      };
-    },
-  };
+const STAGGER_STEP_MS = 40;
+
+/** Builds the shimmer driver: a LINEAR SAWTOOTH from 0 to 1 with period
+ *  `speedMs`, joined at `phase01` so it is already in phase with every other
+ *  tier-2 instance in this JS context (ADR-8).
+ *
+ *  Every clause here is a deliberate correction of a divergence from tier-1
+ *  that the previous implementation carried, each independently observable:
+ *
+ *  1. **Sawtooth, not triangle.** The old code used
+ *     `withRepeat(withTiming(1, ...), -1, true)` (the third argument is `reverse`), which is a
+ *     TRIANGLE wave. Tier-1 is a sawtooth: `ios/AutoskeletonRendererTier1.swift`
+ *     `applyShimmer()` sets `fromValue = -width`, `toValue = width`,
+ *     `repeatCount = .infinity` and never sets `autoreverses`. A triangle
+ *     sweeps the highlight back the way it came; a sawtooth always sweeps the
+ *     same direction. Different animation, not a different phase of the same one.
+ *  2. **Period `speedMs`, not `2 × speedMs`.** An auto-reversing repeat takes
+ *     two `speedMs` legs to return to its start, so the old tier-2 ran at
+ *     exactly half tier-1's rate for the same `theme.speedMs`.
+ *  3. **Linear.** `withTiming`'s default easing is `Easing.inOut(Easing.quad)`
+ *     (verified in `react-native-reanimated@4.6.0`, `src/animation/timing.ts`:
+ *     `easing: Easing.inOut(Easing.quad)` in `defaultConfig`), while a
+ *     `CABasicAnimation` with no `timingFunction` paces linearly. The old code
+ *     passed no easing, so the two tiers accelerated differently even where
+ *     they agreed on direction.
+ *
+ *  The `withTiming(0, { duration: 0 })` head of the repeated sequence is the
+ *  sawtooth's instantaneous flyback. It is needed because `withRepeat`'s
+ *  non-reversing branch restarts each repetition from `animation.startValue`
+ *  — the value the REPEAT itself started at — and that value is 1 here, since
+ *  the repeat is chained after the partial first leg below. Snapping to 0
+ *  first makes every repetition a full 0 -> 1 sweep regardless of what the
+ *  repeat inherited. A zero-duration `withTiming` completes on its first frame
+ *  (`timing.ts`: `if (runtime >= config.duration)` with `runtime` 0 and
+ *  `duration` 0), so it costs no visible time.
+ *
+ *  Exported standalone so its SHAPE is unit-testable without a React renderer
+ *  that runs effects — this repo has none under Vitest (node environment,
+ *  jsdom banned project-wide). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function createDriveAnimation(reanimated: ReanimatedModule, speedMs: number, phase01: number): any {
+  const linear = reanimated.Easing.linear;
+  const fullCycle = reanimated.withRepeat(
+    reanimated.withSequence(
+      reanimated.withTiming(0, { duration: 0 }),
+      reanimated.withTiming(1, { duration: speedMs, easing: linear }),
+    ),
+    -1,
+    false,
+  );
+  // Already at the top of a cycle: no partial leg needed, and none must be
+  // emitted — a zero-duration leg to 1 would be an instant visible jump.
+  if (!(phase01 > 0)) {
+    return fullCycle;
+  }
+  // Finish the cycle already in progress at the shared clock's current phase,
+  // then hand over to the aligned repeat. The caller seeds `drive.value` to
+  // `phase01` first, so this leg runs from `phase01` to 1 over exactly the
+  // time the shared wave has left in its current period.
+  return reanimated.withSequence(
+    reanimated.withTiming(1, { duration: speedMs * (1 - phase01), easing: linear }),
+    fullCycle,
+  );
+}
+
+/** Where the highlight RESTS when it is not travelling.
+ *
+ *  `gradientStart`/`gradientEnd` below put the band's centre at
+ *  `travel = -width + drive * width * 2`, so the container's own centre
+ *  (`width / 2`) is `drive = 0.75`. It is a named constant rather than "just
+ *  leave the driver wherever it was" for the same reason Android now parks its
+ *  shader deliberately: an un-named resting position is how the streak ends up
+ *  frozen at an arbitrary point of the sweep, which looks like a rendering bug
+ *  rather than a reduced-motion affordance. */
+const PULSE_PARK_DRIVE = 0.75;
+
+/** The parked drive value that puts the band's centre at `width / 2` for the
+ *  given writing direction.
+ *
+ *  RTL negates the travel, so feeding it the LTR park drive would park the band
+ *  at `-width / 2` — half a container OFF the skeleton, which is exactly the
+ *  "frozen at an arbitrary point of the sweep" accident `PULSE_PARK_DRIVE`
+ *  exists to prevent. The pulse's resting position is the container's CENTRE in
+ *  every direction (both native tiers translate by `width / 2` with no
+ *  direction term at all, because a band whose colours are symmetric about its
+ *  centre, parked at the centre, is the same picture mirrored), so the drive
+ *  that produces it is what has to mirror, not the position. Negating the
+ *  travel is the same as reflecting the drive about `0.5`. */
+export function pulseParkDriveFor(direction: Direction): number {
+  return direction === 'rtl' ? 1 - PULSE_PARK_DRIVE : PULSE_PARK_DRIVE;
+}
+
+/** `core/animation.ts`'s pulse: the highlight's opacity breathes from
+ *  `PULSE_MIN_OPACITY` to 1 and back exactly once per clock period.
+ *
+ *  `withRepeat(..., true)` — auto-reversing — is correct HERE and wrong for the
+ *  shimmer driver for the same reason: the pulse IS symmetric (up then down is
+ *  one breath) while the sweep is a sawtooth that must always travel the same
+ *  direction. Hence a half-period leg: two legs make one full period, matching
+ *  the web `@keyframes askl-pulse` rule's `0% / 50% / 100%` over one
+ *  `--askl-speed`.
+ *
+ *  No easing is passed on purpose: `withTiming`'s default is
+ *  `Easing.inOut(Easing.quad)`, which is the ease-in-out the CSS rule asks for.
+ *  This is the one place a default is load-bearing rather than incidental. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function createPulseAnimation(reanimated: ReanimatedModule, speedMs: number): any {
+  return reanimated.withRepeat(reanimated.withTiming(1, { duration: speedMs / 2 }), -1, true);
+}
+
+/** The sign the band's travel carries: `+1` for LTR, `-1` for RTL.
+ *
+ *  WHY DIRECTION AT ALL. `direction` has been part of the shape cache key
+ *  since `core/cache-key.ts` was written, so the library already stores a
+ *  separate snapshot per writing direction — but no renderer read it, and an
+ *  RTL reader watched the highlight travel against their reading direction.
+ *  Prior art agrees on the remedy: SkeletonView (iOS) picks
+ *  `isRTL ? .rightLeft : .leftRight` for exactly this reason.
+ *
+ *  WHY A SIGN AND NOT A `travelAt(drive, width, direction)` HELPER. The two
+ *  `useDerivedValue` updaters below become Reanimated WORKLETS in a consumer's
+ *  build — that is the only way they can read `drive.value` on the UI thread at
+ *  all — and a worklet may not call an ordinary module-scope function: it would
+ *  throw at runtime unless the consumer's Reanimated Babel plugin had also
+ *  workletized this file's helper, which nothing in this repo verifies and no
+ *  other file here relies on. So the DECISION is made on the JS thread and only
+ *  a captured `number` crosses the boundary; the arithmetic itself stays inline
+ *  and unchanged.
+ *
+ *  `* 1` is exact for every double, so the LTR path is byte-identical to the
+ *  expression that predates this function rather than merely equivalent. */
+export function travelSignFor(direction: Direction): number {
+  return direction === 'rtl' ? -1 : 1;
 }
 
 // ---------------------------------------------------------------------------
 // SkiaShimmerOverlay — the actual React component
 // ---------------------------------------------------------------------------
 
-const STAGGER_STEP_MS = 40;
-
 export interface SkiaShimmerOverlayProps {
+  readonly peers: Tier2Peers;
   readonly shapes: readonly ShapeInfo[];
   readonly baseColor: string;
   readonly highlightColor: string;
   readonly speedMs: number;
   readonly width: number;
   readonly height: number;
+  /** The requested presentation. This USED TO BE ABSENT: `SkeletonOverlayProps`
+   *  carried only `reducedMotion`, and `native/AutoSkeleton.tsx` passed only
+   *  that, so an explicit `animation="none"` — the value whose whole meaning is
+   *  "do not animate" — reached tier-2 as a full travelling shimmer, and so did
+   *  `animation="pulse"`. Optional so an overlay built against the older prop
+   *  shape still compiles; absent means the previous default. */
+  readonly animation?: AnimationKind;
   readonly reducedMotion: boolean;
-  /** Injectable only for tests; production always uses the real `require`. */
-  readonly requireFn?: PeerRequire;
+  /** The writing direction the shapes were measured for, forwarded from
+   *  `SkeletonOverlayProps.direction` — i.e. the same value `<AutoSkeleton>`
+   *  put into the shape cache key. Under `'rtl'` the band travels the other
+   *  way (see `travelAt`); absent means `'ltr'`, which is the only travel
+   *  direction this renderer had before. */
+  readonly direction?: Direction;
+  /** Test seam: overrides the wall clock used to derive the join phase.
+   *  Production never passes it. */
+  readonly nowMs?: () => number;
 }
 
-/** Renders ONLY when the caller has already confirmed
- *  `createSkiaTier2Renderer().isAvailable()` — this component itself does
- *  not re-check, so a caller that skips the check gets a hard `require`
- *  failure rather than a silent no-op, which is the correct failure mode
- *  for "you called the wrong function", distinct from ADR-5's "peer
- *  absent -> fall back to tier-1" contract that `isAvailable()` owns. */
+/** Draws the union of the measured shapes as one Skia path filled with a
+ *  shimmer gradient that mirrors tier-1's exactly:
+ *  `[base, highlight, base]` across a band `2 × width` wide whose centre
+ *  travels from `-width` to `+width` once per `speedMs`
+ *  (`AutoskeletonRendererTier1.gradientFrame(for:)` is
+ *  `CGRect(x: -width, y: 0, width: width * 2, height: height)`, translated
+ *  over `transform.translation.x` from `-width` to `+width`).
+ *
+ *  The MASK is stationary and only the gradient travels — the exact invariant
+ *  the G.18 tier-1 defect violated, and the one the paired on-device gate
+ *  (`testTier2SkeletonCoverageStaysStationaryAcrossAWholeShimmerCycle`)
+ *  samples across a whole cycle to prove. */
 export function SkiaShimmerOverlay(props: SkiaShimmerOverlayProps): ReactElement {
-  const requireFn = props.requireFn ?? ((s: string) => require(s));
-  const Skia = requireSkia(requireFn);
-  const Reanimated = requireReanimated(requireFn);
+  const { skia, reanimated } = props.peers;
 
   const maskPath = useMemo(() => {
-    const path = Skia.Skia.Path.Make();
+    const path = skia.Skia.Path.Make();
     for (const shape of props.shapes) {
       const radius = Math.min(shape.r, Math.min(shape.w, shape.h) / 2);
-      const rect = { x: shape.x, y: shape.y, width: shape.w, height: shape.h };
       if (radius > 0) {
-        path.addRRect(Skia.rrect(rect, radius, radius));
+        path.addRRect(skia.rrect({ x: shape.x, y: shape.y, width: shape.w, height: shape.h }, radius, radius));
       } else {
-        path.addRect(Skia.rect(rect));
+        path.addRect(skia.rect(shape.x, shape.y, shape.w, shape.h));
       }
     }
     return path;
-  }, [props.shapes, Skia]);
+  }, [props.shapes, skia]);
 
   // ONE shared driver value for the whole overlay (ADR-8: one clock, not
-  // per-shape ticking); per-shape stagger is expressed as a `withDelay`
-  // OFFSET applied to derived values below, keyed by wire index — never as
-  // N independent `useSharedValue` drivers, which would defeat "one clock".
-  const drive = Reanimated.useSharedValue(0);
-  if (!props.reducedMotion) {
-    drive.value = Reanimated.withRepeat(Reanimated.withTiming(1, { duration: props.speedMs }), -1, true);
-  }
+  // per-shape ticking) — never N independent `useSharedValue` drivers, which
+  // would defeat "one clock".
+  //
+  // The assignment lives in an effect, not the render body: beyond being a
+  // documented Reanimated correctness violation (an external side effect in
+  // the render phase, unsafe under StrictMode double-invocation and any
+  // concurrent render React discards), a render-body assignment re-created a
+  // FRESH animation on EVERY render, so any unrelated parent re-render
+  // silently restarted the sweep — the exact opposite of ADR-8.
+  // ONE resolution of the `animation` prop, from the same function web and the
+  // two native tiers use. A zero/negative period cannot express any animation,
+  // so it degrades to the static kind rather than to a divide-by-zero.
+  const animation: AnimationKind =
+    props.speedMs > 0 ? effectiveAnimation(props.animation ?? 'shimmer', props.reducedMotion) : 'none';
+  const travels = animation === 'shimmer';
+  const pulses = animation === 'pulse';
+  const showsHighlight = animation !== 'none';
+  // Every kind still has to COVER — a skeleton that stops animating must not
+  // stop hiding the content underneath it. Only 'shimmer' can skip the
+  // separate fill, because its gradient is opaque and clamps to the base
+  // colour beyond the band.
+  const needsBaseFill = !travels;
 
-  const gradientStart = Reanimated.useDerivedValue(
-    () => ({ x: -props.width + drive.value * props.width * 2, y: 0 }),
-    [drive, props.width],
-  );
+  const direction: Direction = props.direction ?? 'ltr';
+
+  const drive = reanimated.useSharedValue(0);
+  // Separate from `drive` because it is a different quantity on a different
+  // curve: `drive` is the band's POSITION (sawtooth), this is its OPACITY
+  // (symmetric breath). Held at 1 whenever the pulse is not running so the
+  // shimmer and static kinds are unaffected by its existence.
+  const highlightOpacity = reanimated.useSharedValue(1);
+  const nowMs = props.nowMs;
+  useEffect(() => {
+    reanimated.cancelAnimation(drive);
+    reanimated.cancelAnimation(highlightOpacity);
+
+    if (pulses) {
+      // Park the band deliberately (see `PULSE_PARK_DRIVE`) and breathe only
+      // its opacity — no directional movement of any kind, which is what
+      // REQ-A11Y-3 is actually asking for.
+      drive.value = pulseParkDriveFor(direction);
+      highlightOpacity.value = PULSE_MIN_OPACITY;
+      highlightOpacity.value = createPulseAnimation(reanimated, props.speedMs);
+      return () => {
+        reanimated.cancelAnimation(highlightOpacity);
+      };
+    }
+
+    highlightOpacity.value = 1;
+    if (!travels) {
+      // 'none'. Nothing runs, and the highlight is not drawn at all (see the
+      // render below), so the parked position is immaterial.
+      drive.value = 0;
+      return;
+    }
+
+    const phase = tier2PhaseAt((nowMs ?? Date.now)(), props.speedMs);
+    drive.value = phase;
+    drive.value = createDriveAnimation(reanimated, props.speedMs, phase);
+    return () => {
+      // Without this, switching to reduced motion (or unmounting) left the
+      // `withRepeat` running forever — a real, previously-open defect.
+      reanimated.cancelAnimation(drive);
+    };
+    // `direction` is in the dep list only for the parked pulse above — the
+    // sawtooth driver itself is direction-agnostic (the flip lives in
+    // `travelAt`, a derived value). Re-running is phase-preserving anyway:
+    // `tier2PhaseAt` re-derives the join point from the shared origin, so a
+    // restart rejoins the same wave rather than starting a private one.
+  }, [drive, highlightOpacity, reanimated, travels, pulses, props.speedMs, nowMs, direction]);
+
+  const width = props.width;
+  // The BAND's own span (`travel ± width`) is direction-independent: its
+  // colour stops are `[base, highlight, base]` at `[0, 0.5, 1]`, symmetric
+  // about its centre, exactly like tier-1's `CAGradientLayer` and Android's
+  // `LinearGradient`. Only where that centre IS depends on direction, which is
+  // why the sign is the sole new term and the `± width` endpoints are
+  // untouched — the same shape as the native flip, where only the translation
+  // reverses and the gradient itself is never rebuilt.
+  //
+  // Resolved HERE, on the JS thread, so the two updaters below capture a plain
+  // number rather than calling across the worklet boundary — see
+  // `travelSignFor`.
+  const travelSign = travelSignFor(direction);
+  const gradientStart = reanimated.useDerivedValue(() => {
+    const travel = (-width + drive.value * width * 2) * travelSign;
+    return { x: travel - width, y: 0 };
+  }, [drive, width, travelSign]);
+  const gradientEnd = reanimated.useDerivedValue(() => {
+    const travel = (-width + drive.value * width * 2) * travelSign;
+    return { x: travel + width, y: 0 };
+  }, [drive, width, travelSign]);
 
   return (
-    <Skia.Canvas style={{ width: props.width, height: props.height }}>
-      <Skia.Path path={maskPath} color={props.baseColor}>
-        <Skia.LinearGradient
-          start={Skia.vec(0, 0)}
-          end={gradientStart}
-          colors={[props.baseColor, props.highlightColor, props.baseColor]}
-        />
-      </Skia.Path>
-    </Skia.Canvas>
+    <skia.Canvas style={{ width: props.width, height: props.height }}>
+      {/* The opaque base fill, drawn ONLY when the highlight above it is
+       *  translucent for part of the cycle. Under 'shimmer' the gradient's own
+       *  clamped edges are already the base colour at full alpha, so a second
+       *  path would be pure overdraw; under 'pulse' it is mandatory, because
+       *  without it the trough would make the whole skeleton see-through and
+       *  the real content would read through the "loading" state. Under 'none'
+       *  it is the ONLY thing drawn — "do not animate" must not be allowed to
+       *  become "do not paint", which is what dropping this branch did until a
+       *  gate caught it. */}
+      {needsBaseFill && <skia.Path path={maskPath} color={props.baseColor} />}
+      {showsHighlight && (
+        <skia.Path path={maskPath} color={props.baseColor} opacity={highlightOpacity}>
+          <skia.LinearGradient
+            start={gradientStart}
+            end={gradientEnd}
+            colors={[props.baseColor, props.highlightColor, props.baseColor]}
+            positions={[0, 0.5, 1]}
+          />
+        </skia.Path>
+      )}
+    </skia.Canvas>
   );
 }
 
 /** Per-shape stagger delay in ms for wire index `i` (plan.md §4.1: order is
- *  meaningful, staggered by INDEX). Exported standalone so it is
- *  independently unit-testable without mounting Skia/Reanimated at all. */
+ *  meaningful, staggered by INDEX).
+ *
+ *  NOT WIRED — deliberately, and stated here so the green unit test on it can
+ *  never be mistaken for a shipped feature (the exact trap task G.15 found in
+ *  the native accessibility helpers). `SkiaShimmerOverlay` draws ONE union
+ *  path under ONE gradient, so there is no per-shape node to delay. Wiring
+ *  this needs one `<Skia.Path>` per shape, each with its own
+ *  `useDerivedValue` — i.e. hooks in a loop over a variable-length array,
+ *  which the rules of hooks forbid — or a Skia runtime shader carrying a
+ *  per-shape phase uniform. Either is a redesign, and per-shape stagger is
+ *  ALSO a divergence from tier-1, which has no stagger at all: shipping it
+ *  would make the two tiers visibly different animations rather than the same
+ *  one at two fidelity levels. Kept rather than deleted so plan.md §4.1's
+ *  requirement is not silently dropped; carried forward as an open item. */
 export function staggerDelayForIndex(index: number): number {
   return index * STAGGER_STEP_MS;
 }

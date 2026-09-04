@@ -14,7 +14,7 @@
 //      testing), not a single `requestAnimationFrame` — list template
 //      measurement is explicitly allowed to wait for interactions/scroll to
 //      settle, unlike a whole-screen cold load (tasks.md 6.1/6.3).
-//   2. Runs AT MOST ONCE per `itemType` for the whole app session
+//   2. Runs AT MOST ONCE per COMPOSITE CACHE KEY for the whole app session
 //      (`templateRegistry`, `src/core/list.ts`, `decideCellBind`) — never
 //      once per mounted list/cell instance. `decideCellBind` is the single
 //      source of truth for whether THIS bind may schedule it; this hook
@@ -81,7 +81,15 @@ export function useTemplateMeasurement(
 ): UseTemplateMeasurementResult {
   const { itemType, cacheKey, cacheHit, renderTemplate, registry, store, budgetMs, maxShapes, defaultRadius } =
     options;
-  const decision = decideCellBind(cacheHit, registry.stateFor(itemType), registry.attemptsFor(itemType));
+  // Adversarial-review defect (2026-08-29): every one of the six registry
+  // interactions in this file used to pass `itemType` while the store they
+  // guard is keyed by the full composite `cacheKey`. See `TemplateRegistry`'s
+  // own doc comment (`src/core/list.ts`) for the two reachable consequences.
+  // `ShapeCacheKey` is branded, so the wrong key no longer typechecks.
+  // `itemType` survives only as an effect identity (it can never change
+  // WITHOUT `cacheKey` changing — `composeCacheKey` embeds it) and as the
+  // caller-facing name in this hook's options.
+  const decision = decideCellBind(cacheHit, registry.stateFor(cacheKey), registry.attemptsFor(cacheKey));
   const shouldSchedule = decision.shouldScheduleTemplateMeasurement && renderTemplate !== undefined;
 
   // REAL, on-device-found race (Phase 6 apply session): when N sibling list
@@ -108,7 +116,7 @@ export function useTemplateMeasurement(
   // (`everShownContent`/`cycleId` in `AutoSkeleton.tsx`), just against a
   // shared module-scoped registry instead of local component state.
   if (shouldSchedule) {
-    registry.markScheduled(itemType);
+    registry.markScheduled(cacheKey);
   }
 
   const [mounted, setMounted] = useState(false);
@@ -144,7 +152,7 @@ export function useTemplateMeasurement(
 
     const finishMeasured = (): void => {
       settled = true;
-      registry.markMeasured(itemType);
+      registry.markMeasured(cacheKey);
       setMounted(false);
     };
 
@@ -155,7 +163,7 @@ export function useTemplateMeasurement(
     // a bounded retry (`MAX_MEASUREMENT_ATTEMPTS`) succeeds or exhausts.
     const finishFailed = (): void => {
       settled = true;
-      registry.markFailed(itemType);
+      registry.markFailed(cacheKey);
       setMounted(false);
     };
 
@@ -242,7 +250,7 @@ export function useTemplateMeasurement(
       // captured (the effect re-runs with the NEW one on recycle), so the
       // correct itemType's claim is the one released.
       if (!settled) {
-        registry.releaseClaim(itemType);
+        registry.releaseClaim(cacheKey);
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

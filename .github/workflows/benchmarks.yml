@@ -81,22 +81,35 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
 
-      - name: Determine baseline ref (merge-base with main, or previous commit on push)
+      # The baseline must be a commit this repo can actually `npm ci` in.
+      # `merge-base origin/main HEAD` is NOT that on a stacked branch: this
+      # project develops as a long chain of PRs branched off the initial
+      # commit, so the merge-base resolves to `Initial commit` — an empty
+      # scaffold with no package-lock.json at all, and `npm ci` there fails
+      # with EUSAGE before a single benchmark runs. HEAD~1 is the honest
+      # comparison anyway: a ratio gate answers "did THIS commit regress",
+      # not "did the whole branch".
+      - name: Determine baseline ref (previous commit, verified installable)
         id: baseline
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "ref=$(git merge-base origin/main HEAD)" >> "$GITHUB_OUTPUT"
+          ref="$(git rev-parse HEAD~1)"
+          if ! git cat-file -e "$ref:package-lock.json" 2>/dev/null; then
+            echo "Baseline $ref has no package-lock.json; nothing to compare against." >&2
+            echo "skip=true" >> "$GITHUB_OUTPUT"
           else
-            echo "ref=HEAD~1" >> "$GITHUB_OUTPUT"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
 
       - name: Run benchmarks against the CANDIDATE (current HEAD)
         run: npm run bench:run -- --out benchmarks/results/candidate.json
 
       - name: Check out the BASELINE ref into a sibling worktree
+        if: steps.baseline.outputs.skip != 'true'
         run: git worktree add /tmp/baseline "${{ steps.baseline.outputs.ref }}"
 
       - name: Run benchmarks against the BASELINE (same job, same runner)
+        if: steps.baseline.outputs.skip != 'true'
         working-directory: /tmp/baseline
         run: |
           npm ci
@@ -104,6 +117,7 @@ jobs:
           npm run bench:run -- --out "${{ github.workspace }}/benchmarks/results/baseline.json"
 
       - name: Compare candidate vs baseline (ratio gate)
+        if: steps.baseline.outputs.skip != 'true'
         run: npm run bench:compare -- benchmarks/results/baseline.json benchmarks/results/candidate.json
 
       - uses: actions/upload-artifact@v4
@@ -130,7 +144,14 @@ jobs:
           java-version: 17
       - run: npm ci
       - run: mkdir -p .tarball && npm pack --pack-destination ./.tarball
-      - run: npm install "autoskeleton@file:$(pwd)/.tarball/$(ls .tarball)"
+      - name: Unpin the locally built tarball before installing (see scripts/unpin-local-tarball.mjs)
+        run: node scripts/unpin-local-tarball.mjs examples/bare-rn
+      # `$(pwd)` here is `examples/bare-rn`, NOT the workspace root — the
+      # tarball is two levels up. The previous `$(pwd)/.tarball` pointed at
+      # `examples/bare-rn/.tarball`, which never exists; it was never observed
+      # because this file did not parse and so never ran.
+      - name: Install examples/bare-rn against THIS run's packed tarball
+        run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
         working-directory: examples/bare-rn
       - name: Android unit tests (Robolectric), including AutoskeletonTraversalPerfTest
         run: ./gradlew :autoskeleton:testDebugUnitTest
@@ -142,7 +163,18 @@ jobs:
   # Task 9.3's promoted memory-leak recycling-stress test also runs here,
   # since both need the same live-emulator + booted-app fixture.
   bench-android-frame-drops-and-memory:
-    runs-on: macos-latest # android-emulator-runner needs HAXM/hypervisor, macos-latest ships one
+    # WAS `macos-latest` with `arch: x86_64`, and the comment here claimed
+    # macos-latest ships a hypervisor for it. That was true when macos-latest
+    # was Intel; it is now Apple Silicon, where an x86_64 Android image cannot
+    # run at all — HAXM is Intel-only and discontinued. The job failed with
+    # "Timeout waiting for emulator to boot" / "could not connect to TCP port
+    # 5554" on the first run after the file started parsing at all.
+    #
+    # GitHub's ubuntu runners support nested virtualisation, so the documented
+    # path for `reactivecircus/android-emulator-runner` is ubuntu + KVM. It is
+    # also the cheaper runner by an order of magnitude, which matters for a job
+    # that boots an emulator and runs a scroll benchmark.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -154,27 +186,59 @@ jobs:
           java-version: 17
       - run: npm ci
       - run: mkdir -p .tarball && npm pack --pack-destination ./.tarball
-      - run: npm install "autoskeleton@file:$(pwd)/.tarball/$(ls .tarball)"
+      - name: Unpin the locally built tarball before installing (see scripts/unpin-local-tarball.mjs)
+        run: node scripts/unpin-local-tarball.mjs examples/bare-rn
+      - name: Install examples/bare-rn against THIS run's packed tarball
+        run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
         working-directory: examples/bare-rn
       - name: Start Metro
         run: npx react-native start --port 8081 &
         working-directory: examples/bare-rn
+      # Required on ubuntu: the runner exposes /dev/kvm but not to the
+      # unprivileged user the emulator runs as.
+      - name: Enable KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
       - uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
           target: google_apis
           arch: x86_64
+          # NOT disabled, deliberately. The action's default sets
+          # window/transition/animator scales to 0, and this job's whole
+          # subject is frame timing during a 50-cell scroll. Measuring dropped
+          # frames on a device with animation disabled would be measuring
+          # something else and calling it NFR-1.
+          disable-animations: false
           working-directory: examples/bare-rn/android
+          # ONE LINE, no `\` continuation. android-emulator-runner does not run
+          # this through a shell that joins continuations, so the backslash
+          # arrived as a literal argument and Gradle reported
+          # `Task '\' not found in root project`. The emulator had booted fine
+          # by then — this was the next failure behind it.
           script: |
             adb reverse tcp:8081 tcp:8081
-            ./gradlew :app:connectedDebugAndroidTest \
-              -Pandroid.testInstrumentationRunnerArguments.class=com.autoskeletonbarern.PaintGateListFrameDropsInstrumentedTest,com.autoskeletonbarern.PaintGateListInstrumentedTest
+            ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.autoskeletonbarern.PaintGateListFrameDropsInstrumentedTest,com.autoskeletonbarern.PaintGateListInstrumentedTest
 
   # AUTHORED ONLY — see this file's own header comment. iOS traversal timing
   # needs a dedicated XCTest perf target this session did not build.
+  #
+  # The `run:` below is a BLOCK SCALAR (`>-`), not a plain one. As a plain
+  # scalar the string contained `": "` (inside `TODO(9.1 follow-up): `), which
+  # YAML reads as a nested mapping key — "mapping values are not allowed here",
+  # line 180, column 39. GitHub rejected the ENTIRE file for it, so every job
+  # here, including the `PaintGateListFrameDropsInstrumentedTest` frame-drop and
+  # memory gates, silently never ran. `test/packaging/workflows.test.ts` now
+  # parses every workflow in the normal test suite so this cannot recur.
   bench-ios-traversal:
     if: false # not yet implemented — flip this on once ios/Tests gains a timing target
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - run: echo "TODO(9.1 follow-up): add an XCTest perf target measuring AutoskeletonSensor.measure() at 30/60 shapes on a booted iOS Simulator, mirroring AutoskeletonTraversalPerfTest.kt."
+      - run: >-
+          echo "TODO(9.1 follow-up): add an XCTest perf target measuring
+          AutoskeletonSensor.measure() at 30/60 shapes on a booted iOS
+          Simulator, mirroring AutoskeletonTraversalPerfTest.kt."

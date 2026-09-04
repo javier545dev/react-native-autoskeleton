@@ -1,17 +1,20 @@
 {
   "$schema": "./budgets.schema.json",
   "_comment": [
-    "tasks.md 9.1 — every number here is reconciled against spec.md §3 (Non-Functional",
-    "Requirements) and plan.md §6 ADR-1's serialization exit criterion, NOT transcribed from",
-    "tasks.md's own prose. tasks.md 9.1's original text said 'web entry <5 kB gzip' — that figure",
-    "is RETIRED. spec.md NFR-6 has been revised TWICE: 5 kB -> 8 kB (2026-08-27, first real",
-    "measurement showed 7566 B, the original 5 kB was never validated against an implementation);",
-    "then 8 kB -> 9 kB (2026-08-28, maintainer decision: the 8 kB gate forced a per-platform API",
-    "divergence — no <AutoSkeleton.Hint> on web — to stay at 8185/8192 B, and a worse API asymmetry",
-    "was traded for ~250 bytes of headroom to restore one API across platforms). See spec.md",
-    "line 477 for the full history. The value below is 9216 bytes, matching",
-    "test/packaging/web-bundle.test.ts's NFR6_BUDGET_BYTES exactly. Do not 'restore' 8192 without",
-    "re-arguing this precedent."
+    "tasks.md 9.1 \u2014 every number here is reconciled against spec.md \u00a73 (Non-Functional",
+    "Requirements) and plan.md \u00a76 ADR-1's serialization exit criterion, NOT transcribed from",
+    "tasks.md's own prose. tasks.md 9.1's original text said 'web entry <5 kB gzip' \u2014 that figure",
+    "is RETIRED. See `webEntryGzipBytes.source` below for NFR-6's full revision record.",
+    "",
+    "THIS FILE IS NOW THE SINGLE SOURCE OF TRUTH for `webEntryGzipBytes`. The previous version of",
+    "this comment asked a human to keep this number identical to a constant in",
+    "test/packaging/web-bundle.test.ts \u2014 'both must be changed together or they will silently",
+    "diverge'. They diverged: the gate's MEASUREMENT was corrected from a Vite library build to a",
+    "consumer app build (4dae7c0) and the benchmark was not, so the same NFR was reported at",
+    "9418 B against 9216 here and 7712 B against 7933 there \u2014 1706 bytes apart, both passing.",
+    "A comment is not a mechanism. test/packaging/web-bundle.test.ts now READS this value through",
+    "benchmarks/support/budgets.ts, and both call sites measure through the one function in",
+    "test/packaging/helpers/web-bundle.ts. There is nothing left to keep in sync by hand."
   ],
   "traversalP95Ms": {
     "value": 2,
@@ -23,26 +26,26 @@
   },
   "serializationP95Ms": {
     "value": 0.5,
-    "source": "plan.md §6 ADR-1 exit criterion: 'p95 serialization > 25% of the 2 ms budget on the 60-shape reference screen reopens this ADR' — 25% of NFR-3's 2 ms budget = 0.5 ms. Reported as a SEPARATE line item from traversal per ADR-1's own requirement ('the benchmark reports serialization separately so the trigger is observable')."
+    "source": "plan.md \u00a76 ADR-1 exit criterion: 'p95 serialization > 25% of the 2 ms budget on the 60-shape reference screen reopens this ADR' \u2014 25% of NFR-3's 2 ms budget = 0.5 ms. Reported as a SEPARATE line item from traversal per ADR-1's own requirement ('the benchmark reports serialization separately so the trigger is observable')."
   },
   "serializationRatioOfTraversalBudget": {
     "value": 0.25,
-    "source": "plan.md §6 ADR-1 exit criterion, expressed as the ratio directly (serializationP95Ms / traversalP95Ms must stay < this value)."
+    "source": "plan.md \u00a76 ADR-1 exit criterion, expressed as the ratio directly (serializationP95Ms / traversalP95Ms must stay < this value)."
   },
   "droppedFramesPerScroll": {
     "value": 0,
     "source": "spec.md NFR-1: tier-1 sustains 60 fps / tier-2 sustains 120 Hz; fails if fps drops below target for more than 5% of sampled frames during the CI 50-cell scroll benchmark. Expressed here as the frame-drop-count tolerance for that same scroll."
   },
   "webEntryGzipBytes": {
-    "value": 9216,
-    "source": "spec.md NFR-6 — SECOND revision. (1) REVISED 2026-08-27 from 5 kB → 8 kB by maintainer decision, after the first real measurement showed 7566 B and the original 5 kB was never validated against an implementation. (2) REVISED 2026-08-28 from 8 kB → 9 kB by maintainer decision: the 8 kB gate did its job (forced a design decision instead of letting the bundle grow silently) but the decision it forced — a per-platform typed-hint API divergence, no `<AutoSkeleton.Hint>` on web — is a worse outcome than ~250 bytes for a library whose entire proposition is 'one package, all platforms'. Raised deliberately to buy back API symmetry, not because the gate was inconvenient; it remains a HARD FAILING GATE and a third revision needs to argue against this precedent. Identical to test/packaging/web-bundle.test.ts's NFR6_BUDGET_BYTES — both must be changed together or they will silently diverge."
+    "value": 7933,
+    "source": "spec.md NFR-6, and the ONLY home of this number \u2014 test/packaging/web-bundle.test.ts and benchmarks/support/web-benchmarks.ts both read it from here. Record: (1) REVISED 2026-08-27 from 5 kB -> 8 kB by maintainer decision, after the first real measurement showed 7566 B and the original 5 kB was never validated against an implementation. (2) REVISED 2026-08-28 from 8 kB -> 9 kB by maintainer decision: the 8 kB gate did its job (it forced a design decision instead of letting the bundle grow silently) but the decision it forced \u2014 a per-platform typed-hint API divergence, no `<AutoSkeleton.Hint>` on web \u2014 is a worse outcome than ~250 bytes for a library whose entire proposition is 'one package, all platforms'. (3) CORRECTED 2026-08-29 (G.18), 9216 -> 7696: not a relaxation, the RULER was wrong. Vite library mode sets minifyWhitespace:false so 910 lines of this package's own doc comments shipped into the measured artifact \u2014 a number no consumer ever downloads. Re-derived to keep the gate exactly as strict: 8995 B measured against 9216 was 221 B of real headroom, and 7475 + 221 = 7696. (4) RELAXED 2026-08-29, 7696 -> 7933, by maintainer decision \u2014 this one IS the budget moving, and a fifth change must argue against BOTH precedents. It bought two real user-facing defects that had no gate (an empty 0-shape snapshot cached and replayed forever; a handoff handle destroyed only on unmount, announcing loading while painting nothing) for 99 B: 7613 -> 7712, set to 7712 + 221 to restore the same working headroom the corrected gate began with. (5) MOVED HERE 2026-08-30 from test/packaging/web-bundle.test.ts's NFR6_BUDGET_BYTES \u2014 same value, one home, because two homes is precisely how it silently diverged. HARD FAILING GATE."
   },
   "maxRegressionRatio": {
     "value": 1.5,
-    "source": "NOT spec-sourced — this session's own choice for the same-CI-job baseline-vs-candidate ratio gate (tasks.md 9.1: 'same-CI-job baseline-vs-candidate RATIO comparison'). spec.md/plan.md specify absolute budgets only; plan.md §7 says only 'measuring baseline and candidate in the same job on the same runner and comparing the ratio' without pinning a numeric threshold. 1.5x (50% slower than baseline) is a deliberately loose noise-tolerant gate for a CI runner with unknown headroom — a maintainer with real CI variance data should tighten this."
+    "source": "NOT spec-sourced \u2014 this session's own choice for the same-CI-job baseline-vs-candidate ratio gate (tasks.md 9.1: 'same-CI-job baseline-vs-candidate RATIO comparison'). spec.md/plan.md specify absolute budgets only; plan.md \u00a77 says only 'measuring baseline and candidate in the same job on the same runner and comparing the ratio' without pinning a numeric threshold. 1.5x (50% slower than baseline) is a deliberately loose noise-tolerant gate for a CI runner with unknown headroom \u2014 a maintainer with real CI variance data should tighten this."
   },
   "nativeHeapGrowthBytesRecycleStress": {
     "value": 12582912,
-    "source": "Promoted from examples/bare-rn's PaintGateListInstrumentedTest.kt MAX_NATIVE_HEAP_GROWTH_BYTES (12 MiB), task 6.4. See that file's own doc comment for the honest caveat: a two-point Debug.getNativeHeapAllocatedSize() sample on an ART-managed heap is not authoritative leak detection — it catches a monotonic unbounded climb, not a slow leak. Task 9.3 promotes this constant to a shared budget so the library test and any future CI wiring cannot silently diverge."
+    "source": "Promoted from examples/bare-rn's PaintGateListInstrumentedTest.kt MAX_NATIVE_HEAP_GROWTH_BYTES (12 MiB), task 6.4. See that file's own doc comment for the honest caveat: a two-point Debug.getNativeHeapAllocatedSize() sample on an ART-managed heap is not authoritative leak detection \u2014 it catches a monotonic unbounded climb, not a slow leak. Task 9.3 promotes this constant to a shared budget so the library test and any future CI wiring cannot silently diverge."
   }
 }

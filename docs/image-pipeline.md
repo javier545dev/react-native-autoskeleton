@@ -6,6 +6,19 @@ boundary autoskeleton stops at, and a worked example wiring `expo-image`.
 See `plan.md` ADR-16 and `docs/product-brief.md` §9b for the design
 rationale; this file is the consumer-facing version of that decision.
 
+<p align="center">
+  <img
+    src="assets/image-handoff.gif"
+    alt="A skeleton block held on screen until the image behind it has actually painted, then removed"
+    width="720">
+</p>
+
+<sub>Reveal-before-hide, recorded from the `examples/vite` `#/image-handoff`
+demo. The skeleton is not removed when `isLoading` flips — it is removed once
+the successor has painted, which is why no frame shows an empty slot. The
+readout prints which of the two guards ended the cycle:
+`successor-painted` here, `timeout` if the image never paints.</sub>
+
 ## 1. The three phases
 
 | Phase | What's happening | Who owns it |
@@ -19,7 +32,9 @@ rationale; this file is the consumer-facing version of that decision.
 manages blurhash. Two reasons, stated plainly:
 
 1. A blurhash decoder would duplicate what `expo-image` already ships, and
-   would blow the < 9 kB gzip web budget (NFR-6) on its own.
+   would blow the web entry's gzip budget (NFR-6 — currently **7933 B**, the
+   single source of truth being `benchmarks/budgets.json`'s
+   `webEntryGzipBytes`) on its own.
 2. Owning phase 2 would force a hard dependency on one specific image
    component, contradicting the "agnostic to styling and component system"
    design that makes the sensor work at all.
@@ -33,8 +48,11 @@ an instant where neither the skeleton nor the successor visual is painted.
 - **Reveal-before-hide, never hide-then-reveal.** When `isLoading` becomes
   `false`, your content subtree is revealed *underneath* the still
   fully-painted skeleton overlay. The overlay is retained until told the
-  successor painted, or a timeout elapses, then cross-fades out. There is
-  no instant where nothing is painted.
+  successor painted, or a timeout elapses, and is then removed after a
+  further `handoffFadeMs`. There is no instant where nothing is painted.
+  Note that `handoffFadeMs` is a delay, not a fade — nothing animates
+  opacity on teardown, so raising it keeps a fully opaque skeleton on
+  screen for longer rather than dissolving it (corrected 2026-08-30).
 - **`onMetrics.displayDurationMs` measures phase 1 only** — stamped the
   moment `isLoading` flips `false`, never including the placeholder/decode
   tail. The tail is reported *separately* as `handoffMs` +
@@ -104,6 +122,67 @@ export function ProductCard(props: { readonly productId: string }) {
 The full file (with the `fetchProduct` stub and `Product` type) lives at
 `examples/expo/docs-examples/ImagePipelineExample.tsx`.
 
+## 3a. Phase 1 needs something to measure — keep the slot mounted
+
+This is the one thing that catches people out, and it is not a bug: **the
+skeleton is derived from what is actually rendered.** Write the loading branch
+the natural way and there is nothing rendered to derive it from:
+
+```tsx
+// No skeleton paints. onMetrics reports shapeCount: 0.
+<AutoSkeleton skeletonKey="product-hero" isLoading={product === null} expectsPlaceholder>
+  {product !== null && <Image source={{ uri: product.imageUrl }} … />}
+</AutoSkeleton>
+```
+
+While `product` is null the subtree is empty. There are no leaves, so the
+traversal returns nothing, and `<AutoSkeleton>`'s own wrapper is
+`position: 'relative'` with no size of its own — so on native the sensor does
+not even have a laid-out root to traverse. Measured on an Android emulator:
+`shapeCount: 0`, `handoffReason: 'timeout'`.
+
+**A bare wrapper does not rescue it either.** The container rule emits a
+container's own shape only when it has no detectable leaves **and** a
+non-transparent background. A transparent sized `<View>` contributes nothing,
+on all three platforms.
+
+Mount the slot unconditionally and give it a background:
+
+```tsx
+<AutoSkeleton skeletonKey="product-hero" isLoading={product === null} expectsPlaceholder>
+  <View style={{ width: 180, height: 180, borderRadius: 12, overflow: 'hidden',
+                 backgroundColor: '#1f2430' }}>
+    {product !== null && <Image source={{ uri: product.imageUrl }} … />}
+  </View>
+</AutoSkeleton>
+```
+
+That slot is the pattern, not a workaround for a defect. Two reasons it has to
+work this way:
+
+1. **The sensor sees the loading state, not the loaded one.** It cannot know
+   that a currently-empty box will later hold an image. Painting a placeholder
+   over an empty box would mean inventing geometry no measurement produced,
+   which is the one thing this library exists not to do.
+2. **A non-transparent background is the only observable difference between a
+   box that is content and a box that is structure.** Transparent sized boxes
+   are how every React Native layout expresses spacers, flex fillers,
+   safe-area padding and gap shims. If they contributed shapes, a typical
+   loading screen would paint grey blocks over its own gutters.
+
+Reserving the space is also better UI on its own terms: the slot stops the
+layout jumping when the image arrives, which is the same reason you would size
+it in a codebase with no skeletons at all.
+
+Gated as behaviour rather than left to prose — the shared
+`container-rule-sized-but-transparent` fixture drives all three sensors
+(`SyntheticHierarchyBuilderTests`, `AutoskeletonSensorTest`, and a both-
+directions case in `test/web/dom-sensor.spec.ts`).
+
+`examples/expo/demos/ImagePipelineDemo.tsx` runs this on a device, and
+`examples/expo/docs-examples/ImagePipelineExample.tsx` is the typechecked version of the
+snippet above.
+
 ## 4. Current implementation status — read this before wiring `onSuccessorPainted`
 
 This is stated exactly once here, plainly, because it is easy to get wrong:
@@ -134,7 +213,10 @@ longer skeleton, never a flash.
 **The field signal to watch for:** if `onMetrics.handoffReason` reads
 `'timeout'` in your telemetry, either your successor visual is genuinely
 slow, or (on native, today) the paint-detection heuristic simply hasn't
-shipped for your platform yet.
+shipped for your platform yet. On native it will read `'timeout'` for
+*every* `expectsPlaceholder` handoff, so it is not a useful signal there
+until the heuristic lands — see
+[`observability.md` §1.3](./observability.md).
 
 ## 5. Residual limits (not defects — stated as constraints)
 

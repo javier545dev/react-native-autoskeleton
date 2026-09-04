@@ -108,7 +108,7 @@ export interface AutoSkeletonHintProps {
  *  a composite child that forwards `testID` is equally valid — name it by
  *  `displayName`/`name` so the message points at something the developer can
  *  actually find in their own source. */
-function describeChild(child: ReactElement<Record<string, unknown>>): string {
+export function describeChild(child: ReactElement<Record<string, unknown>>): string {
   const type: unknown = child.type;
   if (typeof type === 'string') {
     return `<${type}>`;

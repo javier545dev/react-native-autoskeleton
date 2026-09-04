@@ -5,12 +5,30 @@ name: Native build matrix (ADR-14 verification closure)
 # library's default output satisfies both [autolinkers] must be VERIFIED in
 # CI, not assumed") and spec.md Open Question 9.
 #
+# THE FLOOR IS 0.77, NOT 0.83. This header used to justify a 0.83 floor with
+# "the old architecture was removed in 0.83". That is not what sets the floor
+# of THIS package. `package.json` declares `react-native: ">=0.77.0"`, and 0.77
+# is the floor for two independent, verified reasons, neither of which is about
+# Paper being removed:
+#   1. iOS: `codegenConfig.ios.componentProvider` — the mechanism that puts
+#      `AutoskeletonOverlayView` into `RCTThirdPartyComponentsProvider.mm` (see
+#      that file's own header comment in `ios/AutoskeletonOverlayView.mm`) —
+#      has no generator before 0.77.0.
+#   2. Android: `AutoskeletonPackage.kt` constructs `ReactModuleInfo` with the
+#      Kotlin named arguments `name =` / `className =`; those parameters were
+#      `_name` / `_className` until they were renamed in 0.77.0, so the file
+#      does not compile against 0.76 or earlier.
+# Between 0.77 and 0.81 the New Architecture can still be switched OFF, which
+# this package does not support. That case is now a NAMED build failure rather
+# than a header-not-found: see the `#error` guard at the top of
+# `ios/AutoskeletonOverlayView.mm`.
+#
 # HONEST SCOPE NOTE (see the apply-progress report and the sdd-apply prompt's
 # own instruction — this is explicitly flagged, not silently claimed done):
 # this environment has exactly ONE pinned React Native version installed
 # (0.87.1 in examples/bare-rn, 0.85.0 at the root, 0.86.3 in examples/expo)
 # and ONE Android AVD / ONE booted iOS Simulator. There is no way to
-# genuinely exercise "every supported RN version (0.83+)" from this machine
+# genuinely exercise "every supported RN version (0.77+)" from this machine
 # — that requires N real dependency installs, N real native builds, each
 # taking real CI minutes, which only a real CI matrix runner provides. This
 # file expresses the INTENDED matrix (ADR-14's own acceptance test: "the
@@ -25,6 +43,23 @@ name: Native build matrix (ADR-14 verification closure)
 # actually installed: `./gradlew :autoskeleton:testDebugUnitTest` (109/109)
 # and an instrumented `androidTest` run against a live emulator — both
 # against RN 0.87.1 specifically, not the matrix.
+#
+# KNOWN-RED ROWS THAT THIS FILE DOES NOT FIX, stated rather than hidden.
+# `examples/bare-rn` pins third-party native modules whose OWN published peer
+# ranges exclude most of this matrix (read from the npm registry):
+#   @react-native/new-app-screen@0.87.1 -> peer react-native "0.87.1" (exact)
+#   react-native-reanimated@^4.6.0      -> peer react-native "0.83-0.87"
+#   react-native-worklets@^0.12.1       -> peer react-native "0.83-0.87"
+#   @shopify/react-native-skia@^2.11.1  -> peer react-native ">=0.78"
+# So every row except 0.87.1 fails `npm install` on peer resolution, and the
+# 0.82.1 row would additionally be compiling reanimated 4 against an RN it
+# does not claim to support. The 0.77-0.81 rows added below sidestep this by
+# TRIMMING those modules out of the example (see the trim step: they are the
+# example app's UI dependencies, not autoskeleton's, and a Debug native build
+# never bundles the JS that imports them). The 0.82.1-0.86.3 rows are left
+# exactly as they were: fixing them means giving `examples/bare-rn` a per-row
+# pin of reanimated/worklets/skia/new-app-screen, which is a change to
+# `examples/` and out of this change's scope.
 
 on:
   pull_request:
@@ -42,23 +77,62 @@ jobs:
           node-version: 22
       - run: npm ci
       - run: mkdir -p .tarball && npm pack --pack-destination ./.tarball
+      # `include-hidden-files` and `if-no-files-found` are BOTH load-bearing —
+      # see the identical note in `examples.yml`. `@actions/glob` skips any
+      # dot-prefixed path segment, including the search root derived from the
+      # pattern's literal prefix, so `.tarball/*.tgz` matched zero files and
+      # this job uploaded NOTHING while exiting green. This workflow has always
+      # had its own producer job (artifacts are scoped to one workflow run, so
+      # it must); the producer was simply producing nothing.
       - uses: actions/upload-artifact@v4
         with:
           name: autoskeleton-tarball
           path: .tarball/*.tgz
+          include-hidden-files: true
+          if-no-files-found: error
 
   # ADR-14's own acceptance test, Android half, across the full supported
-  # matrix (spec.md Compatibility Matrix: "RN (bare) 0.83+"). One row per RN
-  # minor actually released against the New Architecture / Fabric-only line.
+  # matrix. spec.md's Compatibility Matrix used to read "RN (bare) 0.83+";
+  # `package.json`'s actual floor is `react-native: ">=0.77.0"` and this
+  # matrix now covers it (see the header for what really sets 0.77). One row
+  # per RN minor from the floor up.
   bare-rn-android-matrix:
     needs: pack-library
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # Update this list as new RN minors ship; 0.83 is the floor (spec.md
-        # §4: "old architecture removed as of 0.83, not merely deprecated").
-        react-native-version: ['0.83.1', '0.84.2', '0.85.0', '0.86.3', '0.87.1']
+        # ONE ROW PER SUPPORTED RN MINOR, floor 0.77 (see this file's header for
+        # why 0.77 and not 0.83). Latest published PATCH per minor, not an
+        # arbitrary one. The previous list pinned 0.83.1, 0.84.2 and 0.85.0.
+        # Only 0.84.2 was never published; 0.83.1 and 0.85.0 do exist, they are
+        # simply not the latest patch of their minor (0.83.10 and 0.85.3 are).
+        # An earlier note here claimed all three were invented — checked again
+        # against the registry, that was wrong, and only the 0.84.2 row could
+        # have died with ETARGET. Nobody
+        # noticed because this workflow had never run: it was inside the file
+        # that failed to parse. EVERY version below (react-native, react,
+        # react-test-renderer, @react-native-community/cli) was confirmed to
+        # exist with `npm view <pkg>@<version> version` before being written
+        # here.
+        #
+        # `react` is NOT optional to pin. `react-native@0.77` peer-depends on
+        # `react ^18.2.0`, 0.78/0.79 on `^19.0.0`, 0.80 on `^19.1.0` and 0.81
+        # on `^19.1.4` (read from the registry, not from memory), while
+        # `examples/bare-rn` pins `react@19.2.3`. Pinning react-native alone
+        # would leave an incompatible React in the tree and fail install before
+        # a single native file compiled. The react / react-test-renderer /
+        # @types/react / CLI triple for each row is exactly the one
+        # `@react-native-community/template@<same patch>` ships, so the row
+        # matches a real, shipped app configuration rather than a guess.
+        include:
+          - react-native-version: '0.87.1'
+            react: '19.2.3'
+            react-test-renderer: '19.2.3'
+            types-react: '^19.2.0'
+            community-cli: '20.2.0'
+            trim-example: 'false'
+            npm-install-flags: ''
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -75,7 +149,112 @@ jobs:
       - name: Pin examples/bare-rn to this matrix row's RN version
         run: npm pkg set "dependencies.react-native=${{ matrix.react-native-version }}"
         working-directory: examples/bare-rn
-      - run: npm install
+
+      # `react-native` alone is not a complete pin. Each RN release peer-depends
+      # on a specific React major/minor, and the `@react-native/*` and
+      # `@react-native-community/cli*` packages are published in lockstep with
+      # it. Pinning only react-native leaves `react@19.2.3` (bare-rn's own pin)
+      # in front of `react-native@0.77.3`, whose peer range is `^18.2.0`, and
+      # npm refuses the tree before any native tool runs. Values come from
+      # `@react-native-community/template@<this row's exact patch>`.
+      - name: Pin the React and CLI versions this RN release actually ships with
+        run: |
+          npm pkg set "dependencies.react=${{ matrix.react }}"
+          npm pkg set "devDependencies.react-test-renderer=${{ matrix.react-test-renderer }}"
+          npm pkg set "devDependencies.@types/react=${{ matrix.types-react }}"
+          npm pkg set "devDependencies.@react-native-community/cli=${{ matrix.community-cli }}"
+          npm pkg set "devDependencies.@react-native-community/cli-platform-android=${{ matrix.community-cli }}"
+          npm pkg set "devDependencies.@react-native-community/cli-platform-ios=${{ matrix.community-cli }}"
+          npm pkg set "devDependencies.@react-native/babel-preset=${{ matrix.react-native-version }}"
+          npm pkg set "devDependencies.@react-native/eslint-config=${{ matrix.react-native-version }}"
+          npm pkg set "devDependencies.@react-native/metro-config=${{ matrix.react-native-version }}"
+          npm pkg set "devDependencies.@react-native/typescript-config=${{ matrix.react-native-version }}"
+          # `@react-native/new-app-screen` peer-depends on react-native EXACTLY,
+          # so the example's 0.87.1 contradicts every older row. Pinning it to
+          # the row (tried first) does NOT fix that: npm still reports
+          #   Found: @react-native/new-app-screen@0.87.1
+          #   Conflicting peer dependency: react-native@0.86.3
+          # because the resolved tree still carries the example's version. It is
+          # a demo SCREEN — pure JS, and these jobs run Gradle / xcodebuild and
+          # never bundle JS — so like `jest-preset` it is deleted, not pinned.
+          npm pkg delete dependencies.@react-native/new-app-screen
+          # `@react-native/jest-preset` is the package ERESOLVE actually named
+          # when 20 of 22 rows failed: the example pins 0.87.1, it peer-depends
+          # on react-native exactly, and NOTHING pinned it, so every row below
+          # 0.87.1 died before compiling a line. It cannot be pinned like its
+          # siblings because npm publishes no 0.77-0.84 release of it at all
+          # (0.85.3 is the first). This job runs Gradle / xcodebuild and never
+          # jest, so it is deleted on EVERY row instead of trimmed on some.
+          npm pkg delete devDependencies.@react-native/jest-preset
+        working-directory: examples/bare-rn
+
+      # Only on the pre-0.82 rows. These are the example APP's UI dependencies,
+      # not autoskeleton's, and every one of them declares a peer range that
+      # excludes this row (see the header): new-app-screen pins react-native
+      # exactly, reanimated/worklets accept only 0.83-0.87, skia only >=0.78.
+      # `@react-native/jest-preset` is deleted because it has no published
+      # 0.77-0.81 release at all (`npm view @react-native/jest-preset@0.81.6`
+      # is a 404). Removing them leaves the row testing precisely what ADR-14
+      # claims — that @react-native-community/cli autolinking discovers
+      # autoskeleton and its native code compiles — and nothing else. A Debug
+      # native build does not bundle JS, so the App.tsx imports of the removed
+      # modules are never resolved by this job.
+      # Pinning the JavaScript dependencies down never made this an app of the
+      # row's version: `android/build.gradle` kept the newest release's native
+      # toolchain, and React Native's own react-native-gradle-plugin will not
+      # compile under one that new. A first attempt pinned Kotlin and Gradle
+      # and the rows moved one knob along, to `Failed to find Platform SDK
+      # android-37`. `scripts/adopt-template-toolchain.mjs` explains why this
+      # lifts the whole `ext { }` block instead of enumerating pins.
+      - name: Adopt this row's own template toolchain
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/tpl && mkdir -p /tmp/tpl
+          npm pack "@react-native-community/template@${{ matrix.react-native-version }}" --pack-destination /tmp/tpl >/dev/null
+          tar -xzf /tmp/tpl/*.tgz -C /tmp/tpl
+          TPL=/tmp/tpl/package/template/android
+          test -f "$TPL/build.gradle" || { echo "::error::no android/build.gradle in the ${{ matrix.react-native-version }} template"; exit 1; }
+          node scripts/adopt-template-toolchain.mjs "$TPL/build.gradle" examples/bare-rn/android/build.gradle
+          cp "$TPL/gradle/wrapper/gradle-wrapper.properties" examples/bare-rn/android/gradle/wrapper/gradle-wrapper.properties
+          grep -n 'distributionUrl' examples/bare-rn/android/gradle/wrapper/gradle-wrapper.properties
+          # `examples/bare-rn`'s manifest is the 0.87 template's, which writes
+          # `android:usesCleartextTraffic="${usesCleartextTraffic}"` and relies
+          # on that release's gradle plugin to define the placeholder
+          # (`AgpConfiguratorUtils.kt`). Older plugins do not define it — the
+          # 0.77 template puts a literal `true` in its debug manifest instead —
+          # so the merger stops with "requires a placeholder substitution but no
+          # value ... is provided". Supplying it keeps the row's manifest
+          # mergeable without editing the checked-in manifest, and matches the
+          # value the newer plugin itself uses for a debug build.
+          # One printf, not a heredoc: inside a YAML `run: |` block the closing
+          # delimiter would be indented too, and bash only accepts it at column
+          # zero, so the heredoc would swallow the rest of the script.
+          printf '\nandroid { buildTypes { debug { manifestPlaceholders["usesCleartextTraffic"] = "true" } } }\n' >> examples/bare-rn/android/app/build.gradle
+          tail -2 examples/bare-rn/android/app/build.gradle
+
+      - name: Trim examples/bare-rn to what a pre-0.82 row can build
+        if: matrix.trim-example == 'true'
+        run: |
+          npm pkg delete dependencies.@react-native/new-app-screen
+          npm pkg delete dependencies.@shopify/flash-list
+          npm pkg delete dependencies.@shopify/react-native-skia
+          npm pkg delete dependencies.react-native-reanimated
+          npm pkg delete dependencies.react-native-worklets
+          npm pkg delete dependencies.react-native-safe-area-context
+          npm pkg delete devDependencies.@react-native/jest-preset
+        working-directory: examples/bare-rn
+
+      - name: Unpin the locally built tarball before installing (see scripts/unpin-local-tarball.mjs)
+        run: node scripts/unpin-local-tarball.mjs examples/bare-rn
+      - name: Install from the packed tarball, never a workspace symlink (ADR-14's own load-bearing detail)
+        # `${{ matrix.npm-install-flags }}` is `--legacy-peer-deps` on the trimmed
+        # pre-0.82 rows and empty everywhere else. Without it npm 7+ would
+        # AUTO-INSTALL autoskeleton's own permissive peers
+        # (`@shopify/react-native-skia >=1.0.0`, `react-native-reanimated
+        # >=3.0.0`, `uniwind ^1.0.0`) at their latest published versions,
+        # putting back exactly the RN-0.83+-only packages the trim step just
+        # removed.
+        run: npm install ${{ matrix.npm-install-flags }} "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
         working-directory: examples/bare-rn
       - name: Zero-Expo-packages guard (ADR-14 / RISK-5)
         run: |
@@ -85,9 +264,6 @@ jobs:
             echo "::error::examples/bare-rn must have zero Expo packages in its dependency tree (ADR-14)"
             exit 1
           fi
-        working-directory: examples/bare-rn
-      - name: Install from the packed tarball, never a workspace symlink (ADR-14's own load-bearing detail)
-        run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
         working-directory: examples/bare-rn
       - name: Real Gradle assembleDebug — proves @react-native-community/cli autolinking end to end
         run: ./gradlew assembleDebug
@@ -106,7 +282,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        react-native-version: ['0.83.1', '0.84.2', '0.85.0', '0.86.3', '0.87.1']
+        # Same rows, same verified pins, same reasoning as the Android
+        # matrix above — see the comment there.
+        include:
+          - react-native-version: '0.87.1'
+            react: '19.2.3'
+            react-test-renderer: '19.2.3'
+            types-react: '^19.2.0'
+            community-cli: '20.2.0'
+            trim-example: 'false'
+            npm-install-flags: ''
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -119,9 +304,79 @@ jobs:
       - name: Pin examples/bare-rn to this matrix row's RN version
         run: npm pkg set "dependencies.react-native=${{ matrix.react-native-version }}"
         working-directory: examples/bare-rn
-      - run: npm install
+
+      # `react-native` alone is not a complete pin. Each RN release peer-depends
+      # on a specific React major/minor, and the `@react-native/*` and
+      # `@react-native-community/cli*` packages are published in lockstep with
+      # it. Pinning only react-native leaves `react@19.2.3` (bare-rn's own pin)
+      # in front of `react-native@0.77.3`, whose peer range is `^18.2.0`, and
+      # npm refuses the tree before any native tool runs. Values come from
+      # `@react-native-community/template@<this row's exact patch>`.
+      - name: Pin the React and CLI versions this RN release actually ships with
+        run: |
+          npm pkg set "dependencies.react=${{ matrix.react }}"
+          npm pkg set "devDependencies.react-test-renderer=${{ matrix.react-test-renderer }}"
+          npm pkg set "devDependencies.@types/react=${{ matrix.types-react }}"
+          npm pkg set "devDependencies.@react-native-community/cli=${{ matrix.community-cli }}"
+          npm pkg set "devDependencies.@react-native-community/cli-platform-android=${{ matrix.community-cli }}"
+          npm pkg set "devDependencies.@react-native-community/cli-platform-ios=${{ matrix.community-cli }}"
+          npm pkg set "devDependencies.@react-native/babel-preset=${{ matrix.react-native-version }}"
+          npm pkg set "devDependencies.@react-native/eslint-config=${{ matrix.react-native-version }}"
+          npm pkg set "devDependencies.@react-native/metro-config=${{ matrix.react-native-version }}"
+          npm pkg set "devDependencies.@react-native/typescript-config=${{ matrix.react-native-version }}"
+          # `@react-native/new-app-screen` peer-depends on react-native EXACTLY,
+          # so the example's 0.87.1 contradicts every older row. Pinning it to
+          # the row (tried first) does NOT fix that: npm still reports
+          #   Found: @react-native/new-app-screen@0.87.1
+          #   Conflicting peer dependency: react-native@0.86.3
+          # because the resolved tree still carries the example's version. It is
+          # a demo SCREEN — pure JS, and these jobs run Gradle / xcodebuild and
+          # never bundle JS — so like `jest-preset` it is deleted, not pinned.
+          npm pkg delete dependencies.@react-native/new-app-screen
+          # `@react-native/jest-preset` is the package ERESOLVE actually named
+          # when 20 of 22 rows failed: the example pins 0.87.1, it peer-depends
+          # on react-native exactly, and NOTHING pinned it, so every row below
+          # 0.87.1 died before compiling a line. It cannot be pinned like its
+          # siblings because npm publishes no 0.77-0.84 release of it at all
+          # (0.85.3 is the first). This job runs Gradle / xcodebuild and never
+          # jest, so it is deleted on EVERY row instead of trimmed on some.
+          npm pkg delete devDependencies.@react-native/jest-preset
         working-directory: examples/bare-rn
-      - run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
+
+      # Only on the pre-0.82 rows. These are the example APP's UI dependencies,
+      # not autoskeleton's, and every one of them declares a peer range that
+      # excludes this row (see the header): new-app-screen pins react-native
+      # exactly, reanimated/worklets accept only 0.83-0.87, skia only >=0.78.
+      # `@react-native/jest-preset` is deleted because it has no published
+      # 0.77-0.81 release at all (`npm view @react-native/jest-preset@0.81.6`
+      # is a 404). Removing them leaves the row testing precisely what ADR-14
+      # claims — that @react-native-community/cli autolinking discovers
+      # autoskeleton and its native code compiles — and nothing else. A Debug
+      # native build does not bundle JS, so the App.tsx imports of the removed
+      # modules are never resolved by this job.
+      - name: Trim examples/bare-rn to what a pre-0.82 row can build
+        if: matrix.trim-example == 'true'
+        run: |
+          npm pkg delete dependencies.@react-native/new-app-screen
+          npm pkg delete dependencies.@shopify/flash-list
+          npm pkg delete dependencies.@shopify/react-native-skia
+          npm pkg delete dependencies.react-native-reanimated
+          npm pkg delete dependencies.react-native-worklets
+          npm pkg delete dependencies.react-native-safe-area-context
+          npm pkg delete devDependencies.@react-native/jest-preset
+        working-directory: examples/bare-rn
+
+      - name: Unpin the locally built tarball before installing (see scripts/unpin-local-tarball.mjs)
+        run: node scripts/unpin-local-tarball.mjs examples/bare-rn
+      - name: Install from the packed tarball, never a workspace symlink (ADR-14's own load-bearing detail)
+        # `${{ matrix.npm-install-flags }}` is `--legacy-peer-deps` on the trimmed
+        # pre-0.82 rows and empty everywhere else. Without it npm 7+ would
+        # AUTO-INSTALL autoskeleton's own permissive peers
+        # (`@shopify/react-native-skia >=1.0.0`, `react-native-reanimated
+        # >=3.0.0`, `uniwind ^1.0.0`) at their latest published versions,
+        # putting back exactly the RN-0.83+-only packages the trim step just
+        # removed.
+        run: npm install ${{ matrix.npm-install-flags }} "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
         working-directory: examples/bare-rn
       - name: pod install (use_native_modules! resolving the root podspec, use_expo_modules! absent)
         run: pod install
@@ -157,9 +412,10 @@ jobs:
         with:
           name: autoskeleton-tarball
           path: .tarball
-      - run: npm install
-        working-directory: examples/expo
-      - run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
+      - name: Unpin the locally built tarball before installing (see scripts/unpin-local-tarball.mjs)
+        run: node scripts/unpin-local-tarball.mjs examples/expo
+      - name: Install from the packed tarball, never a workspace symlink (ADR-14's own load-bearing detail)
+        run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
         working-directory: examples/expo
       - name: expo prebuild (real expo-modules-autolinking discovery)
         run: npx expo prebuild --platform ios --non-interactive
@@ -167,10 +423,346 @@ jobs:
       - name: pod install
         run: pod install
         working-directory: examples/expo/ios
+      # DISCOVERED, not hardcoded. `expo prebuild` derives the Xcode names from
+      # the app's own `name`/`slug` (`autoskeleton-expo-example`), so the
+      # previous literal `AutoskeletonExpo.xcworkspace` matched nothing and the
+      # job died with "does not exist" before building anything. A generated
+      # artifact's name does not belong in a workflow as a literal — it drifts
+      # the moment the app is renamed, and the failure is 30 lines from the
+      # cause.
       - name: Real xcodebuild
         run: |
+          workspace="$(ls -d *.xcworkspace | head -1)"
+          scheme="$(basename "$workspace" .xcworkspace)"
+          echo "building workspace=$workspace scheme=$scheme"
           xcodebuild build \
-            -workspace AutoskeletonExpo.xcworkspace \
-            -scheme AutoskeletonExpo \
+            -workspace "$workspace" \
+            -scheme "$scheme" \
             -destination 'generic/platform=iOS Simulator'
         working-directory: examples/expo/ios
+
+  # The floor row that actually means something.
+  #
+  # `bare-rn-android-matrix` covers 0.77 by taking a React Native 0.87 app and
+  # swapping its JavaScript dependencies down. That is not the same as being on
+  # 0.77: the app keeps Kotlin 2.2.0 and Gradle 9.4.1, and React Native's OWN
+  # react-native-gradle-plugin does not compile under them. Those rows fail for
+  # a reason that has nothing to do with this library, which makes them useless
+  # as evidence for the `react-native: ">=0.77.0"` peer range.
+  #
+  # `examples/rn-077` is a real 0.77.3 app — scaffolded by
+  # `@react-native-community/cli@15.0.1 --version 0.77.3`, carrying 0.77's own
+  # Kotlin 2.0.21, Gradle 8.10.2 and compileSdk 35 — so building it exercises
+  # the two mechanisms that set the floor: the named-argument `ReactModuleInfo`
+  # call in `AutoskeletonPackage.kt`, and codegen for the overlay component.
+  #
+  # Android only, deliberately. Current Xcode's Clang rejects the `fmt` release
+  # RN 0.77 pins, which is a break between those two and says nothing about this
+  # package; claiming an iOS 0.77 build here would be claiming something the
+  # runner cannot decide. See `examples/rn-077/README.md`.
+  floor-rn-077-android:
+    runs-on: ubuntu-latest
+    needs: pack-library
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+      - uses: actions/download-artifact@v4
+        with:
+          name: autoskeleton-tarball
+          path: .tarball
+      - name: Fail loudly if the tarball did not arrive
+        run: test -n "$(ls -A .tarball 2>/dev/null)" || { echo "::error::no tarball"; exit 1; }
+      # The 0.77 template pins `ndkVersion = "27.1.12297006"`, and New
+      # Architecture codegen compiles C++, so the NDK is genuinely needed. AGP's
+      # own auto-install failed on the runner with
+      #   InstallFailedException: Failed to install ndk;27.1.12297006
+      # after a runner-image change; this job was green before it and nothing in
+      # the repository moved. Installing it explicitly, with licences accepted,
+      # takes that away from AGP.
+      - name: Install the NDK the 0.77 template pins
+        run: |
+          set -euo pipefail
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.1.12297006"
+      - name: Unpin the locally built tarball before installing (see scripts/unpin-local-tarball.mjs)
+        run: node scripts/unpin-local-tarball.mjs examples/rn-077
+      - name: Install THIS run's tarball into the real 0.77 app
+        run: npm install --no-audit --no-fund "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
+        working-directory: examples/rn-077
+      - name: Autolinking must discover autoskeleton on 0.77 (ADR-14)
+        run: |
+          npx react-native config > /tmp/rn-config.json
+          node -e "
+            const c = require('/tmp/rn-config.json');
+            const found = Object.keys(c.dependencies || {}).includes('autoskeleton');
+            if (!found) { console.error('::error::autolinking did not discover autoskeleton on RN 0.77'); process.exit(1); }
+            console.log('autolinking discovered autoskeleton');
+          "
+        working-directory: examples/rn-077
+      - name: assembleDebug — the floor claim, compiled
+        run: ./gradlew assembleDebug
+        working-directory: examples/rn-077/android
+      - name: The class the floor argument is about must exist
+        # AutoskeletonPackage.kt is the file whose named `ReactModuleInfo`
+        # arguments do not bind before 0.77. A green build that somehow skipped
+        # it would prove nothing, so the artifact is asserted directly.
+        run: |
+          hit=$(find node_modules/autoskeleton/android/build -name 'AutoskeletonPackage*.class' | head -1)
+          test -n "$hit" || { echo "::error::AutoskeletonPackage was never compiled"; exit 1; }
+          echo "compiled: $hit"
+        working-directory: examples/rn-077
+
+  # THE ROWS THAT USED TO LIVE IN `bare-rn-android-matrix`, DONE THE WAY THAT
+  # ACTUALLY WORKS.
+  #
+  # Those rows covered 0.77-0.86 by taking `examples/bare-rn` — a React Native
+  # 0.87 app — and mutating it down: swapping its JavaScript dependencies, then
+  # its Kotlin and Gradle, then its whole `ext { }` block, then a manifest
+  # placeholder. Six rounds, and every round uncovered one more thing that made
+  # the app still a 0.87 app underneath: an ERESOLVE on a package with an exact
+  # peer, then `Failed to find Platform SDK android-37`, then a placeholder no
+  # older gradle plugin defines, then `react-native-reanimated` refusing to
+  # build below its own minimum. Mutating an app of one version into an app of
+  # another is not the same as being that version, and the failures were never
+  # in this library.
+  #
+  # Meanwhile a REAL app of each version — scaffolded by that release's own CLI,
+  # carrying its own Gradle, Kotlin, SDK levels, manifest and dependency set —
+  # built on the first attempt, every time, for every version tried. So the
+  # matrix now scaffolds instead of mutating. It is slower per row and it stops
+  # needing a new patch every time React Native moves a knob.
+  #
+  # 0.77.3 is not here: `floor-rn-077-android` builds the COMMITTED
+  # `examples/rn-077`, which also keeps that example from rotting. 0.87.1 is not
+  # here either — `bare-rn-android-matrix` covers it, and bare-rn genuinely IS a
+  # 0.87 app, so no mutation is involved.
+  genuine-app-android-matrix:
+    runs-on: ubuntu-latest
+    needs: pack-library
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rn: '0.78.3'
+            cli: '15.0.1'
+            install-flags: '--legacy-peer-deps'
+          - rn: '0.79.7'
+            cli: '18.0.0'
+            install-flags: '--legacy-peer-deps'
+          - rn: '0.80.3'
+            cli: '19.1.2'
+            install-flags: '--legacy-peer-deps'
+          - rn: '0.81.6'
+            cli: '20.0.0'
+            install-flags: '--legacy-peer-deps'
+          - rn: '0.82.1'
+            cli: '20.2.0'
+            install-flags: ''
+          - rn: '0.83.10'
+            cli: '20.2.0'
+            install-flags: ''
+          - rn: '0.84.1'
+            cli: '20.2.0'
+            install-flags: ''
+          - rn: '0.85.3'
+            cli: '20.2.0'
+            install-flags: ''
+          - rn: '0.86.3'
+            cli: '20.2.0'
+            install-flags: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+      - uses: actions/download-artifact@v4
+        with:
+          name: autoskeleton-tarball
+          path: .tarball
+      - name: Fail loudly if the tarball did not arrive
+        run: test -n "$(ls -A .tarball 2>/dev/null)" || { echo "::error::no tarball"; exit 1; }
+      - name: Scaffold a real ${{ matrix.rn }} app with that release's own CLI
+        run: |
+          set -euo pipefail
+          npx --yes "@react-native-community/cli@${{ matrix.cli }}" init GenuineApp \
+            --version "${{ matrix.rn }}" --directory /tmp/genuine --skip-install --install-pods false
+          test -f /tmp/genuine/package.json
+          node -e "console.log('scaffolded react-native', require('/tmp/genuine/package.json').dependencies['react-native'])"
+      - name: Install the NDK this template pins
+        run: |
+          set -euo pipefail
+          ndk=$(grep -oE 'ndkVersion *= *"[^"]+"' /tmp/genuine/android/build.gradle | grep -oE '[0-9]+\.[0-9.]+' || true)
+          if [ -n "$ndk" ]; then
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk"
+          fi
+      - name: Install THIS run's tarball
+        run: npm install --no-audit --no-fund ${{ matrix.install-flags }} "autoskeleton@file:$GITHUB_WORKSPACE/.tarball/$(ls "$GITHUB_WORKSPACE/.tarball")"
+        working-directory: /tmp/genuine
+      - name: Autolinking must discover autoskeleton (ADR-14)
+        run: |
+          npx react-native config > /tmp/rn-config.json
+          node -e "
+            const c = require('/tmp/rn-config.json');
+            if (!Object.keys(c.dependencies || {}).includes('autoskeleton')) {
+              console.error('::error::autolinking did not discover autoskeleton on RN ${{ matrix.rn }}');
+              process.exit(1);
+            }
+            console.log('autolinking discovered autoskeleton');
+          "
+        working-directory: /tmp/genuine
+      - name: assembleDebug
+        run: ./gradlew assembleDebug
+        working-directory: /tmp/genuine/android
+      - name: The library's own class must have been compiled
+        # A green build that never compiled autoskeleton would prove nothing, so
+        # the artifact is asserted rather than inferred from an exit code.
+        run: |
+          hit=$(find node_modules/autoskeleton/android/build -name 'AutoskeletonPackage*.class' | head -1)
+          test -n "$hit" || { echo "::error::AutoskeletonPackage was never compiled on ${{ matrix.rn }}"; exit 1; }
+          echo "compiled: $hit"
+        working-directory: /tmp/genuine
+
+  # The iOS half of the same replacement, with one honest asymmetry.
+  #
+  # `bare-rn-ios-matrix` covered 0.77-0.86 by mutating a 0.87 app, and nine of
+  # eleven rows were red. Scaffolding a real app per version removes ONE of the
+  # two causes and not the other, and the difference was measured rather than
+  # assumed:
+  #
+  #   * `pod install` could not resolve `React-Core-prebuilt` on 0.82 and
+  #     0.84-0.86. That was the 0.87 template's prebuilt-frameworks setup
+  #     dragged onto an older row. A genuine 0.77 app installs 68 pods with no
+  #     such error, so scaffolding fixes it.
+  #   * `Pods/fmt` does not compile against current Clang on 0.77-0.81
+  #     ("call to consteval function ... is not a constant expression").
+  #     Scaffolding does NOT fix this: a genuine 0.77.3 app, built locally
+  #     against Xcode 26.6, fails identically with 5 errors inside fmt. It is a
+  #     break between an old `fmt` release and today's toolchain, entirely
+  #     inside React Native's own dependencies.
+  #
+  # So those rows stop at `pod install` instead of pretending to build. That is
+  # not nothing: it proves CocoaPods autolinking discovers this package on that
+  # version, which is the iOS half of ADR-14 and the part that could actually
+  # regress here. What it does not prove is a full compile, and the row says so
+  # rather than being quietly dropped — a version with no row at all looks
+  # supported-and-checked, which is worse than one that states its limit.
+  genuine-app-ios-matrix:
+    runs-on: macos-latest
+    needs: pack-library
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `fmt` will not compile against current Clang on these. 0.77.3 is the
+          # one actually measured: a genuine 0.77.3 app, scaffolded and pod-installed
+          # locally, links autoskeleton in Podfile.lock and then fails with 5 errors
+          # inside fmt under Xcode 26.6.
+          - rn: '0.77.3'
+            cli: '15.0.1'
+            install-flags: '--legacy-peer-deps'
+            full-build: 'false'
+          - rn: '0.78.3'
+            cli: '15.0.1'
+            install-flags: '--legacy-peer-deps'
+            full-build: 'false'
+          - rn: '0.79.7'
+            cli: '18.0.0'
+            install-flags: '--legacy-peer-deps'
+            full-build: 'false'
+          - rn: '0.80.3'
+            cli: '19.1.2'
+            install-flags: '--legacy-peer-deps'
+            full-build: 'false'
+          - rn: '0.81.6'
+            cli: '20.0.0'
+            install-flags: '--legacy-peer-deps'
+            full-build: 'false'
+          # 0.82 belongs with the group above, and this is where measurement
+          # beat inference. It was classified as a full build because the
+          # earlier run showed it failing in `pod install` on
+          # `React-Core-prebuilt` — scaffolding fixed that, and the fmt failure
+          # it had been hiding behind surfaced underneath, identical to
+          # 0.77-0.81's. One blocker masking another is exactly why the boundary
+          # could not be reasoned out and had to be run.
+          - rn: '0.82.1'
+            cli: '20.2.0'
+            install-flags: ''
+            full-build: 'false'
+          # These build all the way through.
+          - rn: '0.83.10'
+            cli: '20.2.0'
+            install-flags: ''
+            full-build: 'true'
+          - rn: '0.84.1'
+            cli: '20.2.0'
+            install-flags: ''
+            full-build: 'true'
+          - rn: '0.85.3'
+            cli: '20.2.0'
+            install-flags: ''
+            full-build: 'true'
+          - rn: '0.86.3'
+            cli: '20.2.0'
+            install-flags: ''
+            full-build: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: autoskeleton-tarball
+          path: .tarball
+      - name: Fail loudly if the tarball did not arrive
+        run: test -n "$(ls -A .tarball 2>/dev/null)" || { echo "::error::no tarball"; exit 1; }
+      - name: Scaffold a real ${{ matrix.rn }} app with that release's own CLI
+        run: |
+          set -euo pipefail
+          npx --yes "@react-native-community/cli@${{ matrix.cli }}" init GenuineApp \
+            --version "${{ matrix.rn }}" --directory /tmp/genuine --skip-install --install-pods false
+          node -e "console.log('scaffolded react-native', require('/tmp/genuine/package.json').dependencies['react-native'])"
+      - name: Install THIS run's tarball
+        run: npm install --no-audit --no-fund ${{ matrix.install-flags }} "autoskeleton@file:$GITHUB_WORKSPACE/.tarball/$(ls "$GITHUB_WORKSPACE/.tarball")"
+        working-directory: /tmp/genuine
+      - name: pod install
+        run: pod install
+        working-directory: /tmp/genuine/ios
+      - name: CocoaPods autolinking must have found autoskeleton (the iOS half of ADR-14)
+        # Asserted from Podfile.lock rather than from `pod install` exiting 0:
+        # a successful install that linked nothing would be a green step and no
+        # evidence at all.
+        run: |
+          grep -q 'Autoskeleton (from `../node_modules/autoskeleton`)' Podfile.lock \
+            || { echo "::error::CocoaPods did not link autoskeleton on RN ${{ matrix.rn }}"; exit 1; }
+          echo "Podfile.lock links autoskeleton from node_modules"
+        working-directory: /tmp/genuine/ios
+      - name: xcodebuild
+        if: matrix.full-build == 'true'
+        # Names discovered, never hardcoded: the scaffold derives them from the
+        # app name and a rename upstream would otherwise look like a build break.
+        run: |
+          set -euo pipefail
+          workspace=$(ls -d *.xcworkspace | head -1)
+          scheme=$(basename "$workspace" .xcworkspace)
+          echo "building workspace=$workspace scheme=$scheme"
+          xcodebuild build \
+            -workspace "$workspace" \
+            -scheme "$scheme" \
+            -destination 'generic/platform=iOS Simulator'
+        working-directory: /tmp/genuine/ios
+      - name: Say plainly that this row stopped at autolinking
+        if: matrix.full-build != 'true'
+        run: |
+          echo "::notice::RN ${{ matrix.rn }} verified as far as CocoaPods autolinking. A full compile is not possible on this runner: React Native pins an fmt release that current Clang rejects. See genuine-app-ios-matrix's own comment."

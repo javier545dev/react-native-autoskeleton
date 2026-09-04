@@ -23,6 +23,8 @@ import type { ReactNode } from 'react';
 import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { bucketWidth, composeCacheKey, quantizeFontScale } from '../core/cache-key';
 import type { RendererHandle, SkeletonTheme } from '../core/contracts';
+import { isLoadingFromProps, resolveSkeletonChildren } from '../core/data-props';
+import type { SkeletonLoadingSource } from '../core/data-props';
 import { createHandoffController } from '../core/handoff';
 import type { HandoffController, SkeletonPipelinePhase } from '../core/handoff';
 import {
@@ -36,7 +38,7 @@ import {
   emitRadiusFallbackWarning,
 } from '../core/metrics';
 import { shouldRunHandoffCycle } from '../core/refresh-gate';
-import { MemoryShapeStore } from '../core/snapshot';
+import { isEmptySnapshot, MAX_EMPTY_MEASUREMENTS, MemoryShapeStore } from '../core/snapshot';
 import type { AnimationKind, OnMetrics, ShapeSnapshot } from '../core/types';
 import { WIRE_HEADER_SLOTS, WIRE_STRIDE } from '../core/types';
 import { createCssRenderer, createShimmerClock, DEFAULT_BASE_COLOR, DEFAULT_HIGHLIGHT_COLOR } from './css-renderer';
@@ -159,8 +161,7 @@ const sensor = createDomSensor();
 const renderer = createCssRenderer();
 const sharedClock = createShimmerClock();
 
-export interface AutoSkeletonProps {
-  readonly isLoading: boolean;
+interface AutoSkeletonBaseProps {
   readonly skeletonKey: string;
   readonly itemType?: string;
   readonly animation?: AnimationKind;
@@ -176,8 +177,29 @@ export interface AutoSkeletonProps {
   /** ADR-16 / plan.md §3.8 handoff props. */
   readonly onSuccessorPainted?: () => void;
   readonly expectsPlaceholder?: boolean;
-  readonly children?: ReactNode;
+  /** Shown ONLY on a cold miss: this cycle would paint a skeleton, and there
+   *  is no usable measured geometry for the cache key yet.
+   *
+   *  This is the answer to the hole `core/data-props.ts` documents at length.
+   *  The sensor can only measure what is mounted, and it only looks while the
+   *  skeleton is up — so a subtree that renders nothing during loading (the
+   *  function-child form, and the older `{x !== null && <Content/>}` form
+   *  alike) is measured EMPTY, every cycle, and paints nothing forever.
+   *  A hand-authored `fallback` is the only thing that can be on screen then.
+   *
+   *  It yields to the measured skeleton as soon as real geometry exists,
+   *  which happens for consumers whose children stay mounted through the
+   *  loading cycle — not on some fixed second cycle. For strictly conditional
+   *  children it stays: there is never anything for the sensor to find.
+   *
+   *  Omitting it is byte-for-byte today's behaviour — the render gate below
+   *  starts with `props.fallback !== undefined`, so no existing tree gains a
+   *  node, and the fallback is excluded from the sensor's traversal
+   *  (`IGNORE_ATTRIBUTE`) so it can never be measured as if it were content. */
+  readonly fallback?: ReactNode;
 }
+
+export type AutoSkeletonProps<T = unknown> = AutoSkeletonBaseProps & SkeletonLoadingSource<T, ReactNode>;
 
 function reducedMotionPreferred(): boolean {
   return (
@@ -192,6 +214,59 @@ function currentDirection(): 'ltr' | 'rtl' {
     return 'ltr';
   }
   return document.documentElement.getAttribute('dir') === 'rtl' ? 'rtl' : 'ltr';
+}
+
+/** The web counterpart of native's `PixelRatio.getFontScale()`, and it is a
+ *  real reading rather than a constant (G.19).
+ *
+ *  A `font-size: medium` probe is the right signal and the document root is
+ *  NOT. `medium` is an absolute keyword that resolves to the browser's own
+ *  default-font-size preference, so it reports what the READER chose; the root
+ *  reports whatever the author's stylesheet did to it, and the
+ *  `html { font-size: 62.5% }` reset is common enough that the root is
+ *  actively misleading. Measured through CDP's real preference surface
+ *  (`test/web/font-scale.spec.ts`):
+ *
+ *    default                     root 16px   probe 16px   text height  54
+ *    preference 24               root 24px   probe 24px   text height 112
+ *    preference 24, page resets
+ *      its own root to 62.5%     root 15px   probe 24px   text height  34
+ *
+ *  The text a skeleton has to match genuinely doubles, so this belongs in the
+ *  cache key: without it, a reader who enlarges their default font gets
+ *  geometry measured for somebody else's.
+ *
+ *  MEASURED ONCE and cached. Attaching a probe costs a style recalc, and this
+ *  is called during render on every `<AutoSkeleton>`. A mid-session preference
+ *  change is therefore not picked up — the browser exposes no event for one,
+ *  and nothing else in the web sensor invalidates on it either (see the
+ *  `Sensor.observe()` gap in tasks.md).
+ *
+ *  Returns 1 with no `document` — SSR, where the preference is unknowable, and
+ *  the same neutral value `cli/browser-runtime.ts` documents for capture. */
+const DEFAULT_FONT_SIZE_PX = 16;
+let measuredFontScale: number | undefined;
+
+function currentFontScale(): number {
+  if (measuredFontScale !== undefined) {
+    return measuredFontScale;
+  }
+  if (typeof document === 'undefined' || document.body === null) {
+    return 1;
+  }
+  const probe = document.createElement('span');
+  probe.style.cssText = 'position:absolute;visibility:hidden;font-size:medium';
+  document.body.appendChild(probe);
+  const px = Number.parseFloat(getComputedStyle(probe).fontSize);
+  probe.remove();
+  measuredFontScale = quantizeFontScale(px > 0 ? px / DEFAULT_FONT_SIZE_PX : 1);
+  return measuredFontScale;
+}
+
+/** Test-only: drops the cached reading so a spec can measure a changed
+ *  preference. Never called by product code. */
+export function __resetFontScaleForTests(): void {
+  measuredFontScale = undefined;
 }
 
 /** `useSyncExternalStore` over `window`'s `resize` event (no-use-effect
@@ -231,6 +306,16 @@ function useOverlayRenderer(
   useEffect(() => {
     const host = hostRef.current;
     if (!host || !snapshot) {
+      // The overlay host is gone (a completed handoff unmounted it), so the
+      // handle now points at a DETACHED subtree. Releasing it here is what
+      // lets a LATER loading cycle mount a fresh overlay into the fresh host:
+      // before this, `destroy()` ran only on component unmount, so every
+      // `skeletonOnRefresh` cycle after the first rendered an `aria-busy`
+      // `role="status"` host with `aria-hidden` content underneath it and
+      // painted nothing at all. Not hypothetical — observed in the real
+      // exported Expo Web app before it was gated.
+      handleRef.current?.destroy();
+      handleRef.current = null;
       return;
     }
     // ADR-8 arbitration. Before this, `theme.speedMs` reached NOTHING on
@@ -289,6 +374,7 @@ function useColdMeasurement(
   wrapperRef: React.RefObject<HTMLDivElement | null>,
   active: boolean,
   cacheKey: string,
+  cycleId: number,
   hintsIgnored: boolean,
   budgetMs: number,
   maxShapes: number,
@@ -340,8 +426,15 @@ function useColdMeasurement(
         emitRadiusFallbackWarning(checkRadiusFallback(result.snapshot.radiusSources, { radiusFallbackShare }));
       }
     }
+    // `cycleId` is what PACES the bounded empty-measurement retry: `active`
+    // stays true across the re-render that follows an empty result, so without
+    // a per-cycle dep the effect would never run again — and with a
+    // frame-paced one it would burn the whole budget in three consecutive
+    // frames that all observe the same not-yet-laid-out DOM. A new loading
+    // cycle is a genuinely different moment in the app's life, which is
+    // exactly when re-measuring can find something new.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, cacheKey]);
+  }, [active, cacheKey, cycleId]);
 }
 
 /** Withholds the skeleton until `delayMs` has elapsed since this loading
@@ -573,18 +666,26 @@ function usePaintDetectionHeuristic(
   }, [phase, controller, wrapperRef, expectsSuccessor]);
 }
 
-export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
+export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JSX.Element {
   const ctx = useContext(SkeletonContext);
   const theme = ctx.theme;
   const animation = props.animation ?? 'shimmer';
   const debugOverlayEnabled = props.debugOverlay === true && process.env.NODE_ENV !== 'production';
 
+  // The `data` form's two derivations, both from `core/data-props.ts` so web
+  // and native cannot drift on either. When neither `data` nor a function
+  // child is used — every call site that predates this change — `isLoading`
+  // is `props.isLoading` and `children` is `props.children` BY REFERENCE, so
+  // nothing below can behave differently for them.
+  const isLoading = isLoadingFromProps(props.isLoading, props.data);
+  const children = resolveSkeletonChildren<T, ReactNode>(props.children, props.data);
+
   // REQ-PTR-1: "has real content ever been shown" — the FACT of "ever" needs
   // one bit of history, tracked via React's documented "adjusting state
   // during render" pattern (a real prior-value comparison against STATE, not
   // a bare ref-as-effect-avoidance — Rule 6).
-  const [everShownContent, setEverShownContent] = useState(!props.isLoading);
-  if (!props.isLoading && !everShownContent) {
+  const [everShownContent, setEverShownContent] = useState(!isLoading);
+  if (!isLoading && !everShownContent) {
     setEverShownContent(true);
   }
 
@@ -595,11 +696,11 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   // exact moment — it must stay stable for the cycle's whole lifetime
   // (including its handoff teardown, well after `isLoading` has already
   // flipped back to `false`), not be recomputed live every render.
-  const [wasLoading, setWasLoading] = useState(props.isLoading);
+  const [wasLoading, setWasLoading] = useState(isLoading);
   const [cycleId, setCycleId] = useState(0);
-  if (props.isLoading !== wasLoading) {
-    setWasLoading(props.isLoading);
-    if (props.isLoading && !wasLoading) {
+  if (isLoading !== wasLoading) {
+    setWasLoading(isLoading);
+    if (isLoading && !wasLoading) {
       setCycleId((c) => c + 1);
     }
   }
@@ -644,7 +745,7 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
     skeletonKey: props.skeletonKey,
     itemType: props.itemType,
     viewportWidth: widthBucket,
-    fontScale: quantizeFontScale(1),
+    fontScale: currentFontScale(),
     direction,
     platform: 'web',
   });
@@ -668,15 +769,47 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   const [coldSnapshot, setColdSnapshot] = useState<{ key: string; snapshot: ShapeSnapshot } | null>(null);
   const traversalMsRef = useRef(0);
   const coldSnapshotForKey = coldSnapshot?.key === cacheKey ? coldSnapshot.snapshot : null;
-  const snapshot = cacheHit ? cacheStateRef.current.snapshot : coldSnapshotForKey;
+  // A fresh traversal this instance just took ALWAYS wins over whatever the
+  // store answered with when this `cacheKey` was first seen: the only way to
+  // get here with both present is the empty-remeasure path below, and serving
+  // the stale empty one back would defeat the whole re-measurement.
+  const snapshot = coldSnapshotForKey ?? cacheStateRef.current.snapshot;
+
+  // A zero-shape snapshot is not automatically the truth about this subtree —
+  // it is equally the signature of a subtree that had no layout box yet when
+  // the first traversal ran (an `<img>` whose bytes had not arrived is the
+  // everyday case). Treat it as provisional and take a genuinely fresh
+  // measurement on the next loading cycle, but only while the key's bounded,
+  // inspectable budget lasts, so content that legitimately has nothing to
+  // skeleton settles instead of re-traversing forever. See
+  // `core/snapshot.ts`'s `MAX_EMPTY_MEASUREMENTS` for the full rationale.
+  //
+  // `noUsableGeometry` names the same fact for the `fallback` gate below. It
+  // is deliberately NOT `snapshot === null`: a cold traversal over a subtree
+  // whose content has not mounted yet returns an EMPTY snapshot, not a
+  // missing one, and an empty snapshot paints exactly zero shapes. Gating
+  // `fallback` on nullness alone would show it for a single frame and then
+  // hand over to a "measured" skeleton that draws nothing — i.e. it would not
+  // fix the hole it exists for. Same predicate the re-measure budget below is
+  // built on, so the two can never disagree about what "measured" means.
+  const noUsableGeometry = snapshot === null || isEmptySnapshot(snapshot);
+  const remeasureEmpty =
+    snapshot !== null &&
+    noUsableGeometry &&
+    ctx.store.emptyMeasurementsFor(cacheKey) < MAX_EMPTY_MEASUREMENTS;
+  // A cycle that re-traverses is not serving the cache, whatever the store
+  // happened to hold — reporting `cacheHit: true` alongside a real traversal
+  // would misreport REQ-NAV-1's own hot-path signal.
+  const cacheHitForCycle = cacheHit && !remeasureEmpty;
 
   const wrapperRef = useRef<HTMLDivElement>(null);
   const overlayHostRef = useRef<HTMLDivElement>(null);
 
   useColdMeasurement(
     wrapperRef,
-    showSkeleton && !cacheHit && snapshot === null,
+    showSkeleton && (snapshot === null || remeasureEmpty),
     cacheKey,
+    cycleId,
     false,
     ctx.budgetMs,
     ctx.maxShapes,
@@ -692,13 +825,13 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   useOverlayRenderer(overlayHostRef, showSkeleton ? snapshot : null, theme, animation, debugOverlayEnabled);
 
   useHandoffAndMetrics(
-    props.isLoading,
+    isLoading,
     controller,
     skeletonSuppressed,
     {
       snapshot,
-      cacheHit,
-      traversalMs: cacheHit ? 0 : traversalMsRef.current,
+      cacheHit: cacheHitForCycle,
+      traversalMs: cacheHitForCycle ? 0 : traversalMsRef.current,
       loadStartedAt,
       platform: 'web',
       cacheKey,
@@ -740,6 +873,16 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   //    defect G.15 fixed on native, in the other direction.
   const overlayVisible = showSkeleton && snapshot !== null;
 
+  // The cold-miss gate. `props.fallback !== undefined` comes FIRST, and it is
+  // the whole reason this addition cannot touch an existing render path: with
+  // the prop omitted this is `false` for every state, `false` renders no DOM
+  // node, and the tree below is the same tree it was before. The remaining
+  // terms are "this cycle would paint a skeleton" (`showSkeleton`, which is
+  // already false during the `delay` window and on the REQ-PTR-1 suppressed
+  // refresh path, where content the reader can still see must not be covered)
+  // and "there is nothing measured to paint instead".
+  const showFallback = props.fallback !== undefined && showSkeleton && noUsableGeometry;
+
   // ADR-16 reveal-before-hide: `props.children` is ALWAYS mounted (never
   // `display:none`) so it is already painted underneath the still-visible
   // overlay by the time the overlay is removed — there is no instant where
@@ -767,10 +910,28 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
   // above. `|| overlayVisible` covers the handoff tail, where `isLoading` has
   // already flipped false but the transition is not finished.
   return (
-    <div ref={wrapperRef} aria-busy={props.isLoading || overlayVisible ? true : undefined} style={{ position: 'relative' }}>
+    <div ref={wrapperRef} aria-busy={isLoading || overlayVisible ? true : undefined} style={{ position: 'relative' }}>
       <div aria-hidden={overlayVisible ? true : undefined} style={{ display: 'contents' }}>
-        {props.children}
+        {children}
       </div>
+      {/* The fallback is IN FLOW, not in the absolutely-positioned overlay
+       *  host below, because on a cold miss the wrapper's own content is
+       *  typically not mounted yet — an `inset: 0` box over a zero-height
+       *  wrapper would collapse to nothing, which is precisely the state
+       *  `fallback` exists to escape. It carries the same
+       *  `data-autoskeleton-ignore` marker the overlay does (`Ignore`'s
+       *  channel, `dom-sensor.ts`'s `isIgnored`, which skips the whole
+       *  subtree) so a later traversal can never measure the hand-authored
+       *  skeleton and cache a skeleton OF a skeleton. `display: contents`
+       *  keeps it out of the box model exactly like `<AutoSkeleton.Ignore>`,
+       *  and `aria-hidden` keeps a decorative placeholder out of the
+       *  accessibility tree — the `role="status"` "Loading" element below is
+       *  what a screen-reader user gets instead. */}
+      {showFallback && (
+        <div aria-hidden="true" data-autoskeleton-ignore="true" style={{ display: 'contents' }}>
+          {props.fallback}
+        </div>
+      )}
       {showSkeleton && (
         <div
           ref={overlayHostRef}
@@ -801,7 +962,7 @@ export function AutoSkeleton(props: AutoSkeletonProps): React.JSX.Element {
           >
             Loading
           </span>
-          {debugOverlayEnabled && snapshot && <DebugOverlay snapshot={snapshot} cacheHit={cacheHit} />}
+          {debugOverlayEnabled && snapshot && <DebugOverlay snapshot={snapshot} cacheHit={cacheHitForCycle} />}
         </div>
       )}
     </div>
@@ -819,11 +980,12 @@ AutoSkeleton.Hint = Hint;
 // Measured here: attaching them pushed the NFR-6 gzip gate from 7674 B to
 // 8187 B (of the then-8192 B hard-failing budget, since revised to 9216 B —
 // see spec.md NFR-6) even though most consumers never touch SSR.
-// `AutoSkeletonSSR`/`AutoSkeletonSSRHydrate` are exported as
-// PLAIN NAMED exports from `index.web.ts` instead (import them directly:
-// `import { AutoSkeletonSSR } from 'autoskeleton'`) — a bundler CAN
-// tree-shake an unused named re-export from a side-effect-free barrel file,
-// unlike a property write. See `src/web/ssr/AutoSkeletonSSR.tsx` and
-// `src/web/ssr/hydrate.tsx`.
+// `AutoSkeletonSSR`/`AutoSkeletonSSRHydrate` are plain named exports rather
+// than statics hung off `AutoSkeleton` — a bundler CAN tree-shake an unused
+// named re-export from a side-effect-free barrel file, unlike a property
+// write. They are NOT on this `.` entry, though: they live only at the
+// `autoskeleton/ssr` subpath (`src/index.ssr.ts`), for the NFR-6 reason
+// `src/index.web.ts`'s own header sets out at length. See
+// `src/web/ssr/AutoSkeletonSSR.tsx` and `src/web/ssr/hydrate.tsx`.
 
 export { IGNORE_ATTRIBUTE };

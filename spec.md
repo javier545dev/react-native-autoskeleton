@@ -33,6 +33,14 @@ render shimmer placeholders matching the detected frames before the first paint 
 - AND the renderer draws shimmer placeholders at those exact frames (position, size, radius)
 - AND the derived snapshot is persisted to the `ShapeStore` under the composite key
 
+#### Scenario: The shimmer moves the HIGHLIGHT, never the placeholders (G.18)
+- GIVEN a painted skeleton whose placeholders sit at the detected frames
+- WHEN the shimmer animation runs through a complete period
+- THEN the region the skeleton covers is identical at every phase of that period
+- AND every point inside a placeholder is opaquely painted at every phase, including
+  both extremes of the sweep, so the real content is never exposed mid-cycle
+- AND only the highlight band's position within that stationary region changes
+
 #### Scenario: Container-vs-leaf resolution
 - GIVEN a container view with a non-transparent background that contains one or more detectable
   leaf nodes (text, image, input) in its subtree
@@ -270,6 +278,9 @@ byte-identical markup to what the client renders for the same key before hydrati
 - THEN the served skeleton uses `rem`-relative sizing to absorb scale where geometrically possible
 - AND the specification acknowledges the skeleton MAY still differ from final rendered content
   for that user; this is a documented constraint, not a bug to be fixed in v1
+- AND (2026-08-29) the CLIENT now reads that user's real scale, so their runtime cache key no longer
+  matches the captured one and they take a cold measurement rather than a captured hit — a miss that
+  measures their layout, in preference to a hit that measures somebody else's. See §4's fontScale row.
 
 ### 1.9 Theming via Tailwind v4 / Uniwind
 
@@ -338,6 +349,24 @@ shimmer animation to a pulse or static presentation.
 - WHEN a skeleton with `animation="shimmer"` renders
 - THEN the rendered animation is a pulse or static presentation instead of the traveling shimmer
 - AND no `transform`-based shimmer sweep is applied
+
+#### Scenario: Reduce-motion is honoured BEFORE hydration on the SSR path
+- GIVEN the platform reduce-motion setting is enabled
+- AND a server-rendered `<AutoSkeleton.SSR>` skeleton (captured key or ADR-12 neutral block) has
+  painted, with no client JavaScript having run yet
+- WHEN the first frame is presented
+- THEN no `transform`-based shimmer sweep is applied
+- AND the degraded presentation is the same opacity pulse the runtime renderer degrades to
+
+The runtime web path satisfies REQ-A11Y-3 in JavaScript (`reducedMotionPreferred()` +
+`effectiveAnimation()`), which by construction cannot run pre-hydration: `<AutoSkeleton.SSR>` and
+`NeutralSkeletonBlock` are hook-free, DOM-read-free pure functions BECAUSE that purity is
+REQ-SSR-4's zero-hydration-mismatch mechanism. The generated SSR CSS bundle
+(`cli/media-bundle.ts`) therefore carries a `@media (prefers-reduced-motion: reduce)` block scoped
+to the SSR marker attributes — the only mechanism that can express the preference with zero
+JavaScript, which is the entire point when nothing has hydrated. It is scoped by specificity
+(0,3,0) rather than source order, because a live `<AutoSkeleton>` injects the runtime stylesheet
+into `<head>` later and would otherwise win.
 
 ---
 
@@ -474,7 +503,7 @@ into something the developer can see and act on.
 | NFR-3 | Traversal cost | Native traversal completes in < 2 ms for a screen with <= 60 shapes (CI benchmark, p95). Fails if p95 >= 2 ms. |
 | NFR-4 | Cache lookup cost | Synchronous cache lookup by composite key completes in < 0.2 ms (CI benchmark, p95). Fails if p95 >= 0.2 ms. |
 | NFR-5 | Zero per-frame allocations | The animation path allocates no new objects per frame (Android: shader created once and reused via `Matrix.setTranslate`; JSI: `Float32Array` reused per Nitro ownership rules). Fails if a memory-profiler pass shows per-frame allocation growth during a steady-state shimmer loop. |
-| NFR-6 | Web bundle size | The web entry (`.`, no theming interops) is **< 9 kB gzip** with no runtime dependency beyond React. Fails if a production build of that entry exceeds 9 kB gzip. **REVISED TWICE — this row is the authoritative record of both revisions; a third revision needs to argue against this precedent, not just raise the number again:**<br>**1. 5 kB → 8 kB (2026-08-27)**, by maintainer decision, after first measurement. The original 5 kB came from the kickoff prompt and was never validated against an implementation. Measured reality at the end of Phase 2 was 7566 B gzip, and the dominant cost was product code (AutoSkeleton, dom-sensor, css-renderer), not incidental bloat — removing the `ShapeStore` serialization methods recovered roughly 1 kB of the 2446 that 5 kB would have required, so the remainder could only have come from cutting real functionality.<br>**2. 8 kB → 9 kB (2026-08-28)**, by maintainer decision. The 8 kB gate did its job — it forced a design decision instead of letting the bundle grow silently — but the decision it forced was a per-platform API divergence: giving web a typed hint channel meant either reusing native's id+registry mechanism (measured 8390 B, over budget) or shipping web with no `<AutoSkeleton.Hint>` component at all, only a raw `data-autoskeleton-radius` attribute (measured 8185 B, 7 bytes of headroom against the 8192 B gate). A user reading the docs would learn two different mechanisms for one concept, in a library whose entire proposition is "one package, all platforms" — a worse outcome than ~250 bytes, and 7 bytes of headroom is not a passing gate but one that fails on the next commit. Raised deliberately to buy back API symmetry (`src/web/Hint.tsx`, mirroring `src/native/Hint.tsx`), not because the gate was inconvenient.<br>9 kB is a measured, defensible number and remains a **HARD FAILING GATE**. |
+| NFR-6 | Web bundle size | The web entry (`.`, no theming interops) is **under a measured gzip budget (7933 B as of 2026-08-29)** with no runtime dependency beyond React. Fails if a production consumer app build of that entry exceeds the budget. **REVISED TWICE — this row is the authoritative record of both revisions; a third revision needs to argue against this precedent, not just raise the number again:**<br>**1. 5 kB → 8 kB (2026-08-27)**, by maintainer decision, after first measurement. The original 5 kB came from the kickoff prompt and was never validated against an implementation. Measured reality at the end of Phase 2 was 7566 B gzip, and the dominant cost was product code (AutoSkeleton, dom-sensor, css-renderer), not incidental bloat — removing the `ShapeStore` serialization methods recovered roughly 1 kB of the 2446 that 5 kB would have required, so the remainder could only have come from cutting real functionality.<br>**2. 8 kB → 9 kB (2026-08-28)**, by maintainer decision. The 8 kB gate did its job — it forced a design decision instead of letting the bundle grow silently — but the decision it forced was a per-platform API divergence: giving web a typed hint channel meant either reusing native's id+registry mechanism (measured 8390 B, over budget) or shipping web with no `<AutoSkeleton.Hint>` component at all, only a raw `data-autoskeleton-radius` attribute (measured 8185 B, 7 bytes of headroom against the 8192 B gate). A user reading the docs would learn two different mechanisms for one concept, in a library whose entire proposition is "one package, all platforms" — a worse outcome than ~250 bytes, and 7 bytes of headroom is not a passing gate but one that fails on the next commit. Raised deliberately to buy back API symmetry (`src/web/Hint.tsx`, mirroring `src/native/Hint.tsx`), not because the gate was inconvenient.<br>**3. MEASUREMENT CORRECTED, budget NOT relaxed (2026-08-29).** The gate was not measuring what this row says it measures. Its own doc comment has always required a *real consumer bundle, tree-shaken and minified*, but it built through Vite's **library** mode, which deliberately keeps `minifyWhitespace: false` so `/* @__PURE__ */` annotations survive for the consumer's own bundler. Identifiers were mangled; every newline, indent and doc comment shipped into the measured artifact — 910 lines of it. The gate was charging this package for its own documentation, at roughly **200 gzip bytes per 370 characters of English prose**, which is a direct tax on commenting the code well and a number no consumer has ever downloaded. A consumer runs an *app* build, not a library build; the gate now models one (rollup bundles and tree-shakes, esbuild minifies for real), with a synthetic entry pinning the whole public namespace so the before/after numbers stay comparable. On identical input: **9023 B as a library, 8209 B via esbuild alone, 7474 B as an app.** **The budget was re-derived so the gate is exactly as strict as before and this buys zero room**: the last library-mode run measured 8995 B against 9216, i.e. 221 B of real headroom, so the new budget is 7475 + 221 = **7696 B**. Verified able to fail: 326 B of reachable public code took it to 7801 and the gate went red. Spending those 221 bytes remains a deliberate maintainer act — they are simply now 221 bytes a consumer actually pays.<br>**4. 7696 B → 7933 B (2026-08-29), by maintainer decision — A RELAXATION, not another correction.** Entry 3 was the ruler being wrong; this is the budget genuinely moving, and a fifth change must argue against BOTH precedents. It buys two real user-facing defects, neither of which had a gate. **(a)** A snapshot measured before its content had layout — an `<img>` with a 0×0 box — was cached with ZERO shapes, and because a replay reuses the same cache key, that empty skeleton replayed forever. Measured against the real component: cold `shapes: 0`; then a real 170×179 box; then replay still `shapes: 0`, `clip-path: none`. A zero-shape result IS sometimes legitimate (a fully `<AutoSkeleton.Ignore>`d subtree), and nothing observable at measurement time separates that from "not ready", so the fix follows G.10's precedent: empty is provisional for a bounded, INSPECTABLE number of attempts (`MAX_EMPTY_MEASUREMENTS`, `emptyMeasurementsFor(key)`), paced by loading cycle rather than frame. **(b)** `useOverlayRenderer` destroyed its handle only on UNMOUNT, so after a completed handoff the handle pointed at a detached subtree and every later cycle announced loading — `aria-busy`, `role="status"`, content `aria-hidden` — while painting nothing. Never caught because the `skeletonOnRefresh` opt-out test starts at `isLoading: false` and so never mounts the overlay a second time; the whole second-cycle path was ungated. **Cost 99 B (7613 → 7712). The budget is set to 7712 + 221, restoring the same working headroom the corrected gate began with, NOT to the measured need**: 7712 exactly would be a gate with zero headroom that fails on the next commit, which is the argument revision 2 already made against accepting 7 bytes and which applies here unchanged.<br>The budget is a measured, defensible number and remains a **HARD FAILING GATE**. |
 | NFR-7 | Zero animation-driven re-renders | No React re-render is attributable to the shimmer animation. Fails if a React DevTools Profiler / render-count instrumentation pass records a re-render caused by an animation frame tick. |
 | NFR-8 | No memory leaks under recycling | A list-recycling stress test (repeated mount/unmount of skeleton cells over N cycles) shows no retained-memory growth beyond a fixed tolerance. Fails if retained heap size grows monotonically across cycles. |
 
@@ -484,11 +513,12 @@ into something the developer can see and act on.
 
 | Dependency | Minimum / requirement | Source |
 |---|---|---|
-| React Native (bare) | 0.83+ (Fabric-only; old architecture removed as of 0.83, not merely deprecated). **Bare RN is a first-class, co-equal target with Expo**, proven by a dedicated bare example app in CI. | Brief §1, §2, §3b |
-| React | 19 | Brief §15 (proposal dependencies) |
-| Architecture | New Architecture (Fabric) only — old architecture unsupportable, no code path exists on current RN | Brief §2 |
-| Expo | Supported via a development build / prebuild. Exact minimum Expo SDK: **to be pinned during implementation**. | Brief §1, §3b |
+| React Native (bare) | **0.77+ — REVISED from 0.83 on 2026-08-30; the revision record is immediately below this table.** New-Architecture-only, but the floor is set by registration mechanisms rather than by the architecture (see the record). **Bare RN is a first-class, co-equal target with Expo**, proven by a dedicated bare example app in CI. | Brief §1, §2, §3b; revised 2026-08-30 |
+| React | **>= 18.2.0 — whatever your React Native release requires (revised 2026-08-30 from a flat "19").** React Native pins this, not us: 0.77 requires react `^18.2.0`, 0.78 and 0.79 `^19.0.0`, 0.80 and 0.81 `^19.1.0`, 0.87 `^19.2.3` — each read from that release's own `peerDependencies` on npm. A consumer on the 0.77 floor is therefore on React 18, and the flat "19" stopped being true the moment the floor moved below 0.78. | Brief §15; revised 2026-08-30 |
+| Architecture | New Architecture (Fabric) only — no old-architecture code path exists here on any RN version. **The requirement is only automatic from 0.82.** On 0.77–0.81 the New Architecture is the default (since 0.76) but `newArchEnabled=false` still works, so the consumer MUST leave it on; from 0.82 React Native refuses that flag. | Brief §2; revised 2026-08-30 |
+| Expo | Supported via a development build / prebuild. **Minimum Expo SDK 53 — PINNED 2026-08-30, closing this row's open item.** Not a policy choice: no Expo SDK ships RN 0.77 or 0.78 (SDK 52 is RN 0.76, SDK 53 is RN 0.79), so the Expo path starts a full RN minor above the bare floor whatever the peer range permits. | Brief §1, §3b; pinned 2026-08-30 |
 | Expo Go | **NOT SUPPORTED.** A custom native module is absent from the Expo Go binary. This MUST surface as documented guidance pointing the user to a development build, never as a silent failure. | Brief §3b |
+| `react-native-web` / Expo Web | **SUPPORTED for the `<AutoSkeleton>` surface, at `~0.21.0`** (Expo SDK 57's own `bundledNativeModules` pin; `react-dom` `19.2.3`). Proven, not declared, by two gates that were each shown to fail: `test/web/react-native-web.spec.ts` (the DOM sensor against real RNW output) and `test/web/expo-web-export.spec.ts` (a real `expo export --platform web` of `examples/expo`, served and hit-tested in Chromium). **NOT supported on web: the virtualized-list API** (`SkeletonList`, `SkeletonListFooter`, `SkeletonCell`, `useSkeletonCell`, `templateTraversalCounter`) and **the `autoskeleton/uniwind` theming subpath**. See the EXPO WEB CONSTRAINTS block below — the list API's absence is a RUNTIME `undefined`, never a compile error. | Measured 2026-08-29, tasks.md G.17 |
 | Autolinking | Two distinct mechanisms must BOTH be satisfied by one published artifact: `@react-native-community/cli` (bare — reads `react-native.config.js`, `.podspec`, `build.gradle`) and `expo-modules-autolinking` (Expo). Whether `create-react-native-library`'s default output satisfies both must be VERIFIED in CI, not assumed. | Brief §3b |
 | Metro resolution | `preferNativePlatform: true` is set unconditionally by Metro core (`DependencyGraph.js:153`) and is overridden by NONE of `metro-config` 0.87.0, `@expo/metro-config` 57.0.11, or `@react-native/metro-config` 0.87.1. The explicit `index.web.ts`/`index.native.ts` pair plus `exports` conditions is therefore required and sufficient across bare RN, Expo, and Expo Web alike. | Brief §2 |
 | Nitro Modules (if selected by the bridge ADR) | `react-native-nitro-modules` >= 0.37; requires RN >= 0.75, Swift 5.9 / Xcode 16.4 (iOS), NDK 27+ / compileSdk 34+ (Android) | Brief §2 |
@@ -498,10 +528,100 @@ into something the developer can see and act on.
 | Uniwind | **v1.11.0** (corrected 2026-08-28 from ~1.2.6). From `uni-stack/uniwind` — a COMPETING project by the Unistyles team, NOT NativeWind's engine (NativeWind's own engine is `react-native-css`). `withUniwind` manual-mapping API confirmed real and matching our assumptions. Pairs with Tailwind v4. | Verified from package source |
 | NativeWind | **v4.2.6. INCOMPATIBLE WITH TAILWIND v4** — verified from the published package: `dist/metro/tailwind/index.js` throws `"NativeWind only supports Tailwind CSS v3"` at two call sites, gated on an `isV3` check. A NativeWind consumer is therefore a Tailwind **v3** consumer, and this project's theming story is Tailwind v4. **EXCLUDED (maintainer decision, 2026-08-28) — see §1.9 NON-GOAL / §5 Out of Scope / `plan.md` ADR-17.** The `autoskeleton/nativewind` subpath export and `src/interop/nativewind.ts` have been removed; `uniwind` is the sole theming interop. | Verified from package source |
 | Browsers (web renderer) | `clip-path: path()` — Chrome 88+, Edge 88+, Firefox 71+, Safari 15.4+. `shape()` reached Baseline Feb 2026 but is NOT relied upon alone (shorter support tail). `ResizeObserver` — Chrome 64+, Firefox 69+, Edge 79+, Safari 13.1+. `MutationObserver` — near-universal. | Brief §2; explore §C |
+| Shadow DOM (web sensor) | **OPEN roots are SUPPORTED** — traversed alongside the light DOM, so a custom-element design system produces shapes instead of a hole. A slotted light child is still shaped exactly once (it is reached through `host.children`; the shadow `<slot>` itself paints nothing). **CLOSED roots are NOT supported and CANNOT be reported.** They are not merely untraversable: they are undetectable. `host.shadowRoot` is `null` for a closed host and for an ordinary element alike, `children.length` and `textContent` agree too, and the only observation that distinguishes them (`attachShadow` throwing) requires mutating the consumer's DOM, which a read-only sensor must never do. There is therefore no honest `DegradationFlag` to raise — a flag would have to be either unraisable or a guess. | Measured 2026-08-29, `test/web/shadow-dom.spec.ts` |
+| Scaled ancestors (web sensor) | **SUPPORTED for uniform and non-uniform scaling**, by all three CSS mechanisms that produce it: `transform: scale()`, the independent `scale` property (for which computed `transform` is the string `'none'`), and `zoom` (whose computed value appears on the ancestor, never on the measured root). The sensor reports the traversal root's OWN coordinate space, which is what `ShapeInfo` documents and what the overlay — mounted inside that same scaled subtree — is drawn in. The accumulated factor is derived per axis from the root's composed rect against its layout box, and a difference of at most 1 px is treated as `offsetWidth` integer rounding rather than a transform, so an unscaled tree measures bit-identically to before. A scale applied BELOW the traversal root is real visual geometry and is deliberately left untouched. **ROTATION is NOT supported** — `getBoundingClientRect()` returns an axis-aligned bounding box under rotation, so a rotated leaf already reported a box larger than itself before this and still does; it is out of scope for v1, not silently handled. | Measured 2026-08-29, `test/web/dom-sensor.spec.ts`, `test/web/auto-skeleton.spec.ts` |
+| Text scale / `fontScale` (web) | **A web analogue DOES exist and is now read** (corrected 2026-08-29; the previous row here claimed the opposite and was wrong). A `font-size: medium` probe resolves to the browser's own default-font-size preference, so it reports what the READER chose; the document root does not, because the author's stylesheet can set it and the `html { font-size: 62.5% }` reset is common. Measured through CDP's real preference surface: default → root 16 px, probe 16 px, text height 54; preference 24 → root 24 px, probe 24 px, text height **112**; preference 24 with the page resetting its own root to 62.5% → root 15 px, probe **24 px**, text height 34. The text a skeleton must match genuinely doubles, so this belongs in the cache key. `src/web/AutoSkeleton.tsx` reads it once per session and caches it (attaching a probe costs a style recalc, and it is called during render); a mid-session preference change is therefore not picked up, and the browser exposes no event for one. Quantized through the SAME `quantizeFontScale` native uses, so both platforms bucket identically. Cost: **138 B gzip** of NFR-6's 221 B of real headroom, spent by maintainer decision. Page zoom, the closest thing a web user reaches for, does not change CSS-pixel geometry, so it has nothing to invalidate. **CONSEQUENCE, stated rather than discovered later:** the SSR capture CLI writes the neutral `1` because the preference is unknowable server-side, so a reader with an enlarged default font now MISSES every captured SSR entry and takes a cold measurement instead. That is the intended trade — a miss yields geometry measured for that reader, where a hit would have yielded geometry measured for somebody else. | Measured 2026-08-29, `test/web/font-scale.spec.ts` |
 | Test tooling | Vitest (core, unit); Playwright (layout-sensitive tests and the SSR capture CLI) — jsdom cannot perform real layout (jsdom #653, #3729) | Brief §2, §15 |
 | Build tooling | `create-react-native-library` + `react-native-builder-bob` 0.43.0. **S4 is RESOLVED: a distinct web entry IS supported, no custom tooling needed** — builder-bob's `compile.js` is a filename-preserving per-file Babel transpile (globs `**/*`, writes `path.join(output, path.relative(source, filepath))`), so `src/index.web.ts` emits `index.web.js` automatically. Two caveats: `exports` conditions must be hand-authored (`init.js:182-223` generates a default without them and PROMPTS TO REPLACE an existing one — decline it), and the NFR-6 gzip budget must be measured on a consumer bundle, never on builder-bob output. | Brief §14 |
 
+**RN FLOOR REVISION (2026-08-30): 0.83 → 0.77.** The React Native row previously
+read "0.83+ (Fabric-only; old architecture removed as of 0.83, not merely
+deprecated)". Recorded rather than silently rewritten, because the number moved
+for a reason a future revision has to argue with:
+
+1. **The old justification was imprecise, and it was about React Native rather
+   than about this library.** It collapsed three separate events into one: the
+   New Architecture became the DEFAULT in 0.76 (still switchable off), became the
+   ONLY architecture in 0.82 (`newArchEnabled=false` is refused), and 0.83 began
+   removing the legacy architecture CLASSES — the interop layers stay. "Removed
+   in 0.83" was never the whole story, and none of those dates is a constraint
+   this package imposes.
+2. **The real floor is 0.77, set by two independent registration mechanisms,
+   either of which would set it alone.** iOS: `codegenConfig.ios.componentProvider`
+   feeds `RCTThirdPartyComponentsProvider.mm`, which did not exist before 0.77.0.
+   Android: `AutoskeletonPackage.kt` builds `ReactModuleInfo` with Kotlin named
+   arguments, whose parameter names were renamed in 0.77.0. Below 0.77 the
+   package does not register at all — a missing native module, not a degraded
+   skeleton.
+3. **Nothing about the New-Architecture-only scope changed** (see the
+   Architecture row). What changed is the discovery that "New Architecture only"
+   and "RN 0.83+" are not the same statement: between 0.77 and 0.81 the
+   architecture is a requirement the CONSUMER satisfies, and only from 0.82 does
+   the platform guarantee it. §5 has been amended to match.
+4. **A fifth-style precedent applies here too (cf. NFR-6):** the floor is now
+   pinned to mechanisms that can be pointed at in a file. Raising it needs a
+   mechanism that landed later; lowering it needs those two mechanisms to have a
+   pre-0.77 equivalent. Moving the number on architecture-timeline reasoning
+   alone is what produced the wrong answer the first time.
+
+Consequences already carried into `package.json` and the docs: the peer range is
+`react-native: >=0.77.0` / `react: >=18.2.0` (see the React row), and the Expo
+path is pinned at SDK 53 because no Expo SDK exists for RN 0.77–0.78 (see the
+Expo row).
+
 ---
+
+**EXPO WEB CONSTRAINTS (measured 2026-08-29, tasks.md G.17).** Every claim below was measured
+against `react-native-web@0.21.2` in a real browser or against a real `expo export --platform web`;
+none of it is inferred from reading RNW's source alone.
+
+1. **The DOM sensor is correct against react-native-web output.** This was the open question, because
+   RNW emits none of the semantic markup the sensor was written against: a `<View>` is a `<div>` with
+   `display:flex` and `background-color: rgba(0,0,0,0)`, and a top-level `<Text>` is ALSO a `<div>`
+   (a `<span>` when nested), not a text-bearing tag. `isTextLeaf` does not require a text-bearing
+   tag — it requires zero element children and non-empty `textContent`, which an RNW `<Text>` div
+   satisfies exactly — so text still resolves per line box via `Range.getClientRects()`, `<View>`
+   backgrounds and radii resolve from computed style, and `<TextInput>` renders a real `<input>`.
+
+2. **`<Image>` is the one real asymmetry with native.** RNW attaches `background-image` (and renders
+   its hidden accessibility `<img>`) only once `ImageLoader` reports LOADED. Until then the whole
+   `<Image>` is a transparent box that paints nothing, so there is nothing for the sensor to shape —
+   whereas a native sensor shapes the image view's leaf class regardless. Mitigation, verified by a
+   test: give the `<Image>` a `backgroundColor`, and its own box is shaped. A loaded `<Image>`
+   produces exactly ONE shape (the hidden `opacity: 0` `<img>` is skipped — see NFR-6 note below).
+
+3. **Mixed-content text loses the unwrapped run.** `<Text>Outer <Text>inner</Text></Text>` shapes only
+   `inner`. This is pre-existing and platform-agnostic (identical for `<p>Hello <b>x</b></p>`), not
+   an RNW regression; it follows from `isTextLeaf` requiring zero element children.
+
+4. **`autoskeleton/uniwind` is native-only.** It imports `src/native/AutoSkeleton`, so a web build
+   fails hard at bundle time with `Importing native-only module
+   "react-native/Libraries/Utilities/codegenNativeComponent" on web`. That is a loud, correct
+   failure, and `examples/expo` splits `App.web.tsx` from `App.tsx` because of it.
+
+5. **The virtualized-list API is a native-only NON-GOAL, and its absence on web is a RUNTIME
+   `undefined` — NOT a compile error.** Do not assume the type system catches this. Expo's own
+   `expo/tsconfig.base.json` sets `customConditions: ['react-native']` with no platform variation,
+   and TypeScript has no notion of a build platform, so one tsconfig typechecks a universal app for
+   iOS, Android AND web at once against the NATIVE declarations. Measured: `tsc --noEmit` reports
+   zero errors for `import { SkeletonList } from 'autoskeleton'`, `expo export --platform web`
+   bundles successfully, and the served page reports `SkeletonList=undefined` with no page error.
+   `test/packaging/entries.test.ts` now pins both halves of that asymmetry so it cannot drift.
+   **The supported pattern is a `.native.tsx` file split**, exactly as `examples/expo` does for its
+   own screen.
+
+   Why native-only rather than a web implementation or a graceful degradation: the API's contract is
+   virtualized-cell recycling amortisation (measure a template once, replay the cached snapshot into
+   every recycled cell, count the traversals that actually ran). Web has no recycling and no bridge,
+   so `useSkeletonCell`'s `cacheHit`/`isFallback`/`pendingTemplateNode`/`templateRef`/
+   `onTemplateLayout` and `templateTraversalCounter` have no web referent — a web export would have
+   to report values that are structurally meaningless. NFR-6 then decides the rest. Measured against
+   the 9216 B budget, from an 8862 B baseline (354 B headroom):
+   throwing native-only stubs **9097 B** (+235); a stub-level graceful degradation **9108 B** (+246);
+   a degradation with a truthful cache key and store read **9152 B** (+290, 64 B left). Every option
+   consumes 66–82 % of all remaining headroom — for reference, the last two real web fixes cost 24 B
+   and 12 B each — so shipping one is materially the same decision as revising the budget, which is
+   the maintainer's call and not taken here.
 
 **THEMING CONSTRAINT (measured 2026-08-28):** `uniwind` and `nativewind` CANNOT share one
 `node_modules` tree — they require conflicting Tailwind CSS majors (v4 and v3 respectively).
@@ -513,7 +633,7 @@ not a warning.
 
 Per brief section 13:
 
-- Old RN architecture (pre-Fabric) — it no longer exists as of RN 0.83.
+- Old RN architecture (pre-Fabric) — no code path for it exists here on any RN version. **Amended 2026-08-30 with the floor revision (§4):** it is not true that it "no longer exists" across the supported range — it is still switchable on RN 0.77–0.81 and is out of scope there by choice; from 0.82 React Native removes the choice.
 - Disk persistence of the snapshot cache (the `ShapeStore` interface must permit it later; v1 is
   in-memory only).
 - Per-corner border-radius detection on Android (v1 supports a single uniform radius per shape).

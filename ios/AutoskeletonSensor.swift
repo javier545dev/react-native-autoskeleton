@@ -207,13 +207,55 @@ final class AutoskeletonSensor {
         return alpha > 0
     }
 
+    /// Intersects a leaf's frame with every scrolling ancestor's viewport.
+    ///
+    /// `convert(_:to:)` already accounts for a scroll view's `contentOffset`,
+    /// so a scrolled child arrives at the right POSITION — but at its full
+    /// size, even when most of it is past the fold. Without this the sensor
+    /// measured content nobody can see, and the cost was not only paint: those
+    /// shapes are charged against `maxShapes`, so a long list could spend its
+    /// budget below the fold and truncate the part actually on screen.
+    ///
+    /// Only scrolling ancestors are clipped against, not every view with
+    /// `clipsToBounds`. Clipping against every parent would be a much larger
+    /// behavioural change — a child that deliberately overflows its parent is
+    /// ordinary in React Native layouts — and this is the case with a real
+    /// symptom. `RCTScrollView` hosts a `UIScrollView`, so the platform type
+    /// covers both.
+    ///
+    /// Mirrors `clipToScrollAncestors` in `AutoskeletonSensor.kt` and
+    /// `computeClipBox`/`applyClip` in `src/web/dom-sensor.ts`. The invariant
+    /// is the same on all three: this is the ONLY place a leaf frame is
+    /// produced, so every shape has passed through it.
+    private static func clipToScrollAncestors(_ view: UIView, root: UIView, frame: CGRect) -> CGRect {
+        var clipped = frame
+        var parent = view.superview
+        while let current = parent {
+            if let scrollView = current as? UIScrollView {
+                clipped = clipped.intersection(scrollView.convert(scrollView.bounds, to: root))
+                if clipped.isNull || clipped.isEmpty {
+                    return .zero
+                }
+            }
+            if current === root {
+                break
+            }
+            parent = current.superview
+        }
+        return clipped
+    }
+
     private func leafShapes(
         for view: UIView,
         root: UIView,
         source: AutoskeletonShapeSource,
         ctx: AutoskeletonTraversalContext
     ) -> [AutoskeletonShapeInfo] {
-        let frame = view.convert(view.bounds, to: root)
+        let frame = Self.clipToScrollAncestors(view, root: root, frame: view.convert(view.bounds, to: root))
+        // A frame clipped entirely away arrives here empty and is dropped by
+        // the guard that was already here for degenerate views — the same
+        // shape as the web sensor, where a fully clipped frame becomes
+        // zero-area and `pushShape` refuses it.
         guard frame.width > 0, frame.height > 0 else {
             return []
         }
