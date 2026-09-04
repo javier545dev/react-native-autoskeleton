@@ -541,7 +541,8 @@ Supporting unions:
 type AnimationKind   = 'shimmer' | 'pulse' | 'none';
 type RendererKind    = 'native' | 'skia' | 'css';
 type Platform        = 'ios' | 'android' | 'web';
-type RadiusSource    = 'measured' | 'outline' | 'raster-probe' | 'hint' | 'default';
+type RadiusSource    = 'measured' | 'outline' | 'raster-probe' | 'hint' | 'default'
+                     | 'style';
 type ShapeSource     = 'text' | 'image' | 'input' | 'background'
                      | 'synthetic-line' | 'container';
 type HandoffReason   = 'successor-painted' | 'timeout' | 'no-successor' | 'error';

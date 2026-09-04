@@ -75,8 +75,12 @@ you actually define are overridden.
 > definitively at rung R1 for a view with no background drawable
 > (`radius = 0, source = 'measured'`), and most RN views have no background —
 > so `defaultRadius` is never consulted for them and has no visible effect.
-> Use `<AutoSkeleton.Hint radius={n}>`, which is rung R0 and always wins.
-> Full detail in [`platform-support.md` §5d](./platform-support.md).
+> This is about `defaultRadius` specifically: a uniform
+> `style={{ borderRadius: n }}` IS recovered exactly, at rung R1b, and reports
+> `radiusSource: 'style'`. For the cases that do reach the fallback — four
+> independent corner radii — `<AutoSkeleton.Hint radius={n}>` is rung R0 and
+> always wins. Full detail in
+> [`platform-support.md` §5d](./platform-support.md).
 
 ### CSS custom properties — web
 
@@ -132,17 +136,29 @@ framebuffer): the rendered shimmer gradient genuinely matched
 `bg-slate-400`/`text-cyan-300`, not the library's JS defaults.
 
 The **radius** half is not gated, and the reason is measured rather than
-assumed: a `rounded-2xl` class resolves to a `defaultRadius` that Android never
-consults for a view with no background drawable, so the gate card paints a
-square mask while a card with its own `borderRadius: 16` paints a rounded one.
-Use `<AutoSkeleton.Hint radius>` on Android. iOS is unaffected. See
+assumed: a `rounded-2xl` class resolves to a `defaultRadius`, and Android never
+consults `defaultRadius` for a view with no background drawable — so the gate
+card paints a square mask.
+
+A card with its own `borderRadius: 16` does paint rounded, but not through this
+mapping: rung R1b reads that styled value straight off the view and reports
+`radiusSource: 'style'`, which is a different rung from the one `rounded-*`
+feeds. So the class still has no effect on Android; the card is rounded in
+spite of it, not because of it. Reach for `<AutoSkeleton.Hint radius>` when you
+need the class's value to apply. iOS is unaffected. See
 [`platform-support.md` §5d](./platform-support.md).
 
-**Requirements**: `uniwind` (>= 1.11.0, `uni-stack/uniwind`) and
-`tailwindcss` v4 (`@theme` CSS-first syntax) as peer dependencies. Neither
-is a hard dependency of `autoskeleton` itself — `autoskeleton/uniwind` is an
-optional subpath export; if you never import it, you never need `uniwind`
-installed at all.
+**Requirements**: `uniwind` (`uni-stack/uniwind`) and `tailwindcss` v4
+(`@theme` CSS-first syntax), both installed in **your** app.
+
+Only `uniwind` is declared by this package, as an **optional** peer with the
+range `^1.0.0` — `1.11.0` is the version the interop has been verified
+against, not the floor. `tailwindcss` is not a peer of `autoskeleton` at all;
+it is Tailwind's own relationship with your app, and this library never
+imports it.
+
+Neither is a hard dependency: `autoskeleton/uniwind` is an optional subpath
+export, so if you never import it you never need `uniwind` installed at all.
 
 ## NativeWind — explicit non-goal, not a gap
 

@@ -218,10 +218,17 @@ Fires on all three platforms. **The threshold is configurable on web only**:
 not the native one, and the native `getShapes` config does not carry it — both
 native sensors use their own compiled default of `0.3`.
 
-This matters most on Android, where no public API can recover an arbitrary
-view's corner radius. See
-[`platform-support.md` §5d](./platform-support.md) for why
-`defaultRadius` frequently does not help there and the typed hint does.
+This matters most on Android, whose ladder is the only one with a fallback
+rung at all. Since rung R1b it recovers a uniform styled `borderRadius`
+exactly (reported as `radiusSource: 'style'`), so the share that reaches
+`'default'` should now be small; four independent corner radii are the case
+that still lands there. See
+[`platform-support.md` §5d](./platform-support.md) for the full ladder and for
+why `defaultRadius` still does not help a view with no background drawable.
+
+When aggregating `radiusSourceHistogram` across platforms, group the buckets
+with `isExactRadiusSource` rather than reading one bucket name: the same
+rounded view reports `'measured'` on iOS and web but `'style'` on Android.
 
 ### 3.3 Shared-shimmer-period warning (all platforms)
 

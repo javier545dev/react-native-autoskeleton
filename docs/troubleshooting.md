@@ -127,13 +127,28 @@ the same string for `id` and `testID` to silence it.
 
 ## Corners are square on Android even though I set a radius
 
-Android's radius ladder answers **definitively** at rung R1 for a view with no
-background drawable: `radius = 0, source = 'measured'`. Most RN views have no
-background, so `defaultRadius` (from `SkeletonProvider`, from the per-instance
-prop, or from `autoskeleton/uniwind`'s `rounded-*` mapping) is never consulted
-for them.
+**First, check which radius you set.** A uniform `style={{ borderRadius: n }}`
+is recovered exactly since rung R1b, which reads it back through
+`BackgroundStyleApplicator.getBorderRadius` and reports
+`radiusSource: 'style'`. If that is what you set and the corner is still
+square, the cause is elsewhere — check that the view actually has a
+non-transparent background at all, since a view that paints nothing emits no
+shape on any platform.
 
-The mechanism that always works is the typed hint, which is rung R0:
+Two cases genuinely still give you a square corner:
+
+**Four different corner radii.** `ShapeInfo.r` is a single scalar, so the
+ladder declines to guess which corner to paint rather than draw a shape the
+view does not have. It falls to `defaultRadius` and raises
+`radius-unavailable`.
+
+**A radius that only exists as `defaultRadius`.** Android's ladder answers
+**definitively** at rung R1 for a view with no background drawable
+(`radius = 0, source = 'measured'`), and most RN views have no background — so
+`defaultRadius` (from `SkeletonProvider`, from the per-instance prop, or from
+`autoskeleton/uniwind`'s `rounded-*` mapping) is never consulted for them.
+
+For both, the typed hint is rung R0 and always wins:
 
 ```tsx
 <AutoSkeleton.Hint id="avatar" radius={24}>

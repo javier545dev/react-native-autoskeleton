@@ -241,17 +241,41 @@ Tracked as [#28](https://github.com/javier545dev/react-native-autoskeleton/issue
 
 ### 5d. On Android, `defaultRadius` does not fill in a missing radius
 
-Android's radius ladder is R0 (typed `radius` hint) → R1 (`Drawable.getOutline`)
-→ R3 (`defaultRadius`, with `radius-unavailable` raised). R1 answers
-**definitively** for a view with no background at all: it returns
+Android's radius ladder is R0 (typed `radius` hint) → R1
+(`Drawable.getOutline`) → R1b (`BackgroundStyleApplicator.getBorderRadius`) →
+R3 (`defaultRadius`, with `radius-unavailable` raised).
+
+R1 answers **definitively** for a view with no background at all: it returns
 `radius = 0, source = 'measured'`. Most RN views have no background drawable,
 so they resolve at R1 with a hard 0 and R3 is never reached — meaning
 `SkeletonProvider`'s `defaultRadius`, the per-instance `defaultRadius` prop,
 and the `rounded-*` class that `autoskeleton/uniwind` maps onto it have no
 visible effect on those views.
 
-Use `<AutoSkeleton.Hint radius={n}>` for rounded content on Android. It is R0
-and always wins. iOS reads `layer.cornerRadius` directly and is unaffected.
+**R1b is what makes a styled radius work.** R1 cannot answer for a rounded
+background — RN's real `CompositeBackgroundDrawable` reports
+`Outline.RADIUS_UNDEFINED` for anything with corners — so a uniform
+`style={{ borderRadius: n }}` used to fall through to R3 and paint with
+`defaultRadius`. R1b reads the value back through
+`BackgroundStyleApplicator.getBorderRadius`, the symmetric read of the exact
+public API that wrote it, and reports `radiusSource: 'style'`. A 56dp avatar
+with `borderRadius: 28` now paints as a circle on Android, as it always did on
+iOS.
+
+`getBorderRadius` is `@JvmStatic public` in RN 0.77 — this package's declared
+`peerDependencies` floor — and RN 0.87 alike, and names no RN internal class.
+
+**What still reaches R3.** Only three cases: four independent corner radii
+(`ShapeInfo.r` is a single scalar, so the ladder declines to guess rather than
+paint a shape the view does not have), a resolved radius that is not finite,
+and one that is zero or negative. `<AutoSkeleton.Hint radius={n}>` remains rung
+R0 and always wins, so it is still the answer for those — it is simply no
+longer required for an ordinary uniform radius.
+
+iOS reads `layer.cornerRadius` directly and reports `'measured'`; web reads the
+computed style and also reports `'measured'`. All three recover the author's
+exact value — see `isExactRadiusSource` in [`api.md`](./api.md) before summing
+`radiusSourceHistogram` buckets across platforms.
 
 R2, the raster corner probe, exists (`AutoskeletonRasterProbe`) but production
 uses `AutoskeletonPublicApiRadiusResolver`, which does not include it — so
