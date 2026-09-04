@@ -42,6 +42,21 @@ class AutoskeletonOverlayViewManager :
         view.flushPendingTheme()
     }
 
+    /** Fabric's recycling hook: the view returned here goes onto a pool and is
+     *  handed to the next `<AutoSkeleton>` that mounts. `BaseViewManager`'s
+     *  implementation resets only base view state, so without this every
+     *  autoskeleton prop — including a `cacheKey` naming another component's
+     *  geometry — would survive into the next tenant. iOS resets in
+     *  `AutoskeletonOverlayView.mm`'s `prepareForRecycle`; this is its twin. */
+    override fun prepareToRecycleView(
+        reactContext: ThemedReactContext,
+        view: AutoskeletonOverlayView,
+    ): AutoskeletonOverlayView? {
+        val recyclable = super.prepareToRecycleView(reactContext, view)
+        view.resetForRecycle()
+        return recyclable
+    }
+
     override fun onDropViewInstance(view: AutoskeletonOverlayView) {
         view.destroy()
         super.onDropViewInstance(view)

@@ -233,6 +233,39 @@ class AutoskeletonOverlayView(context: Context) : FrameLayout(context) {
         mountedCacheKey = null
     }
 
+    /** Returns the view to a pristine state so Fabric can hand it to the NEXT
+     *  `<AutoSkeleton>` that mounts.
+     *
+     *  [destroy] is not enough on its own: it clears the MOUNT state (`handle`,
+     *  `mountedCacheKey`) and leaves all nine prop fields holding the previous
+     *  tenant's values. `BaseViewManager.prepareToRecycleView` resets only base
+     *  view state, so without this a recycled overlay could open with the last
+     *  screen's palette and animation kind, and — worst of the set — a `cacheKey`
+     *  naming geometry measured for a different component entirely.
+     *
+     *  Every value here is the field's own declared default, which is also the
+     *  codegen default Fabric would deliver for an unset prop. `themeDirty` is
+     *  cleared last and deliberately: the assignments above go through the
+     *  palette setters, which set it, and a pending flush against a handle that
+     *  no longer exists is exactly the stale work this reset exists to prevent.
+     *
+     *  iOS has no equivalent hole — `AutoskeletonOverlayView.mm`'s
+     *  `prepareForRecycle` calls `host.destroy()` and Fabric owns the props on
+     *  the Objective-C++ view. */
+    fun resetForRecycle() {
+        destroy()
+        cacheKey = null
+        baseColor = null
+        highlightColor = null
+        defaultRadius = 0.0
+        speedMs = 1400.0
+        animation = ANIMATION_SHIMMER
+        reducedMotion = false
+        writingDirection = DIRECTION_LTR
+        debugOverlay = false
+        themeDirty = false
+    }
+
     companion object {
         const val ANIMATION_SHIMMER = "shimmer"
         const val ANIMATION_PULSE = "pulse"

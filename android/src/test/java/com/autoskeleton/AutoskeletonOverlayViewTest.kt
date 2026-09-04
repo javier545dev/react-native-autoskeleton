@@ -4,6 +4,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -200,5 +201,49 @@ class AutoskeletonOverlayViewTest {
         // Exactly ONE rebuild for the whole batch, not one per colour prop:
         // the gradient is the expensive artifact and both colours live in it.
         assertEquals(gradientsBuiltWhileLight + 1, overlay.shaderInstanceCount)
+    }
+
+    /**
+     * Fabric recycles overlay views: `ViewManager.onDropViewInstance` hands the
+     * view to `prepareToRecycleView`, which pushes it onto a pool for the NEXT
+     * `<AutoSkeleton>` that mounts. `BaseViewManager`'s implementation resets only
+     * base view state, so every autoskeleton prop used to survive into the next
+     * tenant — a recycled view could open with the previous screen's palette,
+     * animation kind, writing direction, and a `cacheKey` pointing at geometry
+     * measured for a different component.
+     *
+     * `destroy()` was not enough: it clears `handle` and `mountedCacheKey`, which
+     * are the MOUNT state, and leaves all nine prop fields exactly as the previous
+     * tenant left them. iOS never had this hole — `prepareForRecycle` in
+     * `AutoskeletonOverlayView.mm` calls `host.destroy()` and the props live on
+     * the Objective-C++ view, which Fabric resets itself.
+     */
+    @Test
+    fun resetForRecycleReturnsEveryPropToItsDefault() {
+        AutoskeletonNativeShapeCache.set("k1", wireFor(listOf(doubleArrayOf(0.0, 0.0, 50.0, 50.0, 4.0))))
+        val view = sizedView()
+        view.baseColor = "#111111"
+        view.highlightColor = "#222222"
+        view.defaultRadius = 9.0
+        view.speedMs = 999.0
+        view.animation = "pulse"
+        view.reducedMotion = true
+        view.writingDirection = AutoskeletonOverlayView.DIRECTION_RTL
+        view.debugOverlay = true
+        view.cacheKey = "k1"
+        assertEquals("precondition: the overlay actually mounted", 1, view.childCount)
+
+        view.resetForRecycle()
+
+        assertNull(view.cacheKey)
+        assertNull(view.baseColor)
+        assertNull(view.highlightColor)
+        assertEquals(0.0, view.defaultRadius, 0.0)
+        assertEquals(1400.0, view.speedMs, 0.0)
+        assertEquals("shimmer", view.animation)
+        assertEquals(false, view.reducedMotion)
+        assertEquals(AutoskeletonOverlayView.DIRECTION_LTR, view.writingDirection)
+        assertEquals(false, view.debugOverlay)
+        assertEquals("the previous tenant's overlay must not survive recycling", 0, view.childCount)
     }
 }
