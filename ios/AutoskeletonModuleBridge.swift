@@ -211,10 +211,26 @@ public final class AutoskeletonModuleBridge: NSObject {
     /// UIKit), but is kept on the same dispatch path for consistency and so
     /// eviction can never reorder ahead of an in-flight `getShapes` write
     /// dispatched moments earlier.
+    /// `Autoskeleton.mm`-facing entry point for eviction.
+    ///
+    /// Runs INLINE on the calling thread, which is what Android's
+    /// `AutoskeletonModule.evictShapes` has always done. It used to hop to the
+    /// main thread through `runAndWait(timeoutMs: 200)`, and that hop protected
+    /// nothing: `AutoskeletonNativeShapeCache` is an `NSLock`-guarded dictionary
+    /// that touches no UIKit, so eviction has no main-thread requirement at all.
+    /// The stated reason — that eviction must not reorder ahead of an in-flight
+    /// `getShapes` — does not hold either, because `getShapes` is itself a
+    /// synchronous Turbo Module call and has already returned by the time this
+    /// runs.
+    ///
+    /// What it did cost was real: every `store.invalidate()` blocked the JS
+    /// thread for a main-thread round trip, up to 200ms of it, to remove some
+    /// dictionary keys.
+    ///
+    /// The name keeps its `Dispatched` suffix because `Autoskeleton.mm` calls it
+    /// by that selector; renaming it is an ObjC++ change with no behavioural
+    /// benefit.
     @objc public func evictShapesDispatched(_ cacheKeys: [String]) {
-        _ = uiThreadDispatcher.runAndWait(timeoutMs: 200) { [weak self] (_: () -> Bool) -> Bool? in
-            self?.evictShapes(cacheKeys)
-            return true
-        }
+        evictShapes(cacheKeys)
     }
 }
