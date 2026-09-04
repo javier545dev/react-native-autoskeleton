@@ -407,7 +407,7 @@ function useHandoffAndMetrics(
           handoffReason: reason,
           platform: latest.platform,
           renderer: latest.renderer,
-          radiusSourceHistogram: { measured: 0, outline: 0, 'raster-probe': 0, hint: 0, default: 0 },
+          radiusSourceHistogram: { measured: 0, outline: 0, 'raster-probe': 0, hint: 0, default: 0, style: 0 },
           degraded: latest.degraded,
           cacheKey: '',
         });

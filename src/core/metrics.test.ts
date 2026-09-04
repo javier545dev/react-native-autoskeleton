@@ -161,7 +161,8 @@ describe('SkeletonMetrics — base 7 onMetrics fields (spec §2.1) are typed', (
       'raster-probe': 0,
       hint: 3,
       default: 4,
+      style: 5,
     };
-    expect(Object.values(histogram).reduce((a, b) => a + b, 0)).toBe(10);
+    expect(Object.values(histogram).reduce((a, b) => a + b, 0)).toBe(15);
   });
 });

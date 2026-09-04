@@ -31,7 +31,7 @@ export type ShapeSource =
   | 'container';
 
 /** Where a shape's corner radius actually came from. Mandatory telemetry (ADR-2). */
-export type RadiusSource = 'measured' | 'outline' | 'raster-probe' | 'hint' | 'default';
+export type RadiusSource = 'measured' | 'outline' | 'raster-probe' | 'hint' | 'default' | 'style';
 
 /** Canonical index<->RadiusSource mapping for the `radiusSources` dev sidecar
  *  (a `Uint8Array`, index-aligned with shape index — see §4.4). A sensor
@@ -43,7 +43,44 @@ export const RADIUS_SOURCES: readonly RadiusSource[] = [
   'raster-probe',
   'hint',
   'default',
+  // APPEND-ONLY. This array IS the wire encoding — a sensor writes
+  // `RADIUS_SOURCES.indexOf(source)` into an index-aligned `Uint8Array` — so a
+  // new value may only ever be added at the END. Inserting one would silently
+  // re-map every previously captured sidecar.
+  'style',
 ];
+
+/** The rungs that recovered a REAL radius, as opposed to substituting one.
+ *
+ *  Deliberately an explicit set rather than `source !== 'default'`: a future
+ *  rung that also guesses must be added here consciously, and `types.test.ts`
+ *  fails if any member of `RADIUS_SOURCES` ends up in neither group.
+ *
+ *  This grouping is not new — `checkRadiusFallback` has always measured
+ *  degradation as `histogram.default / total`, so the histogram already had two
+ *  levels: a binary exact-vs-fallback meaning, with per-rung granularity layered
+ *  on top for diagnostics. It simply lived inside one function body where no
+ *  consumer could see it. */
+const EXACT_RADIUS_SOURCES: ReadonlySet<RadiusSource> = new Set<RadiusSource>([
+  'measured',
+  'outline',
+  'style',
+  'hint',
+  'raster-probe',
+]);
+
+/** Whether a shape's radius was recovered exactly, on any platform.
+ *
+ *  Use this instead of comparing against a single bucket. The same rounded view
+ *  reports `measured` on iOS (`layer.cornerRadius`) and web (computed style) but
+ *  `style` on Android (`BackgroundStyleApplicator.getBorderRadius`), because
+ *  Android needs a distinct rung to say WHICH of its ADR-2 ladder steps
+ *  answered. All three recovered the author's exact value; summing
+ *  `radiusSourceHistogram.measured` across platforms would wrongly report
+ *  Android's rounded views as lost. */
+export function isExactRadiusSource(source: RadiusSource): boolean {
+  return EXACT_RADIUS_SOURCES.has(source);
+}
 
 /** Every silent-degradation mode must be nameable. Task 1.9 asserts this union
  *  enumerates exactly these 9 documented flags (drift guard). */

@@ -107,6 +107,26 @@ class AutoskeletonModuleTest {
      *  reports a radius (plan.md ADR-2 R1 dead end), so a rounded leaf
      *  reliably falls through to the R3 `defaultRadius` fallback rung this
      *  task wires from `config`. */
+    /** A leaf whose corners differ, which is the R3 rung's remaining reason to
+     *  exist. R1b recovers any UNIFORM `borderRadius` straight off the style, so
+     *  a uniformly-rounded view no longer reaches `defaultRadius` at all; four
+     *  independent corners still do, because `ShapeInfo.r` is one scalar and the
+     *  ladder will not guess which corner to paint. */
+    private fun perCornerLeaf(radiusPx: Float, w: Int = 40, h: Int = 40): FrameLayout {
+        val context = RuntimeEnvironment.getApplication()
+        DisplayMetricsHolder.initDisplayMetricsIfNotInitialized(context)
+        val view = FrameLayout(context)
+        view.layout(0, 0, w, h)
+        BackgroundStyleApplicator.setBackgroundColor(view, Color.RED)
+        BackgroundStyleApplicator.setBorderRadius(
+            view,
+            BorderRadiusProp.BORDER_TOP_LEFT_RADIUS,
+            LengthPercentage(radiusPx, LengthPercentageType.POINT),
+        )
+        view.background?.setBounds(0, 0, view.width, view.height)
+        return view
+    }
+
     private fun roundedLeaf(radiusPx: Float, w: Int = 40, h: Int = 40): FrameLayout {
         val context = RuntimeEnvironment.getApplication()
         DisplayMetricsHolder.initDisplayMetricsIfNotInitialized(context)
@@ -197,7 +217,7 @@ class AutoskeletonModuleTest {
     @Test
     fun computeWireArrayUsesTheConfiguredDefaultRadiusForAnR3FallbackShape() {
         AutoskeletonNativeShapeCache.clear()
-        val leaf = roundedLeaf(radiusPx = 8f)
+        val leaf = perCornerLeaf(radiusPx = 8f)
         val module = moduleFor(leaf)
 
         val withRadius16 = module.computeWireArray(42.0, "r16", defaultConfig.copy(defaultRadius = 16f))!!
@@ -420,7 +440,7 @@ class AutoskeletonModuleTest {
     @Config(qualifiers = "xxhdpi")
     fun dpLengthsSurviveTheWireRoundTripUnchangedAtDensity3() {
         AutoskeletonNativeShapeCache.clear()
-        val leaf = roundedLeaf(radiusPx = 8f, w = 120, h = 120)
+        val leaf = perCornerLeaf(radiusPx = 8f, w = 120, h = 120)
         assertEquals(3f, leaf.resources.displayMetrics.density, 0.0001f)
         val module = moduleFor(leaf)
 

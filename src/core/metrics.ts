@@ -23,7 +23,7 @@ import type {
   RendererKind,
   SkeletonMetrics,
 } from './types';
-import { RADIUS_SOURCES, WIRE_HEADER_SLOTS, WIRE_STRIDE } from './types';
+import { isExactRadiusSource, RADIUS_SOURCES, WIRE_HEADER_SLOTS, WIRE_STRIDE } from './types';
 
 /** NFR-3: native traversal budget in milliseconds, p95. */
 export const DEFAULT_BUDGET_MS = 2;
@@ -153,7 +153,12 @@ export function checkRadiusFallback(
   const threshold = options.radiusFallbackShare ?? DEFAULT_RADIUS_FALLBACK_SHARE;
   const histogram = buildRadiusSourceHistogram(radiusSources);
   const totalCount = Object.values(histogram).reduce((a, b) => a + b, 0);
-  const defaultCount = histogram.default;
+  // Derived from the shared predicate rather than reading `histogram.default`
+  // directly: a future rung that also substitutes a radius is then counted here
+  // automatically, instead of silently improving this ratio by not being named.
+  const defaultCount = (Object.entries(histogram) as Array<[RadiusSource, number]>)
+    .filter(([source]) => !isExactRadiusSource(source))
+    .reduce((sum, [, count]) => sum + count, 0);
   const share = totalCount === 0 ? 0 : defaultCount / totalCount;
   const shareExceeded = totalCount > 0 && share > threshold;
 
@@ -180,6 +185,7 @@ function buildRadiusSourceHistogram(radiusSources: Uint8Array | undefined): Radi
     'raster-probe': 0,
     hint: 0,
     default: 0,
+    style: 0,
   };
   if (radiusSources === undefined) {
     return histogram;
