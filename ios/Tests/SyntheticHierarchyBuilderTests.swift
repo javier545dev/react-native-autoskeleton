@@ -106,6 +106,23 @@ final class SyntheticHierarchyBuilderTests: XCTestCase {
         try assertShapes(shapes, matchExpected: "container-rule-sized-but-transparent")
     }
 
+    /// The parity twin of Android's `roundedButUnfilledContainerWithNoLeavesEmitsNothing`,
+    /// reading the SAME shared fixture.
+    ///
+    /// iOS has always answered this correctly — it reads `view.backgroundColor`'s
+    /// alpha, and a corner radius does not give a view a colour. Android used to
+    /// test `view.background != null`, which RN makes non-null for
+    /// `borderRadius` alone, so a bare rounded spacer painted a grey block there
+    /// and nothing here.
+    ///
+    /// This test is therefore green on the day it is written, and that is the
+    /// point: it pins iOS as the reference answer so the two platforms cannot
+    /// drift apart again without one of the two failing.
+    func testARoundedButUnfilledContainerWithNoLeavesEmitsNothing() throws {
+        let shapes = try measure(fixtureNamed: "container-rule-rounded-but-unfilled")
+        try assertShapes(shapes, matchExpected: "container-rule-rounded-but-unfilled")
+    }
+
     // MARK: - Ignore subtree
 
     func testIgnoreSubtreeExcludesEntireSubtree() throws {

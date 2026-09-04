@@ -8,6 +8,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.HorizontalScrollView
 import android.widget.ScrollView
+import com.facebook.react.uimanager.BackgroundStyleApplicator
 import com.facebook.react.views.image.ReactImageView
 import com.facebook.react.views.text.ReactTextView
 import com.facebook.react.views.textinput.ReactEditText
@@ -268,13 +269,30 @@ class AutoskeletonSensor(
         }
 
         /** `true` when the view paints something of its own rather than being a
-         *  purely structural, invisible wrapper. Verified empirically (see
-         *  `SyntheticHierarchyBuilder`'s class doc): RN's own
-         *  `BackgroundStyleApplicator.setBackgroundColor` already collapses
-         *  `view.background` to `null` for a fully-transparent color, so a plain
-         *  null check is the correct, complete signal — no alpha-channel
-         *  inspection needed on top of it. */
-        private fun hasNonTransparentBackground(view: View): Boolean = view.background != null
+         *  purely structural, invisible wrapper.
+         *
+         *  Reads the background COLOUR back through the same public API that set
+         *  it, and tests its alpha — structurally identical to
+         *  `AutoskeletonSensor.swift`'s `hasNonTransparentBackground`, which reads
+         *  `view.backgroundColor`'s alpha. In a React Native app every background
+         *  arrives through these props, so this is the complete signal, and both
+         *  platforms now answer the same question in the same way.
+         *
+         *  THIS USED TO BE `view.background != null`, justified by RN's
+         *  `setBackgroundColor` collapsing the drawable to null for a fully
+         *  transparent colour. That is true, and it is incomplete:
+         *  `setBorderRadius`, `setBorderWidth` and the ripple feedback underlay
+         *  all route through `ensureCompositeBackgroundDrawable` too, and assign a
+         *  non-null drawable that paints NOTHING. A bare
+         *  `<View style={{ borderRadius: 12 }} />` spacer therefore counted as a
+         *  paintable container and drew a grey block on Android while iOS
+         *  correctly drew nothing — a visible, silent divergence.
+         *
+         *  `getBackgroundColor` is `@JvmStatic public` in RN 0.77 (this package's
+         *  declared `peerDependencies` floor) and RN 0.87 alike, and names no
+         *  internal class, which is what ADR-2 forbids. */
+        private fun hasNonTransparentBackground(view: View): Boolean =
+            (BackgroundStyleApplicator.getBackgroundColor(view) ?: 0) ushr 24 != 0
 
         /** Reads the view's `nativeID` back via the exact public tag
          *  `BaseViewManager.setNativeId` writes (`com.facebook.react.R.id.view_tag_native_id`)

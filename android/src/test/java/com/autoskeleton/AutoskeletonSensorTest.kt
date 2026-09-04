@@ -120,6 +120,36 @@ class AutoskeletonSensorTest {
      * The consumer-side answer is an always-mounted opaque slot, documented in
      * `docs/image-pipeline.md`.
      */
+    /**
+     * The iOS/Android parity case, and the one the null check could never see.
+     *
+     * `hasNonTransparentBackground` used to be `view.background != null`, justified
+     * by the fact that `BackgroundStyleApplicator.setBackgroundColor` collapses the
+     * drawable to null for a fully-transparent colour. That is true and it is
+     * incomplete: `setBorderRadius`, `setBorderWidth` and the ripple underlay ALSO
+     * create the composite drawable, with no fill whatsoever. So a
+     * `<View style={{ borderRadius: 12 }} />` spacer — no background at all —
+     * painted a grey block on Android and nothing on iOS, which reads
+     * `view.backgroundColor`'s alpha and correctly sees none.
+     *
+     * The existing `sizedButTransparent` fixture could not catch it: it goes
+     * through `setBackgroundColor`, so only the transparent-COLOUR half of the
+     * rule was ever pinned. This fixture sets a corner radius and no colour.
+     *
+     * The fixture is shared with `ios/Tests/SyntheticHierarchyBuilder.swift`, so
+     * the same JSON pins both platforms to the same answer.
+     */
+    @Test
+    fun roundedButUnfilledContainerWithNoLeavesEmitsNothing() {
+        val shapes = measure("container-rule-rounded-but-unfilled")
+        assertEquals(
+            "A rounded spacer with no fill paints nothing, so it must contribute no shape. " +
+                "RN gives it a non-null background drawable purely to carry the radius.",
+            0,
+            shapes.size,
+        )
+    }
+
     @Test
     fun sizedButTransparentContainerWithNoLeavesEmitsNothing() {
         val shapes = measure("container-rule-sized-but-transparent")
