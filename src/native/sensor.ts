@@ -157,15 +157,18 @@ export function createNativeSensor(options: CreateNativeSensorOptions): Sensor<N
 
       return {
         snapshot,
-        // Native-side traversal timing is reported by the native
-        // `os_signpost`/`Trace` intervals (tasks 3.1/4.1); the JS side of
-        // the bridge has no independent clock on the traversal itself
-        // (only on the bridge call, which `wire-bridge.ts` already traces
-        // separately per REQ-OBS-PROFILE-1), so this is not double-counted
-        // here — callers read native-reported traversal cost from
-        // `onMetrics` assembled with `traversalMs: 0` on the JS side is
-        // WRONG; instead `AutoSkeleton.tsx` measures bridge-call wall time
-        // directly around this `measure()` call (task 5.5).
+        // Zero HERE, on purpose: this layer has no clock of its own. The
+        // native traversal reports itself through `os_signpost`/`Trace`
+        // intervals (tasks 3.1/4.1), and `wire-bridge.ts` traces the bridge
+        // call separately per REQ-OBS-PROFILE-1, so timing it again in this
+        // function would double-count.
+        //
+        // The number a consumer sees in `onMetrics.traversalMs` is measured
+        // by `useColdMeasurement` in `AutoSkeleton.tsx`, as wall time around
+        // this synchronous call. That claim used to be written here while
+        // nothing did it and both metrics sites passed a literal `0`;
+        // `test/native/traversal-ms.test.ts` now fails if it stops being
+        // true.
         traversalMs: 0,
         degraded: [],
       };

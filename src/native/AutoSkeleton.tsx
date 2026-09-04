@@ -260,7 +260,7 @@ function useColdMeasurement(
   defaultRadius: number,
   store: MemoryShapeStore,
   platform: 'ios' | 'android',
-  onMeasured: (snapshot: ShapeSnapshot) => void,
+  onMeasured: (snapshot: ShapeSnapshot, traversalMs: number) => void,
   onNativeModuleUnavailable: () => void,
 ) {
   const layoutRef = useRef<{ width: number; height: number } | null>(null);
@@ -309,6 +309,12 @@ function useColdMeasurement(
         frameHeight: layout.height,
         hintEntries,
       };
+      // REQ-OBS-METRICS-1: `traversalMs` used to be the literal `0` on both
+      // native platforms, so a consumer's dashboard read a constant while web
+      // reported a real number. The bridge call is synchronous, so wall time
+      // around it IS the measurement — it covers the UI-thread hop and the
+      // native traversal together, which is what a caller actually waited for.
+      const startedAt = Date.now();
       const result = nativeSensor.measure(target, {
         key: cacheKey as unknown as Parameters<typeof nativeSensor.measure>[1]['key'],
         hints: createHintRegistry(hintEntries),
@@ -317,9 +323,10 @@ function useColdMeasurement(
         defaultRadius,
         collectDebugSidecars: false,
       });
+      const elapsedMs = Date.now() - startedAt;
       if (result) {
         store.set(result.snapshot.key, result.snapshot);
-        onMeasured(result.snapshot);
+        onMeasured(result.snapshot, elapsedMs);
       }
     };
 
@@ -357,6 +364,7 @@ function useHandoffAndMetrics(
   metricsInput: {
     readonly snapshot: ShapeSnapshot | null;
     readonly cacheHit: boolean;
+    readonly traversalMs: number;
     readonly loadStartedAt: number;
     readonly platform: 'ios' | 'android';
     readonly renderer: RendererKind;
@@ -415,7 +423,7 @@ function useHandoffAndMetrics(
       }
       onMetricsCallback(
         assembleMetrics({
-          sensorResult: { snapshot: latest.snapshot, traversalMs: 0, degraded: latest.degraded },
+          sensorResult: { snapshot: latest.snapshot, traversalMs: latest.traversalMs, degraded: latest.degraded },
           cacheHit: latest.cacheHit,
           ttfsMs,
           handoff: {
@@ -525,6 +533,11 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
   }
   const cacheHit = cacheStateRef.current.cacheHit;
   const [coldSnapshot, setColdSnapshot] = useState<{ key: string; snapshot: ShapeSnapshot } | null>(null);
+  /** Wall time around the synchronous `getShapes` bridge call, carried from the
+   *  measurement to the metrics payload. A ref rather than state: it is read
+   *  only when `onMetrics` fires, and storing it in state would re-render every
+   *  measurement for a value nothing paints. */
+  const traversalMsRef = useRef(0);
   const [nativeUnavailable, setNativeUnavailable] = useState(false);
   const coldSnapshotForKey = coldSnapshot?.key === cacheKey ? coldSnapshot.snapshot : null;
   // A fresh traversal this instance just took ALWAYS wins over whatever the
@@ -559,7 +572,10 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
     theme.defaultRadius,
     ctx.store,
     platform,
-    (measured) => setColdSnapshot({ key: cacheKey, snapshot: measured }),
+    (measured, traversalMs) => {
+      traversalMsRef.current = traversalMs;
+      setColdSnapshot({ key: cacheKey, snapshot: measured });
+    },
     () => {
       if (typeof __DEV__ !== 'undefined' && __DEV__) {
         throw new AutoskeletonNativeModuleUnavailableError();
@@ -597,6 +613,9 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
     {
       snapshot,
       cacheHit: cacheHitForCycle,
+      // A cache HIT did no traversal, so it reports 0 — the same thing web
+      // reports for the same reason, rather than the previous cycle's number.
+      traversalMs: cacheHitForCycle ? 0 : traversalMsRef.current,
       loadStartedAt,
       platform,
       renderer: nativeUnavailable ? 'native' : rendererKind,
