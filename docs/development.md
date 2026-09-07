@@ -172,6 +172,7 @@ tar -tzf .tarball/autoskeleton-0.1.0.tgz | grep <file>
 | `examples/expo` | Expo autolinking, the `autoskeleton/uniwind` interop (native-only, so it has the split `App.web.tsx`), the `expo-image` handoff, and the Expo Web export. |
 | `examples/next` | The SSR path end to end, including the capture CLI's ergonomic cost at more than toy scale. |
 | `examples/vite` | An ordinary web SPA consuming the published web entry, and the Tailwind v4 theming path against a real production build. |
+| `examples/rn-077` | The declared RN floor, kept as a real app rather than a claim: it is what `native-matrix.yml` builds to prove 0.77 still compiles and links. |
 
 Three Playwright specs run against a real example app rather than a synthetic
 harness, which is why `playwright.yml` installs them:

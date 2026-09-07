@@ -228,6 +228,24 @@ if (report.failedKeys.length > 0) {
 }
 ```
 
+`baseURL`, `registry` and `outDir` are required. The rest are optional, and
+they are the reason the programmatic API exists at all — the CLI entrypoint
+takes three positional arguments and no flags, so these are reachable only
+from a build script:
+
+| Option | Type | Default |
+|---|---|---|
+| `widthBuckets` | `readonly number[]` | the library's `WIDTH_BUCKETS` |
+| `directions` | `readonly Direction[]` | `['ltr', 'rtl']` |
+| `rootSelector` | `string` | `'#autoskeleton-capture-root'` |
+| `navigationTimeoutMs` | `number` | `15000` |
+| `defaultRadius` | `number` | `4` |
+| `budgetMs` | `number` | the library's `DEFAULT_BUDGET_MS` |
+| `maxShapes` | `number` | the library's `DEFAULT_MAX_SHAPES` |
+
+`widthBuckets` and `directions` are worth knowing about specifically: they let
+a build script capture a different matrix from the library's own default.
+
 ## When to run it
 
 The capture CLI is a **dev dependency / build-time tool** — it never enters
@@ -246,10 +264,14 @@ verification) for a concrete, tested pattern.
   That is the intended trade: a miss yields a fresh measurement taken for
   *that* reader, where a hit would have yielded geometry measured for somebody
   else. It is not a defect to work around.
-- **The captured width buckets are the library's, not yours.** Capture runs
-  every entry in `WIDTH_BUCKETS` (`[320, 375, 414, 768, 1024, 1280, 1536]`) ×
-  `['ltr', 'rtl']`. A committed manifest in this repository may be a smaller
-  subset than a fresh local run produces; that is expected, not drift.
+- **The CLI captures the library's width buckets, not yours.** From the
+  command line there is no flag for it: capture runs every entry in
+  `WIDTH_BUCKETS` (`[320, 375, 414, 768, 1024, 1280, 1536]`) × `['ltr', 'rtl']`.
+  A committed manifest in this repository may be a smaller subset than a fresh
+  local run produces; that is expected, not drift. The
+  [programmatic API](#programmatic-api) does take `widthBuckets` and
+  `directions`, so a build script can narrow or widen the matrix — the limit is
+  the CLI's argument surface, not the capture itself.
 - **No repo-wide static scan** for keys referenced in JSX but never captured.
   That would need parsing consumer source for `<AutoSkeletonSSR skeletonKey>`
   usages — a separate, larger static-analysis feature, explicitly out of scope

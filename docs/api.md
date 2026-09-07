@@ -21,16 +21,15 @@ the same everywhere.
 | `autoskeleton` | `react-native` | `index.native.js` | Core + virtualized-list API + native error types |
 | `autoskeleton` | `browser` | `index.web.js` | Core + `IGNORE_ATTRIBUTE` |
 | `autoskeleton` | `default` | `index.js` | Re-exports the web entry verbatim |
+| `autoskeleton/skia` | any | `index.skia.js` | Tier-2 opt-in factory. **Native only** |
+| `autoskeleton/uniwind` | any | `interop/uniwind.js` | `ThemedAutoSkeleton`. **Native only** |
+| `autoskeleton/ssr` | any | `index.ssr.js` | Server-render replay. **Web only** |
+| `autoskeleton/cli` | any | `dist-cli/index.js` | Build-time capture API |
 
 Every subpath additionally carries explicit `require` and `import` conditions,
 so a CommonJS caller resolves the `lib/commonjs/**` build and its matching
 declarations rather than being handed ESM. `./cli`'s types point at
 `lib/typescript/commonjs/`, because `dist-cli` is bundled as CommonJS.
-
-| `autoskeleton/skia` | any | `index.skia.js` | Tier-2 opt-in factory. **Native only** |
-| `autoskeleton/uniwind` | any | `interop/uniwind.js` | `ThemedAutoSkeleton`. **Native only** |
-| `autoskeleton/ssr` | any | `index.ssr.js` | Server-render replay. **Web only** |
-| `autoskeleton/cli` | any | `dist-cli/index.js` | Build-time capture API |
 
 There is also a binary: `autoskeleton-capture`.
 
@@ -327,8 +326,14 @@ store (test isolation), a theme, the budgets, or to opt into tier-2.
 
 `MemoryShapeStore` is exported from the same entry, so you can construct a
 scoped store — `new MemoryShapeStore()` — when you want one screen's snapshots
-not to share the app-wide cache. The `ShapeStore` interface is exported too, if
-you would rather supply your own implementation.
+not to share the app-wide cache.
+
+Note the type: this prop takes `MemoryShapeStore`, the concrete class, not the
+`ShapeStore` interface. The class holds private fields, so an object of your
+own that implements `ShapeStore` is **not** assignable here and will not
+compile. `ShapeStore` is exported for typing your own code against the
+contract, and it is accepted as a prop in exactly one place —
+[`<AutoSkeletonSSRHydrate>`](#autoskeletonssrhydrate)'s `store`.
 
 | `theme` | `Partial<{ baseColor; highlightColor; defaultRadius; speedMs }>` | see below | all |
 | `budgetMs` | `number` | `2` | all |

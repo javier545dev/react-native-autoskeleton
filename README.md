@@ -109,7 +109,9 @@ line is short.</sub>
   (`autoskeleton/ssr`, fed by a build-time capture CLI) resolve out of a single
   `exports` map by condition — not three packages to keep in step.
 - **Zero runtime dependencies.** `package.json` has no `dependencies` field at
-  all. Skia, Reanimated and uniwind are optional peers you opt into.
+  all. `react` is the only required peer: Skia, Reanimated, uniwind,
+  `@playwright/test` (the capture CLI) — and `react-native` itself, so a
+  web-only consumer never installs it — are all optional peers you opt into.
   `"sideEffects": false`.
 - **The bundle size is a gate, not a promise.**
   `test/packaging/web-bundle.test.ts` builds a real consumer app, gzips the web
@@ -296,7 +298,7 @@ The short version. The long version, with the mechanism behind every gap, is
 | | Web | iOS | Android |
 |---|---|---|---|
 | `<AutoSkeleton>`, `Ignore`, `Hint` | yes | yes | yes |
-| Per-line text skeletons | **yes, per line box** | one block per `<Text>` | one block per `<Text>` |
+| Per-line text skeletons | **yes, per line box** | one block per `<Text>`, or N synthesized lines when it is collapsed | same |
 | Virtualized-list API (`SkeletonList` & co.) | **no** | yes | yes |
 | `autoskeleton/uniwind` theming | **no** | yes | yes |
 | Per-instance `shimmerBaseColor` etc. | **no** | yes | yes |
