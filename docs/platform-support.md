@@ -177,6 +177,16 @@ takes that branch, and the `lines` hint never fires for it either.
 Practically: do not expect a native multi-line paragraph to become several
 bars. It becomes one block the size of the paragraph.
 
+When that branch *is* taken, each synthesized line is 60%-85% of the frame's
+width — never the full width, so that it reads as text — and it hangs from the
+**leading** edge: flush left under LTR, flush right under RTL. The direction
+comes from the view's own layout (`effectiveUserInterfaceLayoutDirection` on
+iOS, `layoutDirection` on Android), not from `I18nManager`, so it agrees with
+the same layout every other measured frame comes from. This matters because a
+line narrower than its frame has to hang from *some* edge: anchored to the left
+under RTL, the placeholder would sit over the blank half of the frame while the
+glyphs — flush right — stayed uncovered.
+
 ### 5b. `debugOverlay` draws on web only
 
 The prop is accepted on all three platforms. Only the web implementation draws.
@@ -331,11 +341,15 @@ The name survived a cross-fade design that was never built. Corrected
 ### 5g. Native `onMetrics` has constant fields
 
 See [`observability.md` §`onMetrics`](./observability.md) for the full per-field
-table. Summary: on iOS and Android, `traversalMs` is always `0`,
-`radiusSourceHistogram` is always all-zeros, and `degraded` is always `[]`
-except for `['native-module-unavailable']`.
+table. Summary: on iOS and Android, `radiusSourceHistogram` is always
+all-zeros, and `degraded` is always `[]` except for
+`['native-module-unavailable']`.
 
-Tracked as [#24](https://github.com/javier545dev/react-native-autoskeleton/issues/24).
+`traversalMs` used to be listed here too. It is now a real measurement on both
+native platforms — wall time around the synchronous `getShapes` bridge call,
+`0` on a cache hit exactly as on web — so it is no longer a constant field.
+That half of [#24](https://github.com/javier545dev/react-native-autoskeleton/issues/24)
+is closed; the two fields above are what remains of it.
 
 ### 5h. `onMetrics.cacheHit` and `traversalMs` are decided once per mounted instance
 

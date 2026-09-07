@@ -38,7 +38,7 @@ native, and a dashboard built on them would be measuring nothing.
 
 | Field | Web | iOS | Android |
 |---|---|---|---|
-| `traversalMs` | real (`0` on a cache hit) | **always `0`** | **always `0`** |
+| `traversalMs` | real (`0` on a cache hit) | real (`0` on a cache hit) | real (`0` on a cache hit) |
 | `shapeCount` | real | real | real |
 | `cacheHit` | real, but latched — see §1.2 | same | same |
 | `ttfsMs` | real | real | real |
@@ -53,12 +53,18 @@ native, and a dashboard built on them would be measuring nothing.
 
 Why, precisely:
 
-- **`traversalMs`.** `src/native/AutoSkeleton.tsx` calls `assembleMetrics` with
-  a literal `traversalMs: 0`, and `src/native/sensor.ts` returns `0` too.
-  Native traversal cost is reported through `os_signpost` / `Trace` intervals
-  (§4) and never crosses the bridge. There is no wall-clock timing around the
-  bridge call either — an older comment in `sensor.ts` claims there is; there
-  is not.
+- **`traversalMs`.** Real on every platform. On native it used to be a literal
+  `0` at the JS assembly site — a dashboard aggregating both platforms read a
+  real distribution from web and a constant from native, and REQ-OBS-BUDGET-1's
+  dev warning divides by this number, so the check policing NFR-3's 2 ms budget
+  could never fire on the platforms that budget is about.
+  `src/native/AutoSkeleton.tsx` now times the bridge call directly: `getShapes`
+  is synchronous, so wall time around it IS what the caller waited for — the
+  UI-thread hop and the native traversal together. A cache HIT reports `0`
+  because it did no traversal, which is exactly what web reports, and for the
+  same reason. The finer-grained native intervals are still available through
+  `os_signpost` / `Trace` (§4); those measure the traversal alone, without the
+  hop, and never cross the bridge.
 - **`radiusSourceHistogram`.** The histogram is tallied from
   `snapshot.radiusSources`, a dev-only sidecar. The native `getShapes` wire is
   `[VERSION, x, y, w, h, r] × N` with no sidecar slots, and the JS caller
@@ -285,8 +291,10 @@ Plus a dev-mode warning naming every **uncaptured** `skeletonKey`, fired from
 ## 4. Native profiler markers
 
 Both native sensors and the tier-1 renderer emit real intervals, so you can
-measure traversal and draw cost in the platform profiler rather than through
-`onMetrics` (which reports `traversalMs: 0` on native — §1.1).
+measure traversal and draw cost in the platform profiler at a finer grain than
+`onMetrics` gives you. `onMetrics.traversalMs` is real on native (§1.1), but it
+is wall time around the whole synchronous bridge call — UI-thread hop included.
+These markers time the traversal itself, and the renderer's draw, separately.
 
 | Marker | iOS | Android |
 |---|---|---|

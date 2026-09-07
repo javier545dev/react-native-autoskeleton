@@ -234,9 +234,12 @@ crash, but never a measured shape either. Documented v1 limitation.
 Check the per-platform table in [`observability.md`](./observability.md) first.
 The common surprises:
 
-- **`traversalMs` is always `0` on iOS and Android.** It is hardcoded at the
-  JS assembly site; native traversal timing is reported through
-  `os_signpost`/`Trace` instead and never crosses the bridge.
+- **`traversalMs` is `0` when the snapshot came from cache** — on every
+  platform, native included, because a cache hit does no traversal to time. It
+  is otherwise a real measurement everywhere. (It genuinely was a hardcoded `0`
+  on native until it was fixed; if you are reading a constant zero on a cold
+  miss, you are on an older build.) For traversal timing WITHOUT the bridge
+  hop, use the `os_signpost`/`Trace` markers instead.
 - **`radiusSourceHistogram` is all zeros on native.** The dev sidecar is not
   requested and the wire has no slots for it.
 - **`degraded` is always `[]` on native**, except `['native-module-unavailable']`.
