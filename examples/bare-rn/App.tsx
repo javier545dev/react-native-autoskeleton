@@ -57,6 +57,24 @@ export const PAINT_GATE_FIXTURE = {
     renderer: 'paint-gate-renderer',
     content: 'paint-gate-content',
     text: 'paint-gate-text',
+    /** RTL text-anchoring gate. Identical geometry to `text`, and the ONLY
+     *  difference is that its string is strongly right-to-left — which is the
+     *  whole point, because the Latin one cannot fail on iOS.
+     *
+     *  `textAlign` is left at its default (`'auto'`) on BOTH blocks on
+     *  purpose: that default is exactly what a real consumer gets, and the
+     *  two platforms resolve it differently. Android follows the CONTAINER
+     *  (`Gravity.START`, which is the right edge under an RTL
+     *  `layoutDirection`); iOS follows the TEXT (`NSTextAlignment.natural`,
+     *  which resolves off the first strong character). So with a Latin string
+     *  under `forceRTL(true)`, Android moves the glyphs to the right edge and
+     *  iOS leaves them at the left — and a skeleton anchored to the left edge
+     *  covers the iOS one by coincidence while leaving the Android one
+     *  exposed. A gate built only on the Latin block is therefore VACUOUS on
+     *  iOS: it passes with the defect in place. This block removes the
+     *  coincidence — first strong character is Arabic, so both platforms put
+     *  the glyphs against the right edge and both can fail. */
+    textRtl: 'paint-gate-text-rtl',
     image: 'paint-gate-image',
     card: 'paint-gate-rounded-card',
     // `<AutoSkeleton.Ignore>` bug-fix gate.
@@ -82,6 +100,10 @@ export const PAINT_GATE_FIXTURE = {
     // `SKELETON_BASE_COLOR` (#e2e2e2, `native/AutoSkeleton.tsx`'s
     // `DEFAULT_THEME`) can never be a coincidence in either direction.
     text: '#101010',
+    /** Distinct from every other fill here AND from the skeleton ramp on all
+     *  three channels, so a pixel probe over the RTL block can never be
+     *  confused with the LTR one above it or with `#e2e2e2`..`#f5f5f5`. */
+    textRtl: '#8B0000',
     image: '#0000FF',
     card: '#00A651',
     // `<AutoSkeleton.Ignore>` bug-fix gate (both new, distinct from every
@@ -94,6 +116,20 @@ export const PAINT_GATE_FIXTURE = {
     ignoredSibling: '#8000FF',
     hintedCard: '#FFD700',
     unhintedCard: '#FF1493',
+  },
+  strings: {
+    /** Latin, so its first strong character is LTR. */
+    text: 'Known content text block',
+    /** Arabic ("known content text for testing"). Every strong character is
+     *  RTL, so the Unicode bidi algorithm's first-strong rule resolves this
+     *  paragraph as RTL on BOTH platforms — which is what makes the RTL gate
+     *  able to fail on iOS as well as Android.
+     *
+     *  Deliberately shorter than the block that holds it: a synthesized line
+     *  is 85% of its frame (`MAX_WIDTH_RATIO`, `src/core/lines.ts`), so a
+     *  string that filled the frame would be covered by that 85% no matter
+     *  which edge it was anchored to, and the gate would pass either way. */
+    textRtl: 'نص محتوى معروف للاختبار',
   },
 } as const;
 
@@ -198,7 +234,19 @@ function PaintGateScreen() {
             testID="paint-gate-text"
             style={[styles.textBlock, { backgroundColor: PAINT_GATE_FIXTURE.colors.text }]}
           >
-            <Text style={styles.textBlockLabel}>Known content text block</Text>
+            <Text style={styles.textBlockLabel}>{PAINT_GATE_FIXTURE.strings.text}</Text>
+          </View>
+          {/* RTL text-anchoring gate — same box, same styles, same absent
+              `textAlign`; only the string's directionality differs. See
+              `labels.textRtl` for why the Latin block above cannot carry this
+              gate on iOS. */}
+          <View
+            accessible
+            accessibilityLabel={PAINT_GATE_FIXTURE.labels.textRtl}
+            testID="paint-gate-text-rtl"
+            style={[styles.textBlock, { backgroundColor: PAINT_GATE_FIXTURE.colors.textRtl }]}
+          >
+            <Text style={styles.textBlockLabel}>{PAINT_GATE_FIXTURE.strings.textRtl}</Text>
           </View>
           <View
             accessible
@@ -773,6 +821,39 @@ const styles = StyleSheet.create({
   },
   textBlockLabel: {
     color: '#ffffff',
+    /** Both dimensions are pinned so BOTH blocks land determinístically on the
+     *  collapsed-text branch, which is the only branch this gate exists to
+     *  cover: a sensor takes it when `frame.h < defaultLineHeight`, and that
+     *  constant is 20dp (`ios/AutoskeletonTypes.swift`'s
+     *  `AutoskeletonSensorOptions.defaults`, scaled by density in
+     *  `AutoskeletonModule.kt`). Left to intrinsic height, Arabic is TALLER
+     *  than Latin at the same `fontSize` — its ascenders and descenders push
+     *  the `<Text>` over 20dp — so the RTL block fell off the branch and the
+     *  sensor emitted its whole frame instead of a synthesized line, covering
+     *  everything and making the gate vacuous on Android. Measured before
+     *  pinning: Latin 544px (85% of the frame, synthesized), Arabic 641px (the
+     *  entire frame). `lineHeight: 18` puts both under the threshold with room
+     *  to spare, and is what makes the two blocks comparable at all. */
+    fontSize: 13,
+    lineHeight: 18,
+    /** `'start'`, never the default `'auto'`, and the difference is load-bearing
+     *  for this gate rather than a style preference.
+     *
+     *  React Native resolves alignment against the layout direction in
+     *  `RCTResolveTextAlignment` (`RCTAttributedTextUtils.mm`): `Start`/`End`
+     *  flip under RTL, but `Natural` falls through its `default:` branch
+     *  unresolved — and an omitted `textAlign` never even reaches that
+     *  function, because the paragraph style is only built
+     *  `if (textAttributes.alignment.has_value())`. So on iOS a `<Text>` with
+     *  no `textAlign` keeps its glyphs on the LEFT under `forceRTL(true)`,
+     *  while Android moves them to the right. Measured on both, not assumed.
+     *
+     *  That divergence would make this gate lie: the skeleton would cover the
+     *  iOS text by accident and the gate would pass with the defect in place.
+     *  `'start'` is also what the RTL guidance tells consumers to write
+     *  (start/end over left/right), so this is the realistic spelling, not a
+     *  test-only trick. */
+    textAlign: 'start',
   },
   imagePlaceholder: {
     width: 160,
