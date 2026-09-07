@@ -36,22 +36,40 @@ struct AutoskeletonSynthesizeLinesOptions {
     let lineHeight: CGFloat
     /// typed-prop hint; overrides the height/lineHeight-derived default when present
     let lines: Int?
+    /// Writing direction of the frame being synthesized for, as a boolean
+    /// because Swift has no `Direction` type to port — `true` is the `'rtl'`
+    /// of `src/core/lines.ts`'s `direction`.
+    ///
+    /// A synthesized line is NARROWER than its frame, so which edge it hangs
+    /// from is a real decision: text runs flush against the leading edge and
+    /// falls short on the trailing one. Defaults to `false`, which is the
+    /// behaviour every caller had before this parameter existed.
+    var isRightToLeft: Bool = false
 }
 
 /// Synthesizes N placeholder line rects for a collapsed text node. Honors an
 /// explicit `lines` hint over the height-derived default; every rect has
-/// `h == lineHeight` and a width within 60%-85% of the collapsed width — exactly
+/// `h == lineHeight` and a width within 60%-85% of the collapsed width,
+/// anchored to the frame's LEADING edge for the writing direction — exactly
 /// `src/core/lines.ts`'s contract.
+///
+/// The anchor is why `isRightToLeft` exists. Anchoring at `options.x`
+/// unconditionally puts an RTL placeholder over the blank half of the frame
+/// while the live text — flush right — stays uncovered; that was measured on
+/// the simulator, not theorised (see `AutoskeletonLinesTests` for the pixel
+/// readings). The mirror is about the frame, so widths and the 60%-85%
+/// variance are untouched; only the origin moves.
 func autoskeletonSynthesizeLines(_ options: AutoskeletonSynthesizeLinesOptions) -> [AutoskeletonShapeInfo] {
     let lineCount = options.lines ?? autoskeletonDefaultLineCount(h: options.h, lineHeight: options.lineHeight)
     var lines: [AutoskeletonShapeInfo] = []
     lines.reserveCapacity(lineCount)
     for i in 0..<lineCount {
+        let w = options.w * autoskeletonWidthRatio(forLine: i, lineCount: lineCount)
         lines.append(
             AutoskeletonShapeInfo(
-                x: options.x,
+                x: options.isRightToLeft ? options.x + options.w - w : options.x,
                 y: options.y + CGFloat(i) * options.lineHeight,
-                w: options.w * autoskeletonWidthRatio(forLine: i, lineCount: lineCount),
+                w: w,
                 h: options.lineHeight,
                 r: 0,
                 source: .syntheticLine,

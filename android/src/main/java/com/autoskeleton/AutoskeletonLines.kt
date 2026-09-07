@@ -40,19 +40,37 @@ data class AutoskeletonSynthesizeLinesOptions(
     val lineHeight: Float,
     /** typed-prop hint; overrides the height/lineHeight-derived default when present */
     val lines: Int? = null,
+    /** Writing direction of the frame being synthesized for, as a boolean
+     *  because Kotlin has no `Direction` type to port — `true` is the `'rtl'`
+     *  of `src/core/lines.ts`'s `direction`.
+     *
+     *  A synthesized line is NARROWER than its frame, so which edge it hangs
+     *  from is a real decision: text runs flush against the leading edge and
+     *  falls short on the trailing one. Defaults to `false`, which is the
+     *  behaviour every caller had before this parameter existed. */
+    val isRightToLeft: Boolean = false,
 )
 
 /** Synthesizes N placeholder line rects for a collapsed text node. Honors an
  *  explicit `lines` hint over the height-derived default; every rect has
- *  `h == lineHeight` and a width within 60%-85% of the collapsed width — exactly
- *  `src/core/lines.ts`'s contract. */
+ *  `h == lineHeight` and a width within 60%-85% of the collapsed width,
+ *  anchored to the frame's LEADING edge for the writing direction — exactly
+ *  `src/core/lines.ts`'s contract.
+ *
+ *  The anchor is why `isRightToLeft` exists. Anchoring at `options.x`
+ *  unconditionally puts an RTL placeholder over the blank half of the frame
+ *  while the live text — flush right — stays uncovered; that was measured on
+ *  the emulator, not theorised (see `AutoskeletonLinesTest` for the pixel
+ *  readings). The mirror is about the frame, so widths and the 60%-85%
+ *  variance are untouched; only the origin moves. */
 fun autoskeletonSynthesizeLines(options: AutoskeletonSynthesizeLinesOptions): List<AutoskeletonShapeInfo> {
     val lineCount = options.lines ?: defaultLineCount(options.h, options.lineHeight)
     return (0 until lineCount).map { i ->
+        val w = options.w * widthRatioForLine(i, lineCount)
         AutoskeletonShapeInfo(
-            x = options.x,
+            x = if (options.isRightToLeft) options.x + options.w - w else options.x,
             y = options.y + i * options.lineHeight,
-            w = options.w * widthRatioForLine(i, lineCount),
+            w = w,
             h = options.lineHeight,
             r = 0f,
             source = AutoskeletonShapeSource.SYNTHETIC_LINE,

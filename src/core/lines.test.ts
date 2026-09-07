@@ -60,3 +60,64 @@ describe('synthesizeLines — dev sidecar tagging', () => {
     expect(lines.every((l) => l.source === 'synthetic-line')).toBe(true);
   });
 });
+
+// REGRESSION (2026-09-04): a synthesized line was ALWAYS anchored to `x` and
+// shortened on the right, in every writing direction. That is correct in LTR,
+// where a ragged line ends early on the right, and wrong in RTL, where the
+// text is flush against the RIGHT edge and runs short on the LEFT.
+//
+// Measured on the Android emulator before the fix, `paint-gate-text` fixture,
+// real pixels of 1080: the text sat at 608..1037 while the skeleton sat at
+// 377..921 — the SAME rect it produced in LTR — leaving 116 of 429 px of live
+// text uncovered next to a placeholder standing over blank space.
+//
+// iOS ships a literal port of this function (`ios/AutoskeletonLines.swift`)
+// and Android another (`android/.../AutoskeletonLines.kt`); both carry the
+// same assertions, because a fix here alone would leave both natives wrong.
+describe('synthesizeLines — writing direction (RTL anchoring)', () => {
+  it('anchors to the left edge in LTR, which is the pre-existing behaviour', () => {
+    const lines = synthesizeLines({ x: 100, y: 0, w: 200, h: 20, lineHeight: 20, direction: 'ltr' });
+    expect(lines[0]!.x).toBe(100);
+  });
+
+  it('defaults to LTR anchoring when no direction is given', () => {
+    const withoutDirection = synthesizeLines({ x: 100, y: 0, w: 200, h: 20, lineHeight: 20 });
+    const explicitLtr = synthesizeLines({ x: 100, y: 0, w: 200, h: 20, lineHeight: 20, direction: 'ltr' });
+    expect(withoutDirection).toEqual(explicitLtr);
+  });
+
+  it('anchors a short line to the RIGHT edge in RTL', () => {
+    const x = 100;
+    const w = 200;
+    const [line] = synthesizeLines({ x, y: 0, w, h: 20, lineHeight: 20, direction: 'rtl' });
+    // The right edge is flush with the frame's right edge...
+    expect(line!.x + line!.w).toBeCloseTo(x + w, 9);
+    // ...so a line narrower than the frame starts INSIDE it, not at `x`.
+    expect(line!.x).toBeGreaterThan(x);
+  });
+
+  it('mirrors every line of a multi-line block about the frame, widths unchanged', () => {
+    const x = 40;
+    const w = 300;
+    const ltr = synthesizeLines({ x, y: 0, w, h: 100, lineHeight: 20, lines: 5, direction: 'ltr' });
+    const rtl = synthesizeLines({ x, y: 0, w, h: 100, lineHeight: 20, lines: 5, direction: 'rtl' });
+
+    expect(rtl.map((l) => l.w)).toEqual(ltr.map((l) => l.w));
+    expect(rtl.map((l) => l.y)).toEqual(ltr.map((l) => l.y));
+    // Each RTL line is the exact mirror of its LTR counterpart about the frame.
+    for (let i = 0; i < ltr.length; i++) {
+      expect(rtl[i]!.x).toBeCloseTo(x + w - (ltr[i]!.x - x) - ltr[i]!.w, 9);
+    }
+  });
+
+  it('never lets a line escape the frame it was synthesized from', () => {
+    const x = 12;
+    const w = 250;
+    for (const direction of ['ltr', 'rtl'] as const) {
+      for (const line of synthesizeLines({ x, y: 0, w, h: 80, lineHeight: 20, lines: 4, direction })) {
+        expect(line.x).toBeGreaterThanOrEqual(x - 1e-9);
+        expect(line.x + line.w).toBeLessThanOrEqual(x + w + 1e-9);
+      }
+    }
+  });
+});

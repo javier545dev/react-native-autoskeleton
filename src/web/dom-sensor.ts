@@ -449,9 +449,25 @@ function textLeafShapes(el: Element, ctx: TraversalContext): boolean {
 
   if (rects.length === 0) {
     ctx.degraded.add('clientrects-empty');
+    // One `getComputedStyle`, two readings. `direction` is passed for the same
+    // reason the native sensors pass their view's layout direction: a
+    // synthesized line is only 60%-85% of its frame, so anchoring it at `x`
+    // unconditionally puts an RTL placeholder over the blank half of the frame
+    // while the glyphs — flush right — stay uncovered. That was a real,
+    // measured defect on both native platforms (`src/core/lines.ts`).
+    //
+    // It cannot bite HERE: this branch is `clientrects-empty`, which §5.3 of
+    // `docs/observability.md` records as unreachable under non-degenerate
+    // geometry, and the reachable path above uses `Range.getClientRects()`,
+    // whose rects the browser has already mirrored. The argument is passed
+    // anyway so this stays a literal port of the same function the Swift and
+    // Kotlin sides run — an unreachable branch that silently disagrees with
+    // its siblings is exactly the drift that hid the native defect.
+    const style = getComputedStyle(el);
     const lines = synthesizeLines({
       ...frameOf(el.getBoundingClientRect(), ctx),
-      lineHeight: parseLineHeight(getComputedStyle(el)) / ctx.sy,
+      lineHeight: parseLineHeight(style) / ctx.sy,
+      direction: style.direction === 'rtl' ? 'rtl' : 'ltr',
     });
     for (const line of lines) {
       if (overBudget(ctx)) break;

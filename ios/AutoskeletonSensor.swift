@@ -281,7 +281,15 @@ final class AutoskeletonSensor {
                     w: frame.width,
                     h: frame.height,
                     lineHeight: ctx.options.defaultLineHeight,
-                    lines: lineCount
+                    lines: lineCount,
+                    // Read off the VIEW, not off any JS-side flag: every other
+                    // frame this sensor emits already comes from the laid-out
+                    // view, and the anchor has to agree with that same layout
+                    // or the line lands beside the glyphs instead of over them.
+                    // `I18nManager.isRTL` is deliberately not consulted here —
+                    // it drives the cache key, and the two can legitimately
+                    // disagree (see `AutoSkeleton.tsx`'s `direction` comment).
+                    isRightToLeft: view.effectiveUserInterfaceLayoutDirection == .rightToLeft
                 )
             )
             guard ctx.reserveCapacity(lines.count) else {
