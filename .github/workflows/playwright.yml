@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
       - name: Install dependencies
         run: npm ci
 
@@ -62,6 +62,16 @@ jobs:
       - name: Install examples/expo (test/web/expo-web-export.spec.ts)
         run: npm install "autoskeleton@file:$(pwd)/../../.tarball/$(ls ../../.tarball)"
         working-directory: examples/expo
+
+      # The one vitest assertion that needs a third party's INSTALLED file:
+      # `expo/tsconfig.base.json`, to prove Expo still asserts the
+      # `react-native` condition unconditionally (and so gives a web consumer
+      # no compile-time signal for the native-only list API). `unit.yml` cannot
+      # run it — it installs no examples on purpose — so it skips there, and
+      # this job is the only place in CI where it can execute. Without this
+      # step the guard runs nowhere and the skip becomes silent.
+      - name: Expo condition drift-guard (needs examples/expo installed above)
+        run: npx vitest run test/packaging/entries.test.ts
 
       - name: Run Playwright tests
         run: npx playwright test

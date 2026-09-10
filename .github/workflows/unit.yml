@@ -20,12 +20,19 @@ name: Unit suite and typecheck
 # putting this job on ubuntu keeps the highest-value gate in the repo also the
 # cheapest one.
 #
-# WHY node-version-file. `.nvmrc` and the other workflows disagreed (v24.13.0
-# vs `node-version: 22`), and `engines.node` declares `>= 22.11.0` — a range
-# straddling the 22.12 boundary where unflagged `require(esm)` landed. Reading
-# the pinned file keeps CI on the same major the maintainer develops against;
-# `test/packaging/cjs-conditions.test.ts` is what guards the resolution
-# behaviour across that boundary.
+# WHY node-version-file. `.nvmrc` and the other workflows used to disagree
+# (v24.13.0 vs `node-version: 22`), and `engines.node` declares `>= 22.11.0` —
+# a range straddling the 22.12 boundary where unflagged `require(esm)` landed.
+# Reading the pinned file keeps CI on the same major the maintainer develops
+# against; `test/packaging/cjs-conditions.test.ts` is what guards the
+# resolution behaviour across that boundary.
+#
+# That disagreement was fixed HERE first and left standing everywhere else, and
+# it cost six days of red CI. Node 22 ships npm 10, which rejects a lockfile
+# npm 11 wrote — `npm ci` in the other five workflows died with
+# `Missing: @react-native/metro-config@0.85.0 from lock file` while this job,
+# reading `.nvmrc`, resolved the same tree cleanly. All six now read the file.
+# A version pinned in two places is a version that will drift again.
 #
 # `npm ci` runs `prepare` (`bob build && npm run build:cli`), so `lib/` and
 # `dist-cli/` exist by the time the packaging tests read them.

@@ -74,7 +74,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
       - run: npm ci
       - run: mkdir -p .tarball && npm pack --pack-destination ./.tarball
       # `include-hidden-files` and `if-no-files-found` are BOTH load-bearing —
@@ -137,7 +137,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
       - uses: actions/setup-java@v4
         with:
           distribution: zulu
@@ -296,7 +296,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
       - uses: actions/download-artifact@v4
         with:
           name: autoskeleton-tarball
@@ -407,7 +407,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
       - uses: actions/download-artifact@v4
         with:
           name: autoskeleton-tarball
@@ -467,7 +467,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
       - uses: actions/setup-java@v4
         with:
           distribution: zulu
@@ -580,7 +580,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
       - uses: actions/setup-java@v4
         with:
           distribution: zulu
@@ -720,7 +720,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
       - uses: actions/download-artifact@v4
         with:
           name: autoskeleton-tarball

@@ -162,15 +162,23 @@ describe('RISK-5 packaging detector (entries.test.ts) — RED until 5.6', () => 
       // `react-native` condition) fails here instead of silently changing
       // what an Expo Web consumer experiences. spec.md §4's Expo Web row
       // documents the consequence and the `.native.tsx` split that avoids it.
-      it('an Expo consumer gets NO compile-time signal for the native-only list API: Expo asserts react-native unconditionally, so TypeScript resolves the native declarations even for a web build', () => {
-        const expoTsconfigBase = path.join(
-          repoRoot,
-          'examples/expo/node_modules/expo/tsconfig.base.json'
-        );
-        expect(
-          existsSync(expoTsconfigBase),
-          'examples/expo has no installed expo/tsconfig.base.json to read'
-        ).toBe(true);
+      // SKIPPED WHEN `examples/expo` IS NOT INSTALLED, which is the normal
+      // state in `unit.yml`: that workflow deliberately runs only `npm ci` at
+      // the root, because the macOS jobs that install the examples are billed
+      // at 10x and the point of that job is to be the cheap gate. This
+      // assertion is the one thing in the vitest suite that needs a third
+      // party's installed file, so it cannot be satisfied there.
+      //
+      // It is NOT allowed to become a silent skip. `playwright.yml` installs
+      // `examples/expo` for `expo-web-export.spec.ts`, and now runs this file
+      // right after that install, so the drift-guard has a real home in CI. If
+      // you remove that step, this test stops running anywhere and Expo could
+      // change `customConditions` without anything noticing.
+      const expoTsconfigBase = path.join(
+        repoRoot,
+        'examples/expo/node_modules/expo/tsconfig.base.json'
+      );
+      it.skipIf(!existsSync(expoTsconfigBase))('an Expo consumer gets NO compile-time signal for the native-only list API: Expo asserts react-native unconditionally, so TypeScript resolves the native declarations even for a web build', () => {
         const base = JSON.parse(readFileSync(expoTsconfigBase, 'utf8')) as {
           compilerOptions?: { customConditions?: string[] };
         };
