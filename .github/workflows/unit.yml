@@ -56,6 +56,16 @@ jobs:
       # Both tsc projects: the build sources and the test sources. A type error
       # in a test file is a real failure — the tests are the specification.
       - run: npm run typecheck
+      # `cli/capture.test.ts` drives `runCapture`, which launches a real
+      # browser — its six threat-matrix cases are the CLI's only end-to-end
+      # coverage. Without this they fail with `browserType.launch: Executable
+      # doesn't exist`, which reads like a CLI defect and is not one.
+      #
+      # Installed AFTER typecheck on purpose: a type error should fail in
+      # seconds without paying for a browser download. Chromium only, and this
+      # is the ubuntu job, so the cost is small and bounded — the alternative,
+      # scoping the suite around it, is exactly what the note below refuses.
+      - run: npx playwright install --with-deps chromium
       # The full suite. Scoping this to a path would reintroduce exactly the
       # partial coverage this job exists to end, so it stays unscoped;
       # `test/packaging/workflows.test.ts` asserts that it does.
