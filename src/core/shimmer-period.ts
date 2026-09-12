@@ -99,8 +99,20 @@ export function resolveSharedShimmerPeriodMs(requestedMs: number): number {
   // ever see. `web/AutoSkeleton.tsx`'s own `devWarningsEnabled()` already
   // relies on the same bare form, so the web entry already requires the
   // define; on native, Metro's babel transform provides it.
+  //
+  // DOT ACCESS, NEVER `process.env['NODE_ENV']`. The two are identical to
+  // TypeScript and NOT identical to a bundler. Metro's fold is
+  // `isProcessEnvNodeEnv` in `metro-transform-plugins/src/inline-plugin.js`,
+  // and it requires `isIdentifier(node.property, 'NODE_ENV')` — a computed
+  // string property can never satisfy that, so the bracket form ships the
+  // branch and the whole warning string into every production native bundle.
+  // Worse on the web: a bundler that neither substitutes nor shims `process`
+  // throws `ReferenceError: process is not defined`, and Next's client shim
+  // makes the read `undefined`, so `undefined !== 'production'` leaves this
+  // dev-only branch permanently ON in production. This file shipped the
+  // bracket form for exactly as long as nobody checked.
   if (
-    process.env['NODE_ENV'] !== 'production' &&
+    process.env.NODE_ENV !== 'production' &&
     requestedMs !== adoptedPeriodMs &&
     !reportedRejections.has(requestedMs)
   ) {

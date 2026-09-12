@@ -46,7 +46,11 @@ function emitOnce(latchKey: string, message: string): void {
   // define folds this to `false` and drops the message text from a production
   // build. `web/AutoSkeleton.tsx`'s `devWarningsEnabled()` relies on the same
   // shape; every consumer of this module is a React web build that has one.
-  if (process.env['NODE_ENV'] === 'production' || emitted.has(latchKey)) {
+  // Dot access, never `process.env['NODE_ENV']` — see the note in
+  // `core/shimmer-period.ts`: a computed property defeats every bundler's
+  // fold, and under Next's client `process.env` shim it reads `undefined`,
+  // which would leave this dev-only branch on in production.
+  if (process.env.NODE_ENV === 'production' || emitted.has(latchKey)) {
     return;
   }
   emitted.add(latchKey);
