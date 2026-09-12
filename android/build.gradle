@@ -7,7 +7,7 @@ buildscript {
   // 36 from 0.81.1 on), and `examples/bare-rn` sets 37 — so this value only
   // ever reaches a project that omitted it.
   //
-  // WHY 35 AND NOT 36. `package.json` declares `react-native: ">=0.77.0"`, and
+  // WHY 35 AND NOT 36. `package.json` declares `react-native: ">=0.79.0"`, and
   // each RN release pins the Android Gradle Plugin its template resolves
   // (read out of `@react-native/gradle-plugin@<v>/gradle/libs.versions.toml`):
   // 0.77 -> AGP 8.7.2, 0.78 -> 8.8.0, 0.79 -> 8.8.2, 0.80 -> 8.9.2,

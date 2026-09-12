@@ -15,7 +15,7 @@ implementation, and the "how it was verified" column says how.
 
 | Target | Status |
 |---|---|
-| Bare React Native, New Architecture (Fabric) | Supported. **RN 0.77+**, New Architecture on — see §1a for why that is the floor and what you have to do per version. |
+| Bare React Native, New Architecture (Fabric) | Supported. **RN 0.79+**, New Architecture on — see §1a for why that is the floor and what you have to do per version. |
 | Expo with a development build (`expo prebuild` / EAS dev build) | Supported. **Expo SDK 53+ in practice**, one RN minor above the bare floor — see §1a. |
 | **Expo Go** | **Not supported, and never will be.** See §2. |
 | Expo Web / `react-native-web` | Supported for the `<AutoSkeleton>` surface. Two large gaps — see §3. |
@@ -23,44 +23,58 @@ implementation, and the "how it was verified" column says how.
 | Next.js server rendering (`autoskeleton/ssr`) | Supported, via a build-time capture step. See [`ssr-capture-cli.md`](./ssr-capture-cli.md). |
 | React Native old architecture (Paper) | Not supported on any RN version. No code path for it exists in this library. |
 
-### 1a. Why the floor is RN 0.77, and what "New Architecture" costs you per version
+### 1a. Why the floor is RN 0.79, and what "New Architecture" costs you per version
 
-The floor is not about when React Native retired the legacy architecture. It is
-about when the two registration mechanisms this package uses landed — two
-independent constraints, either of which would set 0.77 on its own:
+The floor is where the package was **measured working on both platforms**, not
+where its oldest mechanism landed. Two independent constraints put it at 0.79,
+either of which would set it alone:
 
-- **iOS.** `codegenConfig.ios.componentProvider` (in this package's
-  `package.json`) feeds `RCTThirdPartyComponentsProvider.mm`, which does not
-  exist before RN 0.77.0. `ios/AutoskeletonOverlayView.mm` documents the same
-  mechanism at its call site.
-- **Android.** `AutoskeletonPackage.kt` constructs `ReactModuleInfo` with Kotlin
-  named arguments, and those parameter names were renamed in RN 0.77.0.
+- **Android does not compile on 0.77 or 0.78.**
+  `AutoskeletonRadiusResolver.kt` resolves a rounded corner through
+  `LengthPercentage.resolve()`, whose signature differs on those releases: it
+  takes a `height` argument and returns `CornerRadii`, not `Float`.
+  `:autoskeleton:compileDebugKotlin` fails on 0.77.3 and 0.78.3 and passes from
+  0.79.7 up, measured by `native-matrix.yml` across every supported minor. iOS
+  compiles on 0.77 and 0.78 — the floor is set by the platform that does not,
+  because one npm peer range has to cover both.
+- **The `exports` subpaths cannot resolve before 0.79.** `autoskeleton/uniwind`,
+  `/skia` and `/ssr` exist only in the `exports` map, with no root-level shim
+  files, and Metro did not enable package exports by default until 0.79. On
+  0.77/0.78 those three imports are bundle-time resolution errors — so even a
+  fixed Kotlin path would leave three documented entry points dead.
 
-Below 0.77 the package does not register. That is a missing native module, not a
-degraded skeleton.
+A separate, older constraint still holds below that: the package does not
+**register** at all before 0.77, because `codegenConfig.ios.componentProvider`
+feeds `RCTThirdPartyComponentsProvider.mm` (absent before RN 0.77.0), and
+`AutoskeletonPackage.kt` constructs `ReactModuleInfo` with Kotlin named
+arguments renamed in RN 0.77.0. That was the binding constraint while 0.77 was
+the floor; it no longer is.
 
 The New-Architecture requirement is a *separate* thing from the floor, and it is
 only free further up the range:
 
 | RN range | What you must do |
 |---|---|
-| 0.77 – 0.81 | **Keep the New Architecture on.** It has been the default since 0.76, but `newArchEnabled=false` still works here, and with it off this library has no code path to run. |
+| 0.79 – 0.81 | **Keep the New Architecture on.** It has been the default since 0.76, but `newArchEnabled=false` still works here, and with it off this library has no code path to run. |
 | 0.82+ | Nothing. React Native refuses `newArchEnabled=false`, so the platform satisfies the requirement for you. |
 
 (For the record, the surrounding RN timeline: New Architecture opt-in from 0.68,
 default from 0.76, the only architecture from 0.82, and from 0.83 React Native
 starts removing the legacy architecture *classes* — the interop layers stay.)
 
-**React comes from your RN release, not from us.** RN 0.77 requires react
-`^18.2.0`; 0.78 and 0.79 require `^19.0.0`; 0.80 and 0.81 require `^19.1.0`; 0.87
-requires `^19.2.3` — each read from that release's own `peerDependencies` on npm.
-A reader sitting on the 0.77 floor is therefore on React 18, and this package's
-`react: >=18.2.0` peer range is deliberately wide enough to say so.
+**React comes from your RN release, not from us.** RN 0.79 requires react
+`^19.0.0`; 0.80 and 0.81 require `^19.1.0`; 0.87 requires `^19.2.3` — each read
+from that release's own `peerDependencies` on npm. A reader sitting on the 0.79
+floor is therefore on React 19, which is why this package's peer range is
+`react: >=19.0.0`. It was `>=18.2.0` while 0.77 was supported, because 0.77 is
+the one release in the old range that pairs with React 18; dropping 0.77 drops
+the reason for the wider range.
 
-**On Expo, the effective floor is SDK 53, not RN 0.77.** No Expo SDK ships RN
-0.77 or 0.78: SDK 52 is RN 0.76 and SDK 53 is RN 0.79. There is no release in
-between to install, so the peer range being wider changes nothing for an Expo
-consumer.
+**On Expo, the floor and the effective floor now agree: SDK 53.** No Expo SDK
+ships RN 0.77 or 0.78 — SDK 52 is RN 0.76, SDK 53 is RN 0.79 — so SDK 53 was
+already the first SDK that could satisfy this package. Narrowing the peer range
+to 0.79 takes nothing away from an Expo consumer; it just stops the range
+claiming two releases no Expo user could install anyway.
 
 **Corrected 2026-08-30.** This page previously gave the floor as "RN 0.83+ (the
 old architecture was removed in 0.83, not merely deprecated)". That sentence
@@ -272,8 +286,10 @@ public API that wrote it, and reports `radiusSource: 'style'`. A 56dp avatar
 with `borderRadius: 28` now paints as a circle on Android, as it always did on
 iOS.
 
-`getBorderRadius` is `@JvmStatic public` in RN 0.77 — this package's declared
+`getBorderRadius` is `@JvmStatic public` in RN 0.79 — this package's declared
 `peerDependencies` floor — and RN 0.87 alike, and names no RN internal class.
+(It was already public in 0.77; the floor moved for unrelated reasons, so this
+rung was never the constraint.)
 
 **What still reaches R3.** Only three cases: four independent corner radii
 (`ShapeInfo.r` is a single scalar, so the ladder declines to guess rather than

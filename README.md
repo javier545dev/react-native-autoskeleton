@@ -127,7 +127,7 @@ hand — this library's whole premise is that the two should match.
 
 ## Is this for you?
 
-**Yes if** you are on React Native 0.77+ with the New Architecture enabled and
+**Yes if** you are on React Native 0.79+ with the New Architecture enabled and
 a development build, or on the web, and you are tired of placeholder components
 drifting away from the UI they are supposed to imitate.
 
@@ -168,7 +168,7 @@ v4 — [an explicit, evidence-backed exclusion](docs/theming.md), not a gap).
 > [`docs/development.md`](docs/development.md).
 <!-- END PRE-PUBLISH BLOCK -->
 
-### Bare React Native — RN 0.77+, New Architecture (Fabric) only
+### Bare React Native — RN 0.79+, New Architecture (Fabric) only
 
 ```bash
 npm install autoskeleton
@@ -180,24 +180,41 @@ project edits.
 
 There is no old-architecture code path here and no flag to fall back to one.
 
-**0.77 is the floor because that is where the registration this package needs
-landed** — two independent mechanisms, either one of which would set it alone.
-On iOS, `codegenConfig.ios.componentProvider` feeds
-`RCTThirdPartyComponentsProvider.mm`, which does not exist before 0.77.0. On
-Android, `AutoskeletonPackage.kt` builds `ReactModuleInfo` with Kotlin named
-arguments, whose parameter names were renamed in 0.77.0. Below 0.77 the package
-does not register at all — that is a missing module, not a degraded skeleton.
+**0.79 is the floor, and it is the floor because 0.77 and 0.78 were measured
+failing — not because nothing older could ever work.** Two independent reasons,
+either one of which would set it alone:
 
-**On RN 0.77–0.81, "New Architecture" is a requirement you have to satisfy.** It
+- **Android does not compile.** `AutoskeletonRadiusResolver.kt` reads a rounded
+  corner back through `LengthPercentage.resolve()`, whose signature differs on
+  those releases — it wants a `height` argument and returns `CornerRadii`, not
+  `Float`. `:autoskeleton:compileDebugKotlin` fails outright on 0.77.3 and
+  0.78.3, and passes from 0.79.7 up. iOS compiles fine on both; the floor is
+  set by the platform that does not.
+- **`autoskeleton/uniwind`, `/skia` and `/ssr` cannot resolve.** Those subpaths
+  exist only in the `exports` map, and Metro did not enable package exports by
+  default until 0.79. On 0.77/0.78 they are bundle-time resolution errors, so
+  even with the Kotlin fixed, three documented entry points would be dead.
+
+Below 0.77 the package does not register at all — on iOS
+`codegenConfig.ios.componentProvider` feeds `RCTThirdPartyComponentsProvider.mm`,
+which does not exist before 0.77.0, and on Android `AutoskeletonPackage.kt`
+builds `ReactModuleInfo` with Kotlin named arguments renamed in 0.77.0. That
+part has not changed; it is simply no longer the binding constraint.
+
+This costs no Expo user: no Expo SDK ships RN 0.77 or 0.78 (SDK 52 is RN 0.76,
+SDK 53 is RN 0.79), so the Expo path already started at the new floor.
+
+**On RN 0.79–0.81, "New Architecture" is a requirement you have to satisfy.** It
 has been the default since 0.76, but `newArchEnabled=false` still works there,
 and with it off this library has nothing to run. From 0.82 React Native refuses
 that flag, so on 0.82+ the platform satisfies the requirement for you.
 
-Your React version comes from React Native, not from us: RN 0.77 requires React
-`^18.2.0`, 0.78 and 0.79 require `^19.0.0`, 0.80 and 0.81 require `^19.1.0`, and
-0.87 requires `^19.2.3` — each release's own `peerDependencies` on npm. Install
-what your RN release asks for; this package's `react: >=18.2.0` peer range is
-deliberately wide enough not to argue with it.
+Your React version comes from React Native, not from us: RN 0.79 requires React
+`^19.0.0`, 0.80 and 0.81 require `^19.1.0`, and 0.87 requires `^19.2.3` — each
+release's own `peerDependencies` on npm. Install what your RN release asks for;
+this package's `react: >=19.0.0` peer range is deliberately wide enough not to
+argue with it. (It was `>=18.2.0` while 0.77 was supported, since that is the
+React 0.77 pairs with; dropping 0.77 drops the reason for the wider range.)
 
 The RN versions CI builds against live in
 [`.github/workflows/native-matrix.yml`](.github/workflows/native-matrix.yml),
@@ -211,9 +228,11 @@ npx expo prebuild
 npx expo run:ios     # or run:android, or an EAS development build
 ```
 
-The peer range starts at RN 0.77, but **the Expo path effectively starts at SDK
-53**, because no Expo SDK ships RN 0.77 or 0.78: SDK 52 is RN 0.76 and SDK 53 is
-RN 0.79. There is nothing to install in between.
+The peer range starts at RN 0.79, which is exactly where the Expo path already
+started: SDK 52 is RN 0.76 and SDK 53 is RN 0.79, so **SDK 53 is the first SDK
+that can satisfy this package at all**. There is nothing to install in between.
+
+<a id="expo-go"></a>
 
 > **Expo Go does not work, and that is expected — not a bug to file.**
 > `autoskeleton` ships a custom native Turbo Module, and custom native modules

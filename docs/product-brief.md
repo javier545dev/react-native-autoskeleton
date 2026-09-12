@@ -79,12 +79,14 @@ do not contradict them without new evidence.
   REMOVED as of 0.83 (not merely deprecated)", and that one sentence was carrying
   a version floor it cannot support: it collapsed three separate RN events into
   one, and it described React Native's timeline rather than this library's
-  constraint. The floor is **RN 0.77**, set by two independent registration
+  constraint. The floor is **RN 0.79**, set by two measured failures below it
+  (Android Kotlin compilation and `exports`-subpath resolution); the older
+  registration
   mechanisms, either of which would set it alone — iOS
   `codegenConfig.ios.componentProvider` feeding
   `RCTThirdPartyComponentsProvider.mm`, which does not exist before 0.77.0, and
   `AutoskeletonPackage.kt`'s Kotlin named arguments to `ReactModuleInfo`, whose
-  parameter names were renamed in 0.77.0. On 0.77–0.81 the CONSUMER must keep the
+  parameter names were renamed in 0.77.0. On 0.79–0.81 the CONSUMER must keep the
   New Architecture switched on; from 0.82 the platform guarantees it. Full
   revision record in `spec.md` §4.
 - `clip-path: path()` is the reliable current cross-browser mechanism for a union of
@@ -189,7 +191,7 @@ do not contradict them without new evidence.
   supports a package that also ships a distinct web entry point is UNCONFIRMED and is
   a spike; custom build tooling may be required.
 - Fabric-first. The old RN architecture is out of scope on every supported version
-  — not because it never exists (it is still switchable on RN 0.77–0.81), but
+  — not because it never exists (it is still switchable on RN 0.79–0.81), but
   because no code path for it exists here. From 0.82 RN removes the choice anyway.
 - The `getShapes` bridge mechanism is an OPEN DECISION that `plan.md` must resolve with
   an ADR comparing:
@@ -524,7 +526,7 @@ as done unless it emits its metrics and instrumentation.
 
 - Old RN architecture (pre-Fabric) — no code path for it exists here on any RN
   version. **Amended 2026-08-30 with the floor revision:** it is still switchable
-  on RN 0.77–0.81 and out of scope there by choice; from 0.82 it is gone. See §2
+  on RN 0.79–0.81 and out of scope there by choice; from 0.82 it is gone. See §2
   and `spec.md` §4.
 - Disk persistence of the cache.
 - Per-corner border-radius detection on Android.

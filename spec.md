@@ -513,9 +513,9 @@ into something the developer can see and act on.
 
 | Dependency | Minimum / requirement | Source |
 |---|---|---|
-| React Native (bare) | **0.77+ — REVISED from 0.83 on 2026-08-30; the revision record is immediately below this table.** New-Architecture-only, but the floor is set by registration mechanisms rather than by the architecture (see the record). **Bare RN is a first-class, co-equal target with Expo**, proven by a dedicated bare example app in CI. | Brief §1, §2, §3b; revised 2026-08-30 |
-| React | **>= 18.2.0 — whatever your React Native release requires (revised 2026-08-30 from a flat "19").** React Native pins this, not us: 0.77 requires react `^18.2.0`, 0.78 and 0.79 `^19.0.0`, 0.80 and 0.81 `^19.1.0`, 0.87 `^19.2.3` — each read from that release's own `peerDependencies` on npm. A consumer on the 0.77 floor is therefore on React 18, and the flat "19" stopped being true the moment the floor moved below 0.78. | Brief §15; revised 2026-08-30 |
-| Architecture | New Architecture (Fabric) only — no old-architecture code path exists here on any RN version. **The requirement is only automatic from 0.82.** On 0.77–0.81 the New Architecture is the default (since 0.76) but `newArchEnabled=false` still works, so the consumer MUST leave it on; from 0.82 React Native refuses that flag. | Brief §2; revised 2026-08-30 |
+| React Native (bare) | **0.79+ — REVISED from 0.77 on 2026-09-12, which was itself revised from 0.83 on 2026-08-30; both revision records are below this table.** New-Architecture-only, but the floor is set by registration mechanisms rather than by the architecture (see the record). **Bare RN is a first-class, co-equal target with Expo**, proven by a dedicated bare example app in CI. | Brief §1, §2, §3b; revised 2026-08-30 |
+| React | **>= 19.0.0 — whatever your React Native release requires (revised 2026-09-12 from >= 18.2.0, which was itself revised 2026-08-30 from a flat "19").** React Native pins this, not us: 0.77 requires react `^18.2.0`, 0.78 and 0.79 `^19.0.0`, 0.80 and 0.81 `^19.1.0`, 0.87 `^19.2.3` — each read from that release's own `peerDependencies` on npm. A consumer on the 0.77 floor is therefore on React 18, and the flat "19" stopped being true the moment the floor moved below 0.78. | Brief §15; revised 2026-08-30 |
+| Architecture | New Architecture (Fabric) only — no old-architecture code path exists here on any RN version. **The requirement is only automatic from 0.82.** On 0.79–0.81 the New Architecture is the default (since 0.76) but `newArchEnabled=false` still works, so the consumer MUST leave it on; from 0.82 React Native refuses that flag. | Brief §2; revised 2026-08-30 |
 | Expo | Supported via a development build / prebuild. **Minimum Expo SDK 53 — PINNED 2026-08-30, closing this row's open item.** Not a policy choice: no Expo SDK ships RN 0.77 or 0.78 (SDK 52 is RN 0.76, SDK 53 is RN 0.79), so the Expo path starts a full RN minor above the bare floor whatever the peer range permits. | Brief §1, §3b; pinned 2026-08-30 |
 | Expo Go | **NOT SUPPORTED.** A custom native module is absent from the Expo Go binary. This MUST surface as documented guidance pointing the user to a development build, never as a silent failure. | Brief §3b |
 | `react-native-web` / Expo Web | **SUPPORTED for the `<AutoSkeleton>` surface, at `~0.21.0`** (Expo SDK 57's own `bundledNativeModules` pin; `react-dom` `19.2.3`). Proven, not declared, by two gates that were each shown to fail: `test/web/react-native-web.spec.ts` (the DOM sensor against real RNW output) and `test/web/expo-web-export.spec.ts` (a real `expo export --platform web` of `examples/expo`, served and hit-tested in Chromium). **NOT supported on web: the virtualized-list API** (`SkeletonList`, `SkeletonListFooter`, `SkeletonCell`, `useSkeletonCell`, `templateTraversalCounter`) and **the `autoskeleton/uniwind` theming subpath**. See the EXPO WEB CONSTRAINTS block below — the list API's absence is a RUNTIME `undefined`, never a compile error. | Measured 2026-08-29, tasks.md G.17 |
@@ -533,6 +533,34 @@ into something the developer can see and act on.
 | Text scale / `fontScale` (web) | **A web analogue DOES exist and is now read** (corrected 2026-08-29; the previous row here claimed the opposite and was wrong). A `font-size: medium` probe resolves to the browser's own default-font-size preference, so it reports what the READER chose; the document root does not, because the author's stylesheet can set it and the `html { font-size: 62.5% }` reset is common. Measured through CDP's real preference surface: default → root 16 px, probe 16 px, text height 54; preference 24 → root 24 px, probe 24 px, text height **112**; preference 24 with the page resetting its own root to 62.5% → root 15 px, probe **24 px**, text height 34. The text a skeleton must match genuinely doubles, so this belongs in the cache key. `src/web/AutoSkeleton.tsx` reads it once per session and caches it (attaching a probe costs a style recalc, and it is called during render); a mid-session preference change is therefore not picked up, and the browser exposes no event for one. Quantized through the SAME `quantizeFontScale` native uses, so both platforms bucket identically. Cost: **138 B gzip** of NFR-6's 221 B of real headroom, spent by maintainer decision. Page zoom, the closest thing a web user reaches for, does not change CSS-pixel geometry, so it has nothing to invalidate. **CONSEQUENCE, stated rather than discovered later:** the SSR capture CLI writes the neutral `1` because the preference is unknowable server-side, so a reader with an enlarged default font now MISSES every captured SSR entry and takes a cold measurement instead. That is the intended trade — a miss yields geometry measured for that reader, where a hit would have yielded geometry measured for somebody else. | Measured 2026-08-29, `test/web/font-scale.spec.ts` |
 | Test tooling | Vitest (core, unit); Playwright (layout-sensitive tests and the SSR capture CLI) — jsdom cannot perform real layout (jsdom #653, #3729) | Brief §2, §15 |
 | Build tooling | `create-react-native-library` + `react-native-builder-bob` 0.43.0. **S4 is RESOLVED: a distinct web entry IS supported, no custom tooling needed** — builder-bob's `compile.js` is a filename-preserving per-file Babel transpile (globs `**/*`, writes `path.join(output, path.relative(source, filepath))`), so `src/index.web.ts` emits `index.web.js` automatically. Two caveats: `exports` conditions must be hand-authored (`init.js:182-223` generates a default without them and PROMPTS TO REPLACE an existing one — decline it), and the NFR-6 gzip budget must be measured on a consumer bundle, never on builder-bob output. | Brief §14 |
+
+**RN FLOOR REVISION (2026-09-12): 0.77 → 0.79.** The 2026-08-30 revision below
+pinned the floor to the two REGISTRATION mechanisms — the oldest release whose
+APIs this package can bind to. That answered "how far back could this possibly
+go", which is not the same question as "how far back does it actually work".
+The native matrix was unblocked on 2026-09-10 after six days of red CI, and the
+rows that had never once executed answered the second question:
+
+1. **Android does not compile on 0.77 or 0.78.**
+   `AutoskeletonRadiusResolver.kt` resolves a rounded corner through
+   `LengthPercentage.resolve()`, whose signature differs there: it takes a
+   `height` argument and returns `CornerRadii`, not `Float`.
+   `:autoskeleton:compileDebugKotlin` fails on 0.77.3 and 0.78.3 and passes
+   from 0.79.7 up. iOS compiles on both — one npm peer range covers both
+   platforms, so the one that fails sets the number.
+2. **The `exports` subpaths cannot resolve on 0.77/0.78.**
+   `autoskeleton/uniwind`, `/skia` and `/ssr` exist only in the `exports` map,
+   with no root-level shims, and Metro did not enable package exports by
+   default until 0.79. Even a fixed Kotlin path would leave those three
+   documented entry points as bundle-time resolution errors.
+
+Fixing (1) means carrying two `LengthPercentage` signatures for two releases
+that (2) would still break, and that no Expo SDK ships (SDK 52 is RN 0.76,
+SDK 53 is RN 0.79), so the Expo path already started at 0.79. Narrowing the
+range costs no reachable consumer and stops the package promising what it does
+not do. `examples/rn-077` and the `floor-rn-077-android` job that built it were
+retired with this revision; the 0.79 floor is proven by
+`genuine-app-{android,ios}-matrix (0.79.7)`.
 
 **RN FLOOR REVISION (2026-08-30): 0.83 → 0.77.** The React Native row previously
 read "0.83+ (Fabric-only; old architecture removed as of 0.83, not merely
@@ -633,7 +661,7 @@ not a warning.
 
 Per brief section 13:
 
-- Old RN architecture (pre-Fabric) — no code path for it exists here on any RN version. **Amended 2026-08-30 with the floor revision (§4):** it is not true that it "no longer exists" across the supported range — it is still switchable on RN 0.77–0.81 and is out of scope there by choice; from 0.82 React Native removes the choice.
+- Old RN architecture (pre-Fabric) — no code path for it exists here on any RN version. **Amended 2026-08-30 with the floor revision (§4):** it is not true that it "no longer exists" across the supported range — it is still switchable on RN 0.79–0.81 and is out of scope there by choice; from 0.82 React Native removes the choice.
 - Disk persistence of the snapshot cache (the `ShapeStore` interface must permit it later; v1 is
   in-memory only).
 - Per-corner border-radius detection on Android (v1 supports a single uniform radius per shape).

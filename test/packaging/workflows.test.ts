@@ -407,12 +407,19 @@ describe('the RN matrix leaves no @react-native/* package at the example version
   }
 });
 
-// Android coverage of the supported React Native range is now spread across
-// three jobs on purpose:
+// Android coverage of the supported React Native range is spread across two
+// jobs on purpose:
 //
-//   floor-rn-077-android        builds the committed `examples/rn-077`
-//   genuine-app-android-matrix  scaffolds a real app per version, 0.78-0.86
+//   genuine-app-android-matrix  scaffolds a real app per version, 0.79-0.86
 //   bare-rn-android-matrix      builds `examples/bare-rn`, which IS a 0.87 app
+//
+// There used to be a third, `floor-rn-077-android`, building the committed
+// `examples/rn-077`. It went away with the floor move to 0.79: that example is
+// an RN 0.77 app, and 0.77 no longer compiles on Android
+// (`LengthPercentage.resolve()` changed signature). Its version is NOT counted
+// as coverage below any more — counting a version no job builds is exactly the
+// silent gap these tests exist to catch, and it would have reported 0.77 as
+// covered while nothing built it.
 //
 // That split is what replaced six rounds of trying to mutate one 0.87 app into
 // every older version. The risk it introduces is a version silently falling
@@ -438,16 +445,9 @@ describe('the Android jobs cover every RN minor in the supported range', () => {
       .filter((v): v is string => typeof v === 'string');
   }
 
-  const exampleVersion = (
-    JSON.parse(
-      readFileSync(path.join(REPO_ROOT, 'examples/rn-077/package.json'), 'utf8')
-    ) as { dependencies: Record<string, string> }
-  ).dependencies['react-native'];
-
   const covered = [
     ...rowsOf('bare-rn-android-matrix', 'react-native-version'),
     ...rowsOf('genuine-app-android-matrix', 'rn'),
-    ...(exampleVersion === undefined ? [] : [exampleVersion]),
   ];
 
   const minorOf = (v: string): number => Number(v.split('.')[1] ?? NaN);

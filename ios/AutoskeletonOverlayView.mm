@@ -18,10 +18,10 @@
 // and `scripts/cocoapods/new_architecture.rb`'s `computeFlags(enabled)` returns
 // `-DRCT_NEW_ARCH_ENABLED=1` only when that argument is true, feeding it into
 // BOTH `spec.compiler_flags` and the pod's `OTHER_CPLUSPLUSFLAGS` (present in
-// 0.77.3 and 0.81.6 alike). So on 0.77-0.81 the flag genuinely tracks
+// 0.77.3 and 0.81.6 alike). So on 0.79-0.81 the flag genuinely tracks
 // `RCT_NEW_ARCH_ENABLED` in the environment, and from 0.82 the literal `true`
 // makes it unconditional. That is the whole window in which this guard can
-// fire, and it matches `package.json`'s `react-native: ">=0.77.0"` floor.
+// fire, and it matches `package.json`'s `react-native: ">=0.79.0"` floor.
 //
 // WHY `#error` AND NOT A SILENT NO-OP. Compiling this file into an inert stub
 // under the old architecture would produce a library that links, ships, and
@@ -44,7 +44,7 @@ architecture. Enable the New Architecture and re-run `pod install`: unset (or \
 set to 1) RCT_NEW_ARCH_ENABLED in the environment your `pod install` runs in, \
 and set newArchEnabled=true in android/gradle.properties for the Android half. \
 React Native 0.82 and newer turn the New Architecture on unconditionally, so \
-this can only be reached on 0.77-0.81. autoskeleton refuses to build here on \
+this can only be reached on 0.79-0.81. autoskeleton refuses to build here on \
 purpose: with Paper it would register no view and paint nothing at all."
 #endif
 // ===========================================================================

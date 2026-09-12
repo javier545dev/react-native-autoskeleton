@@ -20,7 +20,8 @@ cli/           the build-time SSR capture CLI.
 test/          Vitest suites that need no browser + Playwright specs that do.
 benchmarks/    the CI budget suite; budgets.json is the single source of truth.
 examples/      five real consuming apps, installed from a packed tarball
-               (bare-rn, expo, next, vite, and rn-077 — the RN 0.77 floor app).
+               (bare-rn, expo, next, vite, and rn-077 — an RN 0.77 app kept
+               from when 0.77 was the floor; the floor is now 0.79).
 ```
 
 `plan.md`, `spec.md` and `tasks.md` at the repository root are the planning
@@ -172,7 +173,7 @@ tar -tzf .tarball/autoskeleton-0.1.0.tgz | grep <file>
 | `examples/expo` | Expo autolinking, the `autoskeleton/uniwind` interop (native-only, so it has the split `App.web.tsx`), the `expo-image` handoff, and the Expo Web export. |
 | `examples/next` | The SSR path end to end, including the capture CLI's ergonomic cost at more than toy scale. |
 | `examples/vite` | An ordinary web SPA consuming the published web entry, and the Tailwind v4 theming path against a real production build. |
-| `examples/rn-077` | The declared RN floor, kept as a real app rather than a claim: it is what `native-matrix.yml` builds to prove 0.77 still compiles and links. |
+| `examples/rn-077` | **Below the supported floor since it moved to 0.79.** It was built to prove the old 0.77 floor and no longer compiles on Android (`LengthPercentage.resolve()` changed signature). The 0.79 floor is proven instead by `genuine-app-{android,ios}-matrix (0.79.7)`. |
 
 Three Playwright specs run against a real example app rather than a synthetic
 harness, which is why `playwright.yml` installs them:
@@ -211,7 +212,7 @@ Flagged so nobody re-derives them as facts:
 - **The native build matrix now BUILDS the range it expresses.**
   `native-matrix.yml` carries `genuine-app-android-matrix` and
   `genuine-app-ios-matrix` scaffolding a real app per minor from 0.78.3 to
-  0.86.3, plus 0.87.1 rows and `floor-rn-077-android` for the declared floor.
+  0.86.3, plus 0.87.1 rows. The floor row is 0.79.7, in both genuine-app matrices.
   What is worth re-checking before quoting a result is the Actions history: a
   workflow that expresses a range and a run that went green across it are
   different claims, and only the second one is evidence.
