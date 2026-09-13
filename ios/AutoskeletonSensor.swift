@@ -133,8 +133,16 @@ final class AutoskeletonSensor {
 
     // MARK: - Traversal
 
-    private func traverse(_ view: UIView, root: UIView, ctx: AutoskeletonTraversalContext) -> [AutoskeletonShapeInfo] {
+    private func traverse(
+        _ view: UIView,
+        root: UIView,
+        ctx: AutoskeletonTraversalContext,
+        depth: Int = 0
+    ) -> [AutoskeletonShapeInfo] {
         if ctx.truncated {
+            return []
+        }
+        if ctx.overDepth(depth) {
             return []
         }
         // `<AutoSkeleton.Ignore>` bug fix: the sentinel marker (self-sufficient,
@@ -165,7 +173,7 @@ final class AutoskeletonSensor {
             if ctx.truncated {
                 break
             }
-            collected.append(contentsOf: traverse(subview, root: root, ctx: ctx))
+            collected.append(contentsOf: traverse(subview, root: root, ctx: ctx, depth: depth + 1))
         }
 
         if !collected.isEmpty {
@@ -318,6 +326,15 @@ final class AutoskeletonSensor {
 /// a class here (not a struct) so budget/cap bookkeeping is shared across the whole
 /// recursive traversal without threading `inout` through every call.
 final class AutoskeletonTraversalContext {
+    /// Deliberately the same 300 as `MAX_TRAVERSAL_DEPTH` in
+    /// `src/web/dom-sensor.ts` and `AutoskeletonSensor.kt`: generous headroom
+    /// over any realistically deep real-world view tree (nested comment
+    /// threads and recursive components rarely exceed a few dozen levels)
+    /// while staying far below stack-overflow risk. A fixed internal constant
+    /// rather than an `AutoskeletonSensorOptions` field, because it is a
+    /// safety bound, not a per-consumer tunable.
+    static let maxTraversalDepth = 300
+
     let options: AutoskeletonSensorOptions
     let startedAt: CFTimeInterval
     private(set) var shapeCount = 0
@@ -339,6 +356,32 @@ final class AutoskeletonTraversalContext {
         if elapsedMs > options.budgetMs {
             truncated = true
             degraded.insert(.budgetExceeded)
+            return true
+        }
+        return false
+    }
+
+    /// Hard depth bound, mirroring `dom-sensor.ts`'s `overDepth` and its
+    /// `MAX_TRAVERSAL_DEPTH`. Checked at the very top of `traverse()`, beside
+    /// `overBudget()`, and truncating through the same `truncated` flag and
+    /// `degraded` set, so a runaway subtree degrades exactly the way every
+    /// other limit here does: truncate and raise a flag the caller can see,
+    /// never throw.
+    ///
+    /// `overBudget()` cannot stand in for this. It is TIME-based, so it only
+    /// ever stops FUTURE recursive calls — a tree deep enough to overflow the
+    /// call stack does so in far less than `budgetMs` of wall-clock time, and
+    /// the process dies before the budget is ever consulted. Web grew this
+    /// bound when unbounded recursion crashed the renderer on a ~3000-level
+    /// nested tree; both native sensors had the same unbounded recursion and
+    /// neither had the bound.
+    func overDepth(_ depth: Int) -> Bool {
+        if truncated {
+            return true
+        }
+        if depth > AutoskeletonTraversalContext.maxTraversalDepth {
+            truncated = true
+            degraded.insert(.depthCapReached)
             return true
         }
         return false

@@ -42,6 +42,7 @@ enum AutoskeletonDegradationFlag: String {
     case clientrectsEmpty = "clientrects-empty"
     case snapshotVersionMismatch = "snapshot-version-mismatch"
     case nativeModuleUnavailable = "native-module-unavailable"
+    case depthCapReached = "depth-cap-reached"
 }
 
 /// One placeholder rectangle in the root/wrapper coordinate space, in points.

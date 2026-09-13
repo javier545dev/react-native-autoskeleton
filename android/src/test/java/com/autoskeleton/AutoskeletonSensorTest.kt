@@ -1,7 +1,11 @@
 package com.autoskeleton
 
 import android.content.res.Configuration
+import android.graphics.Color
+import android.view.View
+import android.view.ViewGroup
 import android.widget.FrameLayout
+import com.facebook.react.uimanager.BackgroundStyleApplicator
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -352,5 +356,63 @@ class AutoskeletonSensorTest {
         val sensor = AutoskeletonSensor()
         val result = sensor.measure(root)!!
         assertFalse(result.shapes.isNotEmpty() && result.shapes.any { it.source == AutoskeletonShapeSource.TEXT })
+    }
+
+    // MARK: - Depth cap (unbounded-recursion defect)
+
+    /** A singly-nested chain `depth` levels below `root`, where ONLY the deepest
+     *  view is paintable. Built programmatically rather than as a JSON fixture:
+     *  the interesting depths are in the hundreds, and a 400-level fixture file
+     *  would be unreadable and unmaintainable. Layout runs top-down in a second
+     *  pass, after the tree is assembled, because `addView` can reset a child's
+     *  bounds. */
+    private fun buildDeepChain(depth: Int): View {
+        val context = RuntimeEnvironment.getApplication()
+        val root = FrameLayout(context)
+        var current: ViewGroup = root
+        val chain = mutableListOf<View>(root)
+        for (i in 0 until depth) {
+            val child = FrameLayout(context)
+            current.addView(child)
+            chain.add(child)
+            current = child
+        }
+        BackgroundStyleApplicator.setBackgroundColor(current, Color.RED)
+        chain.forEach { it.layout(0, 0, 200, 200) }
+        return root
+    }
+
+    /** The defect: `traverse` recursed with no depth bound at all, so a deep
+     *  enough tree overflowed the stack before any other limit could stop it.
+     *  `overBudget()` cannot catch this — it is TIME-based, and a chain this
+     *  deep is traversed in well under the budget. Mirrors web's
+     *  `MAX_TRAVERSAL_DEPTH` contract: truncate and flag, never throw. */
+    @Test
+    fun depthCapReachedTruncatesAndFlagsDegraded() {
+        val root = buildDeepChain(400)
+        val sensor = AutoskeletonSensor()
+        val result = sensor.measure(root, AutoskeletonSensorOptions.defaults.copy(budgetMs = 1000.0))!!
+        assertTrue(
+            "expected DEPTH_CAP_REACHED, got ${result.degraded}",
+            result.degraded.contains(AutoskeletonDegradationFlag.DEPTH_CAP_REACHED),
+        )
+        // The one paintable view sits BELOW the cap, so truncation must drop it.
+        assertEquals(0, result.shapes.size)
+    }
+
+    /** Anti-vacuity for the test above: without this, a cap that fired on every
+     *  traversal — or a `buildDeepChain` that silently produced nothing
+     *  measurable — would still pass it. A chain well under the cap must
+     *  traverse to the bottom, flag nothing, and yield its one shape. */
+    @Test
+    fun depthUnderCapTraversesFullyAndFlagsNothing() {
+        val root = buildDeepChain(50)
+        val sensor = AutoskeletonSensor()
+        val result = sensor.measure(root, AutoskeletonSensorOptions.defaults.copy(budgetMs = 1000.0))!!
+        assertFalse(
+            "a 50-deep chain must not trip the depth cap, got ${result.degraded}",
+            result.degraded.contains(AutoskeletonDegradationFlag.DEPTH_CAP_REACHED),
+        )
+        assertEquals(1, result.shapes.size)
     }
 }

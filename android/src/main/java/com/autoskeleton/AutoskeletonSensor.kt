@@ -157,8 +157,16 @@ class AutoskeletonSensor(
 
     // MARK: - Traversal
 
-    private fun traverse(view: View, root: View, ctx: TraversalContext): List<AutoskeletonShapeInfo> {
+    private fun traverse(
+        view: View,
+        root: View,
+        ctx: TraversalContext,
+        depth: Int = 0,
+    ): List<AutoskeletonShapeInfo> {
         if (ctx.truncated) {
+            return emptyList()
+        }
+        if (ctx.overDepth(depth)) {
             return emptyList()
         }
         val id = nativeId(view)
@@ -187,7 +195,7 @@ class AutoskeletonSensor(
                 if (ctx.truncated) {
                     break
                 }
-                collected.addAll(traverse(view.getChildAt(i), root, ctx))
+                collected.addAll(traverse(view.getChildAt(i), root, ctx, depth + 1))
             }
         }
         if (collected.isNotEmpty()) {
@@ -262,6 +270,15 @@ class AutoskeletonSensor(
     }
 
     companion object {
+        /** Deliberately the same 300 as `MAX_TRAVERSAL_DEPTH` in
+         *  `src/web/dom-sensor.ts` and `AutoskeletonSensor.swift`: generous
+         *  headroom over any realistically deep real-world view tree (nested
+         *  comment threads and recursive components rarely exceed a few dozen
+         *  levels) while staying far below stack-overflow risk. A fixed
+         *  internal constant rather than an `AutoskeletonSensorOptions` field,
+         *  because it is a safety bound, not a per-consumer tunable. */
+        private const val MAX_TRAVERSAL_DEPTH = 300
+
         private const val TRAVERSAL_TRACE_SECTION = "AutoskeletonTraversal"
 
         /** Classifies the three RN leaf-component classes named in brief §4
@@ -398,6 +415,32 @@ class AutoskeletonSensor(
             if (elapsedMs > options.budgetMs) {
                 truncated = true
                 degraded.add(AutoskeletonDegradationFlag.BUDGET_EXCEEDED)
+                return true
+            }
+            return false
+        }
+
+        /** Hard depth bound, mirroring `dom-sensor.ts`'s `overDepth` and its
+         *  `MAX_TRAVERSAL_DEPTH`. Checked at the very top of `traverse()`,
+         *  beside `overBudget()`, and truncating through the same `truncated`
+         *  flag and `degraded` set, so a runaway subtree degrades exactly the
+         *  way every other limit here does: truncate and raise a flag the
+         *  caller can see, never throw.
+         *
+         *  `overBudget()` cannot stand in for this. It is TIME-based, so it
+         *  only ever stops FUTURE recursive calls — a tree deep enough to
+         *  overflow the call stack does so in far less than `budgetMs` of
+         *  wall-clock time, and the process dies before the budget is ever
+         *  consulted. Web grew this bound when unbounded recursion crashed the
+         *  renderer on a ~3000-level nested tree; both native sensors had the
+         *  same unbounded recursion and neither had the bound. */
+        fun overDepth(depth: Int): Boolean {
+            if (truncated) {
+                return true
+            }
+            if (depth > MAX_TRAVERSAL_DEPTH) {
+                truncated = true
+                degraded.add(AutoskeletonDegradationFlag.DEPTH_CAP_REACHED)
                 return true
             }
             return false

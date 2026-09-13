@@ -48,6 +48,7 @@ enum class AutoskeletonDegradationFlag(val wireValue: String) {
     CLIENTRECTS_EMPTY("clientrects-empty"),
     SNAPSHOT_VERSION_MISMATCH("snapshot-version-mismatch"),
     NATIVE_MODULE_UNAVAILABLE("native-module-unavailable"),
+    DEPTH_CAP_REACHED("depth-cap-reached"),
 }
 
 /** One placeholder rectangle in the root/wrapper coordinate space, in raw view
