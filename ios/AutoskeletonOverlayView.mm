@@ -180,7 +180,14 @@ using namespace facebook::react;
     // layout direction, whose accepted values are these very strings — see
     // `src/native/AutoskeletonOverlayNativeComponent.ts` for the full account.
     [_host setDirection:RCTNSStringFromString(toString(props.writingDirection))];
+    // `props.shapes` is codegen's `std::vector<double>`; the host takes
+    // `[NSNumber]` because that is what an `@objc` Swift signature can accept.
+    NSMutableArray<NSNumber *> *shapes = [NSMutableArray arrayWithCapacity:props.shapes.size()];
+    for (double value : props.shapes) {
+      [shapes addObject:@(value)];
+    }
     [_host mountOrUpdateWithCacheKey:RCTNSStringFromString(props.cacheKey)
+                              shapes:shapes
                             baseColor:RCTNSStringFromString(props.baseColor)
                        highlightColor:RCTNSStringFromString(props.highlightColor)
                         defaultRadius:props.defaultRadius

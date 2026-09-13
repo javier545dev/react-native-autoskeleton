@@ -28,6 +28,12 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
         AutoskeletonNativeShapeCache()
     }
 
+    /// The host takes `[NSNumber]` because that is what its `@objc` signature
+    /// can accept from the Fabric component's `std::vector<double>` prop.
+    private func nsWire(_ wire: [Double]) -> [NSNumber] {
+        wire.map { NSNumber(value: $0) }
+    }
+
     private func wireFor(_ shapes: [[Double]]) -> [Double] {
         var out: [Double] = [1] // WIRE_VERSION
         for shape in shapes { out.append(contentsOf: shape) }
@@ -97,12 +103,11 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
 
     func testMountsTheTier1RendererOnceCacheKeyIsSetAndTheSurfaceIsSized() {
         let cache = freshCache()
-        cache.set("k1", wireFor([[0, 0, 50, 50, 4]]))
         let host = makeHost(cache: cache)
         let surface = sizedSurface()
 
         host.mountOrUpdate(
-            cacheKey: "k1", baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
+            cacheKey: "k1", shapes: nsWire(wireFor([[0, 0, 50, 50, 4]])), baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 1400, animation: "shimmer",
             reducedMotion: false, debugOverlay: false, surface: surface
         )
@@ -116,12 +121,12 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
         XCTAssertTrue(shimmerGradient(in: surface).superlayer === container)
     }
 
-    func testNeverMountsWhenTheCacheHasNoEntryForTheGivenKey() {
+    func testNeverMountsWhenNoGeometryWasHandedToIt() {
         let host = makeHost(cache: freshCache())
         let surface = sizedSurface()
 
         host.mountOrUpdate(
-            cacheKey: "missing-key", baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
+            cacheKey: "missing-key", shapes: [], baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 1400, animation: "shimmer",
             reducedMotion: false, debugOverlay: false, surface: surface
         )
@@ -131,12 +136,11 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
 
     func testNeverMountsWhenTheSurfaceHasNoSizeYet() {
         let cache = freshCache()
-        cache.set("k1", wireFor([[0, 0, 50, 50, 4]]))
         let host = makeHost(cache: cache)
         let unsizedSurface = UIView(frame: .zero)
 
         host.mountOrUpdate(
-            cacheKey: "k1", baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
+            cacheKey: "k1", shapes: nsWire(wireFor([[0, 0, 50, 50, 4]])), baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 1400, animation: "shimmer",
             reducedMotion: false, debugOverlay: false, surface: unsizedSurface
         )
@@ -146,12 +150,11 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
 
     func testUpdatesShapesInPlaceWithoutRemountingWhenTheSameCacheKeyIsReSet() {
         let cache = freshCache()
-        cache.set("k1", wireFor([[0, 0, 50, 50, 4]]))
         let host = makeHost(cache: cache)
         let surface = sizedSurface()
 
         host.mountOrUpdate(
-            cacheKey: "k1", baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
+            cacheKey: "k1", shapes: nsWire(wireFor([[0, 0, 50, 50, 4]])), baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 1400, animation: "shimmer",
             reducedMotion: false, debugOverlay: false, surface: surface
         )
@@ -163,9 +166,8 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
         // Re-setting the SAME cacheKey with fresh data (e.g. a refine() landing
         // a second, more accurate snapshot) must update in place, never restart
         // the shimmer phase by remounting.
-        cache.set("k1", wireFor([[0, 0, 80, 80, 8]]))
         host.mountOrUpdate(
-            cacheKey: "k1", baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
+            cacheKey: "k1", shapes: nsWire(wireFor([[0, 0, 80, 80, 8]])), baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 1400, animation: "shimmer",
             reducedMotion: false, debugOverlay: false, surface: surface
         )
@@ -180,12 +182,11 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
 
     func testDestroyRemovesTheMountedOverlayLayer() {
         let cache = freshCache()
-        cache.set("k1", wireFor([[0, 0, 50, 50, 4]]))
         let host = makeHost(cache: cache)
         let surface = sizedSurface()
 
         host.mountOrUpdate(
-            cacheKey: "k1", baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
+            cacheKey: "k1", shapes: nsWire(wireFor([[0, 0, 50, 50, 4]])), baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 1400, animation: "shimmer",
             reducedMotion: false, debugOverlay: false, surface: surface
         )
@@ -201,13 +202,12 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
 
     func testParsesHexColorPropsAndFallsBackSafelyOnAnInvalidColorWithoutCrashing() {
         let cache = freshCache()
-        cache.set("k1", wireFor([[0, 0, 50, 50, 4]]))
         let host = makeHost(cache: cache)
         let surface = sizedSurface()
 
         // Must not crash even with an invalid color string (defensive default).
         host.mountOrUpdate(
-            cacheKey: "k1", baseColor: "not-a-color", highlightColor: "#f5f5f5",
+            cacheKey: "k1", shapes: nsWire(wireFor([[0, 0, 50, 50, 4]])), baseColor: "not-a-color", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 1400, animation: "shimmer",
             reducedMotion: false, debugOverlay: false, surface: surface
         )
@@ -217,12 +217,11 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
 
     func testReducedMotionForwardsToThePulseAnimationInsteadOfShimmer() {
         let cache = freshCache()
-        cache.set("k1", wireFor([[0, 0, 50, 50, 4]]))
         let host = makeHost(cache: cache)
         let surface = sizedSurface()
 
         host.mountOrUpdate(
-            cacheKey: "k1", baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
+            cacheKey: "k1", shapes: nsWire(wireFor([[0, 0, 50, 50, 4]])), baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 1400, animation: "shimmer",
             reducedMotion: true, debugOverlay: false, surface: surface
         )
@@ -240,12 +239,11 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
     // pin behaviour it can also reject, and this one could not.
     func testAnimationNoneRunsNoAnimationAtAll() {
         let cache = freshCache()
-        cache.set("k1", wireFor([[0, 0, 50, 50, 4]]))
         let host = makeHost(cache: cache)
         let surface = sizedSurface()
 
         host.mountOrUpdate(
-            cacheKey: "k1", baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
+            cacheKey: "k1", shapes: nsWire(wireFor([[0, 0, 50, 50, 4]])), baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 1400, animation: "none",
             reducedMotion: false, debugOverlay: false, surface: surface
         )
@@ -257,12 +255,11 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
 
     func testAnExplicitPulseIsAPulseEvenWithThePreferenceOff() {
         let cache = freshCache()
-        cache.set("k1", wireFor([[0, 0, 50, 50, 4]]))
         let host = makeHost(cache: cache)
         let surface = sizedSurface()
 
         host.mountOrUpdate(
-            cacheKey: "k1", baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
+            cacheKey: "k1", shapes: nsWire(wireFor([[0, 0, 50, 50, 4]])), baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 1400, animation: "pulse",
             reducedMotion: false, debugOverlay: false, surface: surface
         )
@@ -274,12 +271,11 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
 
     func testSpeedMsFlowsThroughToTheSharedClockPeriodAndTheShimmerDuration() {
         let cache = freshCache()
-        cache.set("k1", wireFor([[0, 0, 50, 50, 4]]))
         let host = makeHost(cache: cache)
         let surface = sizedSurface()
 
         host.mountOrUpdate(
-            cacheKey: "k1", baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
+            cacheKey: "k1", shapes: nsWire(wireFor([[0, 0, 50, 50, 4]])), baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 999, animation: "shimmer",
             reducedMotion: false, debugOverlay: false, surface: surface
         )

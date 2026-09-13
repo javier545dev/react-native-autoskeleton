@@ -87,8 +87,7 @@ class AutoskeletonOverlayViewManagerTest {
 
     @Test
     fun onDropViewInstanceDestroysTheMountedOverlay() {
-        AutoskeletonNativeShapeCache.clear()
-        AutoskeletonNativeShapeCache.set("k1", doubleArrayOf(1.0, 0.0, 0.0, 50.0, 50.0, 4.0))
+        view.wireShapes = doubleArrayOf(1.0, 0.0, 0.0, 50.0, 50.0, 4.0)
         view.layout(0, 0, 200, 200)
         manager.setCacheKey(view, "k1")
         assertEquals(1, view.childCount)

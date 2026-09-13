@@ -1,5 +1,6 @@
 package com.autoskeleton
 
+import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.uimanager.SimpleViewManager
 import com.facebook.react.uimanager.ThemedReactContext
 import com.facebook.react.uimanager.ViewManagerDelegate
@@ -64,6 +65,12 @@ class AutoskeletonOverlayViewManager :
 
     override fun setCacheKey(view: AutoskeletonOverlayView, value: String?) {
         view.cacheKey = value
+    }
+
+    override fun setShapes(view: AutoskeletonOverlayView, value: ReadableArray?) {
+        view.wireShapes = value?.let { array ->
+            DoubleArray(array.size()) { array.getDouble(it) }
+        }
     }
 
     override fun setBaseColor(view: AutoskeletonOverlayView, value: String?) {

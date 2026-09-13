@@ -38,6 +38,26 @@ class AutoskeletonOverlayView(context: Context) : FrameLayout(context) {
             field = value
             mountOrUpdate()
         }
+
+    /** The wire array this overlay paints: `[VERSION, x,y,w,h,r] x N`, in
+     *  density-independent points, exactly as `getShapes` returned it.
+     *
+     *  This replaces the `AutoskeletonNativeShapeCache[cacheKey]` lookup ADR-9
+     *  specified. JS already holds this buffer — `native/sensor.ts` decodes the
+     *  very same `getShapes` payload to populate the JS store — so the native
+     *  cache was a second copy of data the caller already had, keyed by a
+     *  string, and evicted by nothing: `evictNativeShapes` had no call site
+     *  anywhere in `src/`.
+     *
+     *  `cacheKey` stays, and is now only an IDENTITY: it decides remount vs.
+     *  in-place update, which is why a fresher snapshot for the same key still
+     *  never restarts the shimmer phase. Null means nothing measured yet, the
+     *  same no-op a cache miss used to be. */
+    var wireShapes: DoubleArray? = null
+        set(value) {
+            field = value
+            mountOrUpdate()
+        }
     /** The palette props. Each forwards to a live handle for exactly the
      *  reason `writingDirection` below does: Fabric can deliver a prop after
      *  the mount, and `cacheKey` cannot rescue this one. `composeCacheKey`
@@ -137,7 +157,7 @@ class AutoskeletonOverlayView(context: Context) : FrameLayout(context) {
         if (key == null || width <= 0 || height <= 0) {
             return
         }
-        val wire = AutoskeletonNativeShapeCache.get(key) ?: return
+        val wire = wireShapes ?: return
         // `AutoskeletonModule.encodeWireArray` divides every geometry value
         // by `resources.displayMetrics.density` before caching (plan.md
         // §4.1 "Units": the wire is density-independent points, comparable
@@ -255,6 +275,7 @@ class AutoskeletonOverlayView(context: Context) : FrameLayout(context) {
     fun resetForRecycle() {
         destroy()
         cacheKey = null
+        wireShapes = null
         baseColor = null
         highlightColor = null
         defaultRadius = 0.0

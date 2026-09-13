@@ -12,6 +12,7 @@ import { StyleSheet, View } from 'react-native';
 import { resolveSharedShimmerPeriodMs } from '../../core/shimmer-period';
 import type { AnimationKind, Direction, ShapeSnapshot } from '../../core/types';
 import { resolveAutoskeletonOverlayNativeComponent } from '../renderer/AutoskeletonOverlayHostComponent';
+import { wireOf } from '../renderer/wireProp';
 import { FallbackSkeletonBlock } from './FallbackSkeletonBlock';
 
 export interface SyntheticRowProps {
@@ -42,11 +43,19 @@ export function SyntheticRow(props: SyntheticRowProps): React.JSX.Element {
   // one place the shared period has to be resolved for all three. See
   // `core/shimmer-period.ts` for why the FIRST period wins.
   const speedMs = resolveSharedShimmerPeriodMs(props.speedMs);
+  // `wireOf`, not the memoized `useWireProp`: this component is deliberately
+  // hook-free — `test/native/shimmer-period-wiring.test.ts` invokes it as a
+  // plain function to assert what it forwards, which is only possible while
+  // it stays one. The per-render `Array.from` it costs is bounded by the row
+  // count, and `AutoSkeleton.tsx` (a real component) still memoizes its own.
+  // See `wireProp.ts` for why the overlay takes the buffer as a prop at all.
+  const shapes = wireOf(props.snapshot);
   if (props.snapshot && OverlayComponent) {
     return (
       <View style={{ height: props.snapshot.frameHeight, width: '100%' }}>
         <OverlayComponent
           cacheKey={props.cacheKey}
+          shapes={shapes}
           baseColor={props.baseColor}
           highlightColor={props.highlightColor}
           defaultRadius={props.defaultRadius}

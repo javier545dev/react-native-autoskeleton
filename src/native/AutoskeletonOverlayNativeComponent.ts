@@ -56,6 +56,17 @@ import type { Double, WithDefault } from 'react-native/Libraries/Types/CodegenTy
 
 export interface NativeProps extends ViewProps {
   readonly cacheKey: string;
+  /** The wire array this overlay paints: `[VERSION, x,y,w,h,r] x N`, in
+   *  density-independent points, exactly as `getShapes` returned it.
+   *
+   *  Supersedes the `cacheKey` lookup ADR-9 specified. JS ALREADY holds this
+   *  buffer — `native/sensor.ts` decodes the very same `getShapes` payload to
+   *  populate the JS store — so the native cache was a second copy of data
+   *  the caller already had, kept alive by a key, evicted by nothing.
+   *
+   *  Empty means "nothing measured yet for this key", which is the same
+   *  no-op the cache miss used to be. */
+  readonly shapes: ReadonlyArray<Double>;
   readonly baseColor: string;
   readonly highlightColor: string;
   readonly defaultRadius: Double;

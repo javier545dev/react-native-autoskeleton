@@ -74,6 +74,7 @@ import { Hint } from './Hint';
 import { AUTOSKELETON_IGNORE_MARKER_ID, Ignore } from './Ignore';
 import { nativeSensor } from './nativeSensorInstance';
 import { resolveAutoskeletonOverlayNativeComponent } from './renderer/AutoskeletonOverlayHostComponent';
+import { useWireProp } from './renderer/wireProp';
 import type { NativeSensorTarget } from './sensor';
 import type { SkeletonOverlayComponent } from './overlayContract';
 import {
@@ -558,6 +559,13 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
   // store answered with when this `cacheKey` was first seen — see the
   // identically-shaped comment in `web/AutoSkeleton.tsx`.
   const snapshot = coldSnapshotForKey ?? cacheStateRef.current.snapshot;
+  // The geometry the native overlay paints, as the raw wire buffer. Named
+  // `overlayWire` and not `overlayShapes` because `overlayShapes` below is the
+  // DECODED `ShapeInfo[]` the JS-side renderer takes — same data, two shapes,
+  // and conflating them is a type error waiting in a prop spread.
+  // See `wireProp.ts` for why this is a prop now rather than a `cacheKey`
+  // lookup into a native cache.
+  const overlayWire = useWireProp(snapshot);
 
   // A zero-shape snapshot is provisional, not the truth about this subtree:
   // it is equally the signature of a subtree the native sensor reached before
@@ -817,6 +825,7 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
         {overlayVisible && overlayRenderer === undefined && OverlayComponent !== null && (
           <OverlayComponent
             cacheKey={cacheKey}
+            shapes={overlayWire}
             baseColor={theme.baseColor}
             highlightColor={theme.highlightColor}
             defaultRadius={theme.defaultRadius}

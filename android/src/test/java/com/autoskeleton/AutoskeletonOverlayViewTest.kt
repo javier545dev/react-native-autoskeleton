@@ -18,7 +18,7 @@ import org.robolectric.annotation.GraphicsMode
  * Visual-paint-gate remediation (tasks.md Phase 5, task 5.7 follow-up) /
  * plan.md ADR-5, ADR-9: `AutoskeletonOverlayView` is the native tier-1
  * draw surface Fabric mounts for `AutoskeletonOverlayView` (the codegen'd
- * component). It reads shape geometry from `AutoskeletonNativeShapeCache`
+ * component). It paints the wire array handed to it through the `shapes` prop
  * by `cacheKey` (ADR-9: native holds shape DATA, JS holds POLICY) — never
  * from props — and hosts `AutoskeletonRendererTier1` (task 4.4), the
  * SAME renderer already covered by `AutoskeletonRendererTier1Test`. This
@@ -31,7 +31,6 @@ import org.robolectric.annotation.GraphicsMode
 class AutoskeletonOverlayViewTest {
     @Before
     fun setUp() {
-        AutoskeletonNativeShapeCache.clear()
     }
 
     private fun wireFor(shapes: List<DoubleArray>): DoubleArray {
@@ -90,8 +89,8 @@ class AutoskeletonOverlayViewTest {
 
     @Test
     fun mountsTheTier1RendererOnceCacheKeyIsSetAndTheViewIsSized() {
-        AutoskeletonNativeShapeCache.set("k1", wireFor(listOf(doubleArrayOf(0.0, 0.0, 50.0, 50.0, 4.0))))
         val view = sizedView()
+        view.wireShapes = wireFor(listOf(doubleArrayOf(0.0, 0.0, 50.0, 50.0, 4.0)))
 
         view.baseColor = "#e2e2e2"
         view.highlightColor = "#f5f5f5"
@@ -112,8 +111,8 @@ class AutoskeletonOverlayViewTest {
 
     @Test
     fun updatesShapesInPlaceWithoutRemountingWhenTheSameCacheKeyIsReSet() {
-        AutoskeletonNativeShapeCache.set("k1", wireFor(listOf(doubleArrayOf(0.0, 0.0, 50.0, 50.0, 4.0))))
         val view = sizedView()
+        view.wireShapes = wireFor(listOf(doubleArrayOf(0.0, 0.0, 50.0, 50.0, 4.0)))
         view.cacheKey = "k1"
         val overlay = view.getChildAt(0)
 
@@ -121,7 +120,6 @@ class AutoskeletonOverlayViewTest {
         // refine()) must update in place, never restart the shimmer phase by
         // remounting — mirrors `AutoskeletonRendererTier1Test`'s own
         // "update must not restart shimmer" contract.
-        AutoskeletonNativeShapeCache.set("k1", wireFor(listOf(doubleArrayOf(0.0, 0.0, 80.0, 80.0, 8.0))))
         view.cacheKey = "k1"
 
         assertEquals(1, view.childCount)
@@ -130,8 +128,8 @@ class AutoskeletonOverlayViewTest {
 
     @Test
     fun destroyRemovesTheMountedOverlayChild() {
-        AutoskeletonNativeShapeCache.set("k1", wireFor(listOf(doubleArrayOf(0.0, 0.0, 50.0, 50.0, 4.0))))
         val view = sizedView()
+        view.wireShapes = wireFor(listOf(doubleArrayOf(0.0, 0.0, 50.0, 50.0, 4.0)))
         view.cacheKey = "k1"
         assertEquals(1, view.childCount)
 
@@ -142,8 +140,8 @@ class AutoskeletonOverlayViewTest {
 
     @Test
     fun parsesHexColorPropsIntoTheRendererThemeAndFallsBackSafelyOnAnInvalidColor() {
-        AutoskeletonNativeShapeCache.set("k1", wireFor(listOf(doubleArrayOf(0.0, 0.0, 50.0, 50.0, 4.0))))
         val view = sizedView()
+        view.wireShapes = wireFor(listOf(doubleArrayOf(0.0, 0.0, 50.0, 50.0, 4.0)))
         view.baseColor = "not-a-color"
         view.highlightColor = "#f5f5f5"
         // Must not throw even with an invalid color string (defensive default).
@@ -169,8 +167,8 @@ class AutoskeletonOverlayViewTest {
      *  alone would keep it alive forever at an unchanged width. */
     @Test
     fun aThemeChangeAfterMountRepaintsTheAlreadyMountedOverlay() {
-        AutoskeletonNativeShapeCache.set("k1", wireFor(listOf(doubleArrayOf(0.0, 0.0, 50.0, 50.0, 4.0))))
         val view = sizedView()
+        view.wireShapes = wireFor(listOf(doubleArrayOf(0.0, 0.0, 50.0, 50.0, 4.0)))
         view.baseColor = "#e2e2e2"
         view.highlightColor = "#f5f5f5"
         view.cacheKey = "k1"
@@ -220,8 +218,8 @@ class AutoskeletonOverlayViewTest {
      */
     @Test
     fun resetForRecycleReturnsEveryPropToItsDefault() {
-        AutoskeletonNativeShapeCache.set("k1", wireFor(listOf(doubleArrayOf(0.0, 0.0, 50.0, 50.0, 4.0))))
         val view = sizedView()
+        view.wireShapes = wireFor(listOf(doubleArrayOf(0.0, 0.0, 50.0, 50.0, 4.0)))
         view.baseColor = "#111111"
         view.highlightColor = "#222222"
         view.defaultRadius = 9.0

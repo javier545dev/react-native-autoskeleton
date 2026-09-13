@@ -142,6 +142,7 @@ public final class AutoskeletonOverlayViewHost: NSObject {
     /// the key was already set).
     @objc public func mountOrUpdate(
         cacheKey: String,
+        shapes shapeWire: [NSNumber],
         baseColor: String,
         highlightColor: String,
         defaultRadius: Double,
@@ -152,8 +153,20 @@ public final class AutoskeletonOverlayViewHost: NSObject {
         surface: UIView
     ) {
         guard surface.bounds.width > 0, surface.bounds.height > 0 else { return }
-        guard let wire = shapeCache.get(cacheKey) else { return }
-        let shapes = Self.decodeWireShapes(wire)
+        // The wire arrives as a prop rather than through
+        // `AutoskeletonNativeShapeCache[cacheKey]`, which ADR-9 specified. JS
+        // already holds this buffer — `native/sensor.ts` decodes the very same
+        // `getShapes` payload to populate the JS store — so the native cache
+        // was a second copy of data the caller already had, keyed by a string
+        // and evicted by nothing: `evictNativeShapes` had no call site
+        // anywhere in `src/`.
+        //
+        // `cacheKey` stays, and is now only an IDENTITY: it decides remount
+        // vs. in-place update below, which is what keeps a fresher snapshot
+        // for the same key from restarting the shimmer phase. Empty is the
+        // same no-op a cache miss used to be.
+        guard !shapeWire.isEmpty else { return }
+        let shapes = Self.decodeWireShapes(shapeWire.map { $0.doubleValue })
 
         let resolvedAnimation = Self.effectiveAnimation(animation, reducedMotion: reducedMotion)
 
