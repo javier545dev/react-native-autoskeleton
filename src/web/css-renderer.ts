@@ -276,8 +276,21 @@ export function createCssRenderer(): Renderer<HTMLElement> {
           latest = { ...latest, snapshot: next };
           applyGeometry(overlay, latest);
         },
+        // `setAnimation` and `setTheme` are the same operation with a
+        // different field: merge into `latest`, then re-run `applyAnimation`,
+        // which is the only writer of the animation class, `--askl-speed` and
+        // the `--skl-base` / `--skl-highlight` ramp. It deliberately leaves
+        // the phase anchor alone, so neither call makes the sweep jump.
+        //
+        // Merging into `latest` rather than applying the argument directly is
+        // what stops a later call from resurrecting the mount-time values:
+        // every one of these rebuilds its props from `latest`.
         setAnimation(kind) {
           latest = { ...latest, animation: kind };
+          applyAnimation(overlay, latest);
+        },
+        setTheme(next) {
+          latest = { ...latest, theme: next };
           applyAnimation(overlay, latest);
         },
         destroy() {

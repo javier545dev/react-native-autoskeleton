@@ -338,6 +338,12 @@ function useOverlayRenderer(
     } else {
       handleRef.current.update(snapshot);
       handleRef.current.setAnimation(animation);
+      // `theme` has always been in this effect's deps, so a provider theme
+      // change already re-ran this branch — it just had nowhere to put the new
+      // palette, and the overlay kept its mount-time colours until it
+      // unmounted. Both native renderers fixed that with a `setTheme`; this is
+      // the web half of the same fix.
+      handleRef.current.setTheme(theme);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot, theme, animation, debugOverlayEnabled]);

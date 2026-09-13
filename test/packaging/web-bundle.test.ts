@@ -23,7 +23,7 @@ import { measureWebEntryAsConsumerApp, WEB_ENTRY, type WebEntryBundle } from './
 //
 // Run in isolation: `vitest run test/packaging/web-bundle.test.ts`.
 
-// NFR-6 has been revised TWICE, corrected once, and relaxed once. The current
+// NFR-6 has been revised twice, corrected once, and relaxed twice. The current
 // number lives in `benchmarks/budgets.json` (`webEntryGzipBytes`) — this file
 // reads it rather than restating it. The full record:
 //   1. 5 kB -> 8 kB (2026-08-27): the original 5 kB came from the kickoff

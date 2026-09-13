@@ -32,7 +32,7 @@ readout prints which of the two guards ended the cycle:
 manages blurhash. Two reasons, stated plainly:
 
 1. A blurhash decoder would duplicate what `expo-image` already ships, and
-   would blow the web entry's gzip budget (NFR-6 — currently **7933 B**, the
+   would blow the web entry's gzip budget (NFR-6 — currently **8164 B**, the
    single source of truth being `benchmarks/budgets.json`'s
    `webEntryGzipBytes`) on its own.
 2. Owning phase 2 would force a hard dependency on one specific image

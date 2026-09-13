@@ -409,3 +409,66 @@ test.describe('CSS renderer — one deliberate pixel test (plan.md §7.3 point 5
     expect(await paintsMoreThanOneDistinctFrame(page, overlayBox, 600)).toBe(false);
   });
 });
+
+// A theme change on a MOUNTED overlay. This is the same defect that was found
+// and fixed on both native platforms — Android grew `setTheme`
+// (`AutoskeletonRendererTier1.kt`, whose own comment names the symptom: "a
+// dark-mode toggle leaving every on-screen skeleton in the light palette until
+// it happened to unmount") and iOS tracks `mountedTheme` in
+// `AutoskeletonOverlayViewHost.swift`. Web was left out of that fix: the
+// handle exposed only `update` and `setAnimation`, so `latest.theme` was
+// frozen at mount and `applyAnimation` — the only writer of `--skl-base` /
+// `--skl-highlight` — kept re-running with the stale palette.
+//
+// `<SkeletonProvider>` already re-runs the effect that owns the handle when
+// `theme` changes; it simply had no channel to push the new one through.
+//
+// The DEFAULT palette deliberately writes no custom property at all, so that
+// an untouched theme defers to whatever the CSS cascade provides. These cases
+// therefore move between two EXPLICIT palettes: the escape hatch stays intact
+// and the assertion is unambiguous.
+test.describe('CSS renderer — a theme change reaches a mounted overlay', () => {
+  const readVars = async (page: import('@playwright/test').Page) =>
+    page.evaluate(() => {
+      const overlay = document.querySelector('.askl-overlay') as HTMLElement;
+      return {
+        base: overlay.style.getPropertyValue('--skl-base'),
+        highlight: overlay.style.getPropertyValue('--skl-highlight'),
+      };
+    });
+
+  test('setTheme repaints the ramp without remounting the overlay', async ({ page, setup }) => {
+    await setup();
+
+    await page.evaluate(() => {
+      const { handle } = (window as unknown as { __askl: { handle: { setTheme: (t: unknown) => void } } }).__askl;
+      handle.setTheme({ baseColor: '#0f3d5c', highlightColor: '#1b6ea8', defaultRadius: 4, speedMs: 400 });
+    });
+    expect(await readVars(page)).toEqual({ base: '#0f3d5c', highlight: '#1b6ea8' });
+
+    // The second change is the one that catches a fix that only merges once.
+    await page.evaluate(() => {
+      const { handle } = (window as unknown as { __askl: { handle: { setTheme: (t: unknown) => void } } }).__askl;
+      handle.setTheme({ baseColor: '#5c1f0f', highlightColor: '#a8511b', defaultRadius: 4, speedMs: 400 });
+    });
+    expect(await readVars(page)).toEqual({ base: '#5c1f0f', highlight: '#a8511b' });
+  });
+
+  test('a later update() or setAnimation() does not resurrect the mount-time palette', async ({ page, setup }) => {
+    await setup();
+
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        __askl: { handle: { setTheme: (t: unknown) => void; setAnimation: (k: string) => void; update: (s: unknown) => void }; snapshot: unknown };
+      };
+      w.__askl.handle.setTheme({ baseColor: '#0f3d5c', highlightColor: '#1b6ea8', defaultRadius: 4, speedMs: 400 });
+      // Both of these re-run `applyAnimation`, which is what writes the ramp.
+      // If either rebuilt its props from the ORIGINAL theme, the palette would
+      // silently revert — the exact shape of the original defect.
+      w.__askl.handle.setAnimation('pulse');
+      w.__askl.handle.update(w.__askl.snapshot);
+    });
+
+    expect(await readVars(page)).toEqual({ base: '#0f3d5c', highlight: '#1b6ea8' });
+  });
+});

@@ -117,7 +117,7 @@ line is short.</sub>
   `test/packaging/web-bundle.test.ts` builds a real consumer app, gzips the web
   entry, and fails CI above the ceiling in
   [`benchmarks/budgets.json`](benchmarks/budgets.json) — the single home of that
-  number. On this commit: 7898 B against a 7933 B ceiling.
+  number. On this commit: 7943 B against an 8164 B ceiling.
 
 What it does **not** replace is a loading state you deliberately designed to
 look *unlike* the content it precedes. If that is what you want, draw it by
