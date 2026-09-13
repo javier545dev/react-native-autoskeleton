@@ -90,7 +90,7 @@ export function useTemplateMeasurement(
   // WITHOUT `cacheKey` changing — `composeCacheKey` embeds it) and as the
   // caller-facing name in this hook's options.
   const decision = decideCellBind(cacheHit, registry.stateFor(cacheKey), registry.attemptsFor(cacheKey));
-  const shouldSchedule = decision.shouldScheduleTemplateMeasurement && renderTemplate !== undefined;
+  const wantsSchedule = decision.shouldScheduleTemplateMeasurement && renderTemplate !== undefined;
 
   // REAL, on-device-found race (Phase 6 apply session): when N sibling list
   // cells for the SAME unseen itemType render in the SAME commit (the
@@ -115,8 +115,38 @@ export function useTemplateMeasurement(
   // pattern this codebase already uses for "adjust state during render"
   // (`everShownContent`/`cycleId` in `AutoSkeleton.tsx`), just against a
   // shared module-scoped registry instead of local component state.
-  if (shouldSchedule) {
+  // ...and the claim has to be remembered as OURS, or the write above eats its
+  // own decision. React invokes a component twice per commit under
+  // `<StrictMode>` — every React 18+ app in development — and may invoke it
+  // any number of times for renders it later discards (a transition
+  // interrupted by higher-priority input, a sibling suspending). The second
+  // invocation reads the registry back:
+  //
+  //   render 1   'idle'      -> schedules -> markScheduled() -> 'scheduled'
+  //   render 2   'scheduled' -> decideCellBind says no -> shouldSchedule=false
+  //
+  // and the COMMITTED closures then believe another cell owns the claim. The
+  // mount effect returns early, `mounted` never flips, the measurement effect
+  // never runs, and its cleanup — the only `releaseClaim` caller in the
+  // codebase — is never registered. The key latches at 'scheduled' with no
+  // measurement in flight, and since `decideCellBind` only schedules from
+  // 'idle' or a retryable 'failed', every later bind for that key renders the
+  // generic fallback for the rest of the process.
+  //
+  // Moving the claim into an effect would fix that and reintroduce the sibling
+  // race the comment above describes, so instead the cell records WHICH key it
+  // claimed. Reading back its own claim keeps it the owner; reading back a
+  // sibling's still stands it down. Keyed by `cacheKey`, not a boolean, so a
+  // recycled cell rebinding to a different key does not inherit ownership of
+  // the old one. `useRef` is the right store: it survives the double
+  // invocation (same fiber, same hook state) without making the claim part of
+  // render output.
+  const claimedKeyRef = useRef<ShapeCacheKey | null>(null);
+  const claimIsOurs = claimedKeyRef.current === cacheKey;
+  const shouldSchedule = wantsSchedule || claimIsOurs;
+  if (wantsSchedule && !claimIsOurs) {
     registry.markScheduled(cacheKey);
+    claimedKeyRef.current = cacheKey;
   }
 
   const [mounted, setMounted] = useState(false);
@@ -251,6 +281,13 @@ export function useTemplateMeasurement(
       // correct itemType's claim is the one released.
       if (!settled) {
         registry.releaseClaim(cacheKey);
+        // Drop ownership with the claim. Otherwise a cell that released and
+        // then re-rendered for the same key would still read `claimIsOurs`,
+        // scheduling against a claim it no longer holds — and a sibling that
+        // legitimately took the key over would find two owners.
+        if (claimedKeyRef.current === cacheKey) {
+          claimedKeyRef.current = null;
+        }
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
