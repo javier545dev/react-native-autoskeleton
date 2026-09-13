@@ -103,4 +103,78 @@ class AutoskeletonLinesTest {
             }
         }
     }
+
+    // MARK: - Hostile inputs
+
+    /** `lines` arrives UNVALIDATED from the public API — `<AutoSkeleton.Hint
+     *  lines={n} />` puts whatever the consumer typed straight into
+     *  `HintRegistry.linesFor`, which is this field. Each of these was a
+     *  DIFFERENT failure on each of the three platforms, which is the argument
+     *  for fixing the shared formula rather than three call sites: a zero
+     *  `lineHeight` gave `Math.round(h / 0)` = `Infinity` in TypeScript (an
+     *  unbounded push loop), `Int(Double.infinity)` in Swift (a hard trap),
+     *  and `Int.MAX_VALUE` HERE — 2^31 iterations of `map`. A `lines` of -1
+     *  returned empty in TypeScript and here, and trapped in Swift.
+     *  `lines.test.ts` and `AutoskeletonLinesTests.swift` carry the same
+     *  cases. */
+    @Test
+    fun underivableLineHeightYieldsOnePlaceholderRatherThanHanging() {
+        for (lineHeight in listOf(0f, -20f, Float.NaN, Float.POSITIVE_INFINITY)) {
+            val lines = autoskeletonSynthesizeLines(
+                AutoskeletonSynthesizeLinesOptions(x = 0f, y = 0f, w = 100f, h = 40f, lineHeight = lineHeight),
+            )
+            // Not derivable is not the same as "none": the caller asked for a
+            // collapsed-text placeholder and must still get one.
+            assertEquals("lineHeight $lineHeight", 1, lines.size)
+            assertTrue("lineHeight $lineHeight", lines[0].h.isFinite())
+            assertTrue("lineHeight $lineHeight", lines[0].h >= 0f)
+        }
+    }
+
+    @Test
+    fun absurdLinesHintIsClampedRatherThanAllocatedFor() {
+        val lines = autoskeletonSynthesizeLines(
+            AutoskeletonSynthesizeLinesOptions(x = 0f, y = 0f, w = 100f, h = 40f, lineHeight = 20f, lines = 1_000_000_000),
+        )
+        assertEquals(MAX_SYNTHESIZED_LINES, lines.size)
+    }
+
+    @Test
+    fun negativeLinesHintYieldsNoLines() {
+        val lines = autoskeletonSynthesizeLines(
+            AutoskeletonSynthesizeLinesOptions(x = 0f, y = 0f, w = 100f, h = 40f, lineHeight = 20f, lines = -1),
+        )
+        assertEquals(0, lines.size)
+    }
+
+    @Test
+    fun noNonFiniteCoordinateForAnyHostileInput() {
+        for (lineHeight in listOf(0f, -20f, Float.NaN, Float.POSITIVE_INFINITY)) {
+            autoskeletonSynthesizeLines(
+                AutoskeletonSynthesizeLinesOptions(x = 5f, y = 5f, w = 100f, h = 40f, lineHeight = lineHeight),
+            ).forEach { line ->
+                listOf(line.x, line.y, line.w, line.h).forEach {
+                    assertTrue("lineHeight $lineHeight", it.isFinite())
+                }
+            }
+        }
+    }
+
+    /** Anti-vacuity: every assertion above would hold for a function that
+     *  always returned an empty list. The ordinary path must be untouched. */
+    @Test
+    fun ordinaryDerivedCountIsUnchanged() {
+        assertEquals(
+            5,
+            autoskeletonSynthesizeLines(
+                AutoskeletonSynthesizeLinesOptions(x = 0f, y = 0f, w = 100f, h = 100f, lineHeight = 20f),
+            ).size,
+        )
+        assertEquals(
+            3,
+            autoskeletonSynthesizeLines(
+                AutoskeletonSynthesizeLinesOptions(x = 0f, y = 0f, w = 100f, h = 100f, lineHeight = 20f, lines = 3),
+            ).size,
+        )
+    }
 }

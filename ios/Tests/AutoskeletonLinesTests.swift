@@ -99,4 +99,73 @@ final class AutoskeletonLinesTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - Hostile inputs
+
+    /// `lines` arrives UNVALIDATED from the public API — `<AutoSkeleton.Hint
+    /// lines={n} />` puts whatever the consumer typed straight into
+    /// `HintRegistry.linesFor`, which is this field. Each of these was a
+    /// DIFFERENT failure on each of the three platforms, which is the argument
+    /// for fixing the shared formula rather than three call sites: a zero
+    /// `lineHeight` gave `Math.round(h / 0)` = `Infinity` in TypeScript (an
+    /// unbounded push loop), `Int(Double.infinity)` HERE (a hard trap), and
+    /// `Int.MAX_VALUE` in Kotlin. A `lines` of -1 returned empty in TypeScript
+    /// and Kotlin and trapped HERE on `0..<(-1)`. `lines.test.ts` and
+    /// `AutoskeletonLinesTest.kt` carry the same cases.
+    func testUnderivableLineHeightYieldsOnePlaceholderRatherThanTrapping() {
+        for lineHeight in [CGFloat(0), -20, .nan, .infinity] {
+            let lines = autoskeletonSynthesizeLines(
+                AutoskeletonSynthesizeLinesOptions(x: 0, y: 0, w: 100, h: 40, lineHeight: lineHeight, lines: nil)
+            )
+            // Not derivable is not the same as "none": the caller asked for a
+            // collapsed-text placeholder and must still get one.
+            XCTAssertEqual(lines.count, 1, "lineHeight \(lineHeight)")
+            XCTAssertTrue(lines[0].h.isFinite, "lineHeight \(lineHeight)")
+            XCTAssertGreaterThanOrEqual(lines[0].h, 0, "lineHeight \(lineHeight)")
+        }
+    }
+
+    func testAbsurdLinesHintIsClampedRatherThanAllocatedFor() {
+        let lines = autoskeletonSynthesizeLines(
+            AutoskeletonSynthesizeLinesOptions(x: 0, y: 0, w: 100, h: 40, lineHeight: 20, lines: 1_000_000_000)
+        )
+        XCTAssertEqual(lines.count, autoskeletonMaxSynthesizedLines)
+    }
+
+    func testNegativeLinesHintYieldsNoLinesRatherThanTrapping() {
+        let lines = autoskeletonSynthesizeLines(
+            AutoskeletonSynthesizeLinesOptions(x: 0, y: 0, w: 100, h: 40, lineHeight: 20, lines: -1)
+        )
+        // Matches `lines: 0`, and matches what TypeScript and Kotlin already did.
+        XCTAssertEqual(lines.count, 0)
+    }
+
+    func testNoNonFiniteCoordinateForAnyHostileInput() {
+        for lineHeight in [CGFloat(0), -20, .nan, .infinity] {
+            for line in autoskeletonSynthesizeLines(
+                AutoskeletonSynthesizeLinesOptions(x: 5, y: 5, w: 100, h: 40, lineHeight: lineHeight, lines: nil)
+            ) {
+                for v in [line.x, line.y, line.w, line.h] {
+                    XCTAssertTrue(v.isFinite, "lineHeight \(lineHeight)")
+                }
+            }
+        }
+    }
+
+    /// Anti-vacuity: every assertion above would hold for a function that
+    /// always returned []. The ordinary path must be untouched.
+    func testOrdinaryDerivedCountIsUnchanged() {
+        XCTAssertEqual(
+            autoskeletonSynthesizeLines(
+                AutoskeletonSynthesizeLinesOptions(x: 0, y: 0, w: 100, h: 100, lineHeight: 20, lines: nil)
+            ).count,
+            5
+        )
+        XCTAssertEqual(
+            autoskeletonSynthesizeLines(
+                AutoskeletonSynthesizeLinesOptions(x: 0, y: 0, w: 100, h: 100, lineHeight: 20, lines: 3)
+            ).count,
+            3
+        )
+    }
 }

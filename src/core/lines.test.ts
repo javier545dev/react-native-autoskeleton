@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { synthesizeLines } from './lines';
+import { MAX_SYNTHESIZED_LINES, synthesizeLines } from './lines';
 
 // Task 1.4 (tasks.md Phase 1): Observability — tags synthesized shapes
 // `source: 'synthetic-line'` in the dev sidecar (§4.4); asserted below.
@@ -119,5 +119,80 @@ describe('synthesizeLines — writing direction (RTL anchoring)', () => {
         expect(line.x + line.w).toBeLessThanOrEqual(x + w + 1e-9);
       }
     }
+  });
+
+  // ---------------------------------------------------------------------
+  // Hostile inputs: this function must never hang, never allocate without
+  // bound, and never throw.
+  //
+  // `lines` arrives UNVALIDATED from the public API — `<AutoSkeleton.Hint
+  // lines={n} />` puts whatever the consumer typed straight into
+  // `HintRegistry.linesFor`, which is this argument. `lineHeight` is a
+  // constant 20 on both native platforms today, but web derives it from
+  // `parseLineHeight`, and CSS `line-height: 0` is both legal and common
+  // (icon rows, reset stylesheets), parsing cleanly to 0 rather than NaN.
+  //
+  // Each of these was a DIFFERENT failure on each of the three platforms,
+  // which is the whole argument for fixing it in the shared formula rather
+  // than at three call sites: `lineHeight: 0` gave `Math.round(h / 0)` =
+  // `Infinity` here (an unbounded push loop), `Int(Double.infinity)` in
+  // Swift (a hard trap), and `Int.MAX_VALUE` in Kotlin (2^31 iterations).
+  // `lines: -1` returned empty here and in Kotlin, and trapped in Swift on
+  // `0..<(-1)`. `AutoskeletonLinesTests.swift` and `AutoskeletonLinesTest.kt`
+  // carry the same cases.
+  describe('hostile inputs', () => {
+    it('does not derive an unbounded line count from a zero lineHeight', () => {
+      const lines = synthesizeLines({ x: 0, y: 0, w: 100, h: 40, lineHeight: 0 });
+      expect(lines.length).toBeLessThanOrEqual(MAX_SYNTHESIZED_LINES);
+      // Not derivable is not the same as "none": the caller asked for a
+      // collapsed-text placeholder and must still get one.
+      expect(lines.length).toBe(1);
+    });
+
+    it.each([
+      ['negative', -20],
+      ['NaN', Number.NaN],
+      ['Infinity', Number.POSITIVE_INFINITY],
+    ])('treats a %s lineHeight as underivable rather than propagating it', (_label, lineHeight) => {
+      const lines = synthesizeLines({ x: 0, y: 0, w: 100, h: 40, lineHeight });
+      expect(lines.length).toBe(1);
+      expect(Number.isFinite(lines[0]!.h)).toBe(true);
+      expect(lines[0]!.h).toBeGreaterThanOrEqual(0);
+    });
+
+    it('clamps an absurd lines hint instead of allocating for it', () => {
+      const lines = synthesizeLines({ x: 0, y: 0, w: 100, h: 40, lineHeight: 20, lines: 1e9 });
+      expect(lines).toHaveLength(MAX_SYNTHESIZED_LINES);
+    });
+
+    it.each([
+      ['negative', -1],
+      ['NaN', Number.NaN],
+      ['Infinity', Number.POSITIVE_INFINITY],
+      ['fractional', 2.7],
+    ])('never produces a partial or impossible count for a %s lines hint', (_label, lines) => {
+      const out = synthesizeLines({ x: 0, y: 0, w: 100, h: 40, lineHeight: 20, lines });
+      expect(Number.isInteger(out.length)).toBe(true);
+      expect(out.length).toBeGreaterThanOrEqual(0);
+      expect(out.length).toBeLessThanOrEqual(MAX_SYNTHESIZED_LINES);
+    });
+
+    it('emits no non-finite coordinate for any hostile input', () => {
+      const hostile = [0, -20, Number.NaN, Number.POSITIVE_INFINITY];
+      for (const lineHeight of hostile) {
+        for (const line of synthesizeLines({ x: 5, y: 5, w: 100, h: 40, lineHeight })) {
+          for (const v of [line.x, line.y, line.w, line.h]) {
+            expect(Number.isFinite(v)).toBe(true);
+          }
+        }
+      }
+    });
+
+    // Anti-vacuity: every assertion above would hold for a function that
+    // always returned []. The ordinary path must be untouched.
+    it('leaves the ordinary derived count exactly as it was', () => {
+      expect(synthesizeLines({ x: 0, y: 0, w: 100, h: 100, lineHeight: 20 })).toHaveLength(5);
+      expect(synthesizeLines({ x: 0, y: 0, w: 100, h: 100, lineHeight: 20, lines: 3 })).toHaveLength(3);
+    });
   });
 });
