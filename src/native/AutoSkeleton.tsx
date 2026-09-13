@@ -361,6 +361,7 @@ function useHandoffAndMetrics(
   isLoading: boolean,
   controller: HandoffController,
   skeletonSuppressed: boolean,
+  startedLoading: boolean,
   metricsInput: {
     readonly snapshot: ShapeSnapshot | null;
     readonly cacheHit: boolean;
@@ -372,7 +373,7 @@ function useHandoffAndMetrics(
   },
   onMetrics: OnMetrics | undefined,
 ): void {
-  const runCycle = shouldRunHandoffCycle(skeletonSuppressed);
+  const runCycle = shouldRunHandoffCycle(skeletonSuppressed, startedLoading);
 
   useEffect(() => {
     if (!runCycle) {
@@ -490,6 +491,7 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
     controller: HandoffController;
     loadStartedAt: number;
     skeletonSuppressed: boolean;
+    startedLoading: boolean;
   } | null>(null);
   if (cycleRef.current === null || cycleRef.current.id !== cycleId) {
     cycleRef.current = {
@@ -501,9 +503,14 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
       }),
       loadStartedAt: Date.now(),
       skeletonSuppressed: everShownContent && props.skeletonOnRefresh !== true,
+      // Cycle 0 is created on the first render whatever `isLoading` says, so
+      // this is what tells a real load apart from a component that mounted
+      // already-loaded. Without it, `skeletonOnRefresh` + `isLoading={false}`
+      // opened a handoff for a load that never happened.
+      startedLoading: isLoading,
     };
   }
-  const { controller, loadStartedAt, skeletonSuppressed } = cycleRef.current;
+  const { controller, loadStartedAt, skeletonSuppressed, startedLoading } = cycleRef.current;
 
   const phase = useSyncExternalStore(
     controller.subscribe,
@@ -511,7 +518,14 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
     () => controller.phase,
   );
   const delayElapsed = useSkeletonDelayGate(props.delay ?? 0, cycleId);
-  const showSkeleton = !skeletonSuppressed && phase !== 'content' && delayElapsed;
+  // `startedLoading` is the same gate `useHandoffAndMetrics` applies, and it
+  // has to be here too: without it a cycle that never began loading still
+  // painted. Worse, once the handoff was correctly suppressed the controller
+  // never left `'skeleton'`, so the overlay would have stayed up for good
+  // instead of flashing for 120ms — a gate on the reporting half alone makes
+  // the visible half permanent.
+  const showSkeleton =
+    !skeletonSuppressed && startedLoading && phase !== 'content' && delayElapsed;
 
   const { width: windowWidth } = useWindowDimensions();
   const widthBucket = bucketWidth(windowWidth);
@@ -610,6 +624,7 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
     isLoading,
     controller,
     skeletonSuppressed,
+    startedLoading,
     {
       snapshot,
       cacheHit: cacheHitForCycle,

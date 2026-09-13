@@ -1029,3 +1029,66 @@ test.describe('AutoSkeleton — scaled ancestor (the user-visible half of the se
     expect(boxes.wrapper.w).toBeCloseTo(400, 1);
   });
 });
+
+// Mounting already-loaded, with skeletons opted in for refreshes. This is a
+// plain prop combination — `<AutoSkeleton skeletonOnRefresh isLoading={false}>`
+// is what a screen looks like on navigate-back, with content already in hand —
+// and it used to open a full handoff cycle for a load that never happened:
+// cycle 0 is created on the first render whatever `isLoading` says,
+// `everShownContent` initialises to `!isLoading` (true), and
+// `skeletonSuppressed` is false precisely BECAUSE the consumer opted in. The
+// result was a skeleton painted over content that was already there, that
+// content hidden from assistive technology while it was up, and an `onMetrics`
+// event for a lifecycle that never visually occurred.
+//
+// The last of those is the same defect `core/refresh-gate.ts` was created for,
+// reached from the other side: that fix gated the SUPPRESSED path, this one
+// gates the NEVER-WAS-LOADING path.
+test.describe('mounting with isLoading=false and skeletonOnRefresh', () => {
+  test('paints no skeleton, hides nothing from assistive tech, and reports no cycle', async ({ page }) => {
+    await loadHarness(page, ENTRY, `<div id="root"></div>`);
+    await page.evaluate(() => {
+      const { React, createRoot, AutoSkeleton, SkeletonProvider, MemoryShapeStore } =
+        window.AutoskeletonComponent;
+      const w = window as unknown as { __metrics: unknown[] };
+      w.__metrics = [];
+      createRoot(document.getElementById('root')!).render(
+        React.createElement(
+          SkeletonProvider,
+          { store: new MemoryShapeStore() },
+          React.createElement(
+            AutoSkeleton,
+            {
+              isLoading: false,
+              skeletonOnRefresh: true,
+              skeletonKey: 'mounted-loaded',
+              onMetrics: (m: unknown) => w.__metrics.push(m),
+            },
+            React.createElement('p', { id: 'real', style: { margin: 0, fontSize: 16 } }, 'Already here'),
+          ),
+        ),
+      );
+    });
+
+    // Past the ADR-16 handoff fade (120 ms default) plus slack, so a cycle that
+    // did start would have had time to paint AND tear down again.
+    await page.waitForTimeout(400);
+
+    expect(
+      await page.locator('.askl-overlay').count(),
+      'a skeleton overlay was painted over content that was never loading',
+    ).toBe(0);
+
+    // The content must never have been hidden from assistive technology. This
+    // is the half a screenshot would miss entirely.
+    expect(
+      await page.evaluate(() => document.getElementById('real')?.closest('[aria-hidden="true"]') !== null),
+      'the real content was hidden from assistive technology for a load that never happened',
+    ).toBe(false);
+
+    expect(
+      await page.evaluate(() => (window as unknown as { __metrics: unknown[] }).__metrics.length),
+      'onMetrics reported a skeleton-to-content lifecycle that never visually occurred',
+    ).toBe(0);
+  });
+});
