@@ -12,10 +12,10 @@ import UIKit
 // placeholder — which is exactly what `PaintGateUITests` proved on-device
 // (see the apply-progress note for the captured-screenshot evidence).
 //
-// This is a thin host, kept deliberately dumb: it reads shape geometry from
-// `AutoskeletonNativeShapeCache` by `cacheKey` (ADR-9 — native holds shape
-// DATA, JS holds POLICY; the native `getShapes()` Turbo Module call already
-// wrote this cache entry before `cacheKey` is ever set as a prop) and hosts
+// This is a thin host, kept deliberately dumb: it paints the wire array handed
+// to it through the `shapes` prop (ADR-9 originally had it read that geometry
+// from a native cache keyed by `cacheKey`; that cache held a second copy of a
+// buffer JS already had, so it is gone) and hosts
 // the EXISTING, already-tested `AutoskeletonRendererTier1` — no new drawing
 // logic, only the wiring `AutoskeletonRendererTier1Tests` already proves
 // correct in isolation.
@@ -71,7 +71,6 @@ private let sharedShimmerClock = AutoskeletonShimmerClock()
 @objc(AutoskeletonOverlayViewHost)
 public final class AutoskeletonOverlayViewHost: NSObject {
     private let renderer: AutoskeletonRendererTier1
-    private let shapeCache: AutoskeletonNativeShapeCache
     private let clock: AutoskeletonShimmerClock
 
     private var handle: AutoskeletonRendererHandle?
@@ -101,7 +100,6 @@ public final class AutoskeletonOverlayViewHost: NSObject {
 
     @objc override public init() {
         renderer = AutoskeletonRendererTier1()
-        shapeCache = AutoskeletonNativeShapeCache.shared
         clock = sharedShimmerClock
         super.init()
     }
@@ -111,11 +109,9 @@ public final class AutoskeletonOverlayViewHost: NSObject {
     /// Swift-internal (default access) and never needs `@objc`/`public`.
     init(
         renderer: AutoskeletonRendererTier1,
-        shapeCache: AutoskeletonNativeShapeCache,
         clock: AutoskeletonShimmerClock
     ) {
         self.renderer = renderer
-        self.shapeCache = shapeCache
         self.clock = clock
         super.init()
     }

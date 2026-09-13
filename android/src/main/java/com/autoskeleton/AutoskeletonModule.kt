@@ -182,10 +182,9 @@ class AutoskeletonSystemViewResolver(private val reactContext: ReactApplicationC
  *  2. The Runnable posted to `UiThreadUtil.runOnUiThread` is NEVER
  *     cancellable once posted (Android exposes no handle for it) — it
  *     keeps running after the caller times out and moves on. `block` used
- *     to run to completion regardless, including its own shared-state
- *     writes (`AutoskeletonModule.computeWireArray`'s `shapeCache.set`),
- *     writing stale geometry into the shared cache for a `cacheKey` that,
- *     on a recycled list, may by then belong to a different row. Since the
+ *     to run to completion regardless, handing back geometry for a
+ *     `cacheKey` that, on a recycled list, may by then belong to a
+ *     different row. Since the
  *     Runnable itself cannot be forcibly cancelled, `block` now receives a
  *     cooperative `isCancelled: () -> Boolean` check it MUST consult before
  *     any observable side effect — see `computeWireArray`'s own guard.
@@ -244,9 +243,12 @@ object AutoskeletonSystemUiThreadDispatcher : AutoskeletonUiThreadDispatcher {
 // points, comparable across platforms and directly usable by the
 // golden-parity tests (plan.md §4.1 "Units").
 //
-// ADR-9: the native shape cache is written HERE (native writes data only
-// for a traversal JS requested — this call IS that request) and evicted
-// only via `evictShapes`, which JS calls from `store.invalidate()`.
+// ADR-9 previously had this method ALSO write a native shape cache the
+// overlay read back by `cacheKey`. That cache is gone: JS already holds this
+// wire array (it is this method's return value, decoded by
+// `native/sensor.ts`), so the cache was a second copy of data the caller
+// already had, and its `evictShapes` counterpart had no call site anywhere in
+// `src/`. The overlay takes the buffer as a `shapes` prop instead.
 //
 // Phase-5-remediation (post-7.2 gap closure): `getShapes` used to hardcode
 // `AutoskeletonSensorOptions.defaults` (`budgetMs`/`maxShapes`/
@@ -288,7 +290,6 @@ class AutoskeletonModule(
   reactContext: ReactApplicationContext,
   private val sensor: AutoskeletonSensor = AutoskeletonSensor(),
   private val viewResolver: AutoskeletonViewResolver = AutoskeletonSystemViewResolver(reactContext),
-  private val shapeCache: AutoskeletonNativeShapeCache = AutoskeletonNativeShapeCache,
   private val uiThreadDispatcher: AutoskeletonUiThreadDispatcher = AutoskeletonSystemUiThreadDispatcher,
 ) : NativeAutoskeletonSpec(reactContext) {
 
@@ -312,16 +313,16 @@ class AutoskeletonModule(
    *  wait so a stuck UI thread degrades to `null` instead of hanging the
    *  JS thread forever.
    *
-   *  Adversarial-review defect (2026-08-28): the `shapeCache.set` write
-   *  below is the USER-VISIBLE half of the timeout defect — a timed-out
-   *  caller already moved on, but the posted UI-thread Runnable itself
-   *  cannot be cancelled (Android exposes no handle for that), so it used
-   *  to keep running and write stale geometry into the SHARED cache under
-   *  `cacheKey`, which on a recycled list may by then belong to a
-   *  completely different row. The traversal itself still runs (it cannot
-   *  be stopped mid-flight either), but the observable side effect — the
-   *  cache write — is now guarded by `isCancelled()`, checked as late as
-   *  possible, right before the mutation. */
+   *  Adversarial-review defect (2026-08-28): a timed-out caller already
+   *  moved on, but the posted UI-thread Runnable itself cannot be cancelled
+   *  (Android exposes no handle for that), so it kept running and wrote
+   *  stale geometry into the then-shared native cache under `cacheKey`,
+   *  which on a recycled list may by then have belonged to a completely
+   *  different row. That cache is gone — the overlay takes its geometry as
+   *  a prop — so there is no longer a shared mutation to poison, but the
+   *  `isCancelled()` guard stays: handing back geometry for a row the
+   *  caller has already abandoned is still wrong, and it is what the
+   *  timeout test pins. */
   internal fun computeWireArray(reactTag: Double, cacheKey: String, config: AutoskeletonGetShapesConfig): DoubleArray? =
     uiThreadDispatcher.runAndWait(UI_THREAD_DISPATCH_TIMEOUT_MS) { isCancelled ->
       val view = viewResolver.resolve(reactTag.toInt()) ?: return@runAndWait null
@@ -335,12 +336,10 @@ class AutoskeletonModule(
 
       val wire = encodeWireArray(measured.shapes, density)
       if (isCancelled()) {
-        // The caller already gave up waiting -- do not retroactively
-        // poison the shared cache with geometry nobody will read via this
-        // call, and which may now belong to a different recycled row.
+        // The caller already gave up waiting -- do not hand back geometry
+        // that may now belong to a different recycled row.
         return@runAndWait null
       }
-      shapeCache.set(cacheKey, wire)
       wire
     }
 
@@ -351,11 +350,6 @@ class AutoskeletonModule(
       result.pushDouble(value)
     }
     return result
-  }
-
-  override fun evictShapes(cacheKeys: ReadableArray) {
-    val keys = (0 until cacheKeys.size()).mapNotNull { cacheKeys.getString(it) }
-    shapeCache.evict(keys)
   }
 
   companion object {

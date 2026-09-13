@@ -78,7 +78,7 @@ function toShapeInfo(
 
 export interface CreateNativeSensorOptions {
   readonly platform: 'ios' | 'android';
-  readonly getNativeModule: () => Pick<Spec, 'getShapes' | 'evictShapes'> | null;
+  readonly getNativeModule: () => Pick<Spec, 'getShapes'> | null;
   readonly tracing?: WireBridgeTracing;
   readonly now?: () => number;
 }

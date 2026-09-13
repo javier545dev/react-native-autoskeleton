@@ -28,7 +28,7 @@ import Foundation
 //    cancellable once queued (GCD exposes no handle for it) — it keeps
 //    running after the caller times out and moves on. `block` used to run
 //    to completion regardless, including its own shared-state writes
-//    (`AutoskeletonModuleBridge.computeWireArray`'s `shapeCache.set`),
+//    (`AutoskeletonModuleBridge.computeWireArray`'s return value),
 //    writing stale geometry into the shared cache for a `cacheKey` that, on
 //    a recycled list, may by then belong to a different row. Since the
 //    dispatched block itself cannot be forcibly cancelled, it now receives

@@ -94,21 +94,3 @@ export function fetchShapesOnce(
   }
 }
 
-/** ADR-9: JS is the sole authority for invalidation — mirrors
- *  `store.invalidate(...)` into a native `evict(keys)` call so the two
- *  caches never diverge. */
-export function evictNativeShapes(nativeModule: Pick<Spec, 'evictShapes'>, cacheKeys: readonly string[]): void {
-  if (cacheKeys.length === 0) {
-    return;
-  }
-  try {
-    nativeModule.evictShapes(Array.from(cacheKeys));
-  } catch {
-    // Same class as `fetchShapesOnce`'s bridge throw, closed by the same
-    // grep. A failed eviction leaves a stale NATIVE entry that JS has already
-    // discarded — strictly better than crashing an app to purge a cache, and
-    // the same ADR-15 fail-open posture. (This function has no production
-    // call site yet; the guard exists so wiring ADR-9's eviction up later
-    // cannot reopen the class.)
-  }
-}

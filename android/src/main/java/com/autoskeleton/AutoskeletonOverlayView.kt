@@ -10,10 +10,10 @@ import android.widget.FrameLayout
 // `src/native/AutoskeletonOverlayNativeComponent.ts`). Before this file,
 // nothing implemented that component on Android — `requireNativeComponent`
 // resolved to a view config Fabric never received, so nothing ever
-// painted. This is a thin `FrameLayout` host: it reads shape geometry from
-// `AutoskeletonNativeShapeCache` by `cacheKey` (ADR-9 — native holds shape
-// DATA, JS holds POLICY; the native `getShapes()` Turbo Module call already
-// wrote this cache entry before `cacheKey` is ever set as a prop) and hosts
+// painted. This is a thin `FrameLayout` host: it paints the wire array handed
+// to it through the `shapes` prop (ADR-9 originally had it read that geometry
+// from a native `AutoskeletonNativeShapeCache` keyed by `cacheKey`; that cache
+// held a second copy of a buffer JS already had, so it is gone) and hosts
 // the EXISTING, already-tested `AutoskeletonRendererTier1` (task 4.4) —
 // this file adds no new drawing logic, only the wiring `AutoskeletonRendererTier1Test`
 // already proves correct in isolation.

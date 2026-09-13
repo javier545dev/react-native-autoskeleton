@@ -8,9 +8,10 @@ import XCTest
 /// the iOS `RCTViewComponentView` overlay subclass (`AutoskeletonOverlayView.mm`,
 /// deliberately kept as thin ObjC++ glue with nothing else to unit test — the
 /// same split `AutoskeletonModuleBridge`/`Autoskeleton.mm` already
-/// established for the Turbo Module side). It reads shape geometry from
-/// `AutoskeletonNativeShapeCache` by `cacheKey` (ADR-9: native holds shape
-/// DATA, JS holds POLICY) — never from props — and hosts
+/// established for the Turbo Module side). It paints the wire array handed to
+/// it through the `shapes` prop (ADR-9 originally had it read that geometry
+/// from a native cache keyed by `cacheKey`; that cache held a second copy of a
+/// buffer JS already had, so it is gone) and hosts
 /// `AutoskeletonRendererTier1` (task 3.2), the SAME renderer already covered
 /// by `AutoskeletonRendererTier1Tests`. This proves the WIRING reaches that
 /// renderer's `mount()`/`update()`; pixel-level proof is the real-device
@@ -24,10 +25,6 @@ import XCTest
 /// is the test that would catch an accidental copy of Android's `* density`
 /// step.
 final class AutoskeletonOverlayViewHostTests: XCTestCase {
-    private func freshCache() -> AutoskeletonNativeShapeCache {
-        AutoskeletonNativeShapeCache()
-    }
-
     /// The host takes `[NSNumber]` because that is what its `@objc` signature
     /// can accept from the Fabric component's `std::vector<double>` prop.
     private func nsWire(_ wire: [Double]) -> [NSNumber] {
@@ -44,10 +41,9 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
         UIView(frame: CGRect(x: 0, y: 0, width: 300, height: 200))
     }
 
-    private func makeHost(cache: AutoskeletonNativeShapeCache) -> AutoskeletonOverlayViewHost {
+    private func makeHost() -> AutoskeletonOverlayViewHost {
         AutoskeletonOverlayViewHost(
             renderer: AutoskeletonRendererTier1(),
-            shapeCache: cache,
             clock: AutoskeletonShimmerClock(ticking: AutoskeletonNoOpTicking())
         )
     }
@@ -102,8 +98,7 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
     }
 
     func testMountsTheTier1RendererOnceCacheKeyIsSetAndTheSurfaceIsSized() {
-        let cache = freshCache()
-        let host = makeHost(cache: cache)
+        let host = makeHost()
         let surface = sizedSurface()
 
         host.mountOrUpdate(
@@ -122,7 +117,7 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
     }
 
     func testNeverMountsWhenNoGeometryWasHandedToIt() {
-        let host = makeHost(cache: freshCache())
+        let host = makeHost()
         let surface = sizedSurface()
 
         host.mountOrUpdate(
@@ -135,8 +130,7 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
     }
 
     func testNeverMountsWhenTheSurfaceHasNoSizeYet() {
-        let cache = freshCache()
-        let host = makeHost(cache: cache)
+        let host = makeHost()
         let unsizedSurface = UIView(frame: .zero)
 
         host.mountOrUpdate(
@@ -149,8 +143,7 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
     }
 
     func testUpdatesShapesInPlaceWithoutRemountingWhenTheSameCacheKeyIsReSet() {
-        let cache = freshCache()
-        let host = makeHost(cache: cache)
+        let host = makeHost()
         let surface = sizedSurface()
 
         host.mountOrUpdate(
@@ -181,8 +174,7 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
     }
 
     func testDestroyRemovesTheMountedOverlayLayer() {
-        let cache = freshCache()
-        let host = makeHost(cache: cache)
+        let host = makeHost()
         let surface = sizedSurface()
 
         host.mountOrUpdate(
@@ -201,8 +193,7 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
     }
 
     func testParsesHexColorPropsAndFallsBackSafelyOnAnInvalidColorWithoutCrashing() {
-        let cache = freshCache()
-        let host = makeHost(cache: cache)
+        let host = makeHost()
         let surface = sizedSurface()
 
         // Must not crash even with an invalid color string (defensive default).
@@ -216,8 +207,7 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
     }
 
     func testReducedMotionForwardsToThePulseAnimationInsteadOfShimmer() {
-        let cache = freshCache()
-        let host = makeHost(cache: cache)
+        let host = makeHost()
         let surface = sizedSurface()
 
         host.mountOrUpdate(
@@ -238,8 +228,7 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
     // not animate" straight into the reduced-motion pulse. A test can only
     // pin behaviour it can also reject, and this one could not.
     func testAnimationNoneRunsNoAnimationAtAll() {
-        let cache = freshCache()
-        let host = makeHost(cache: cache)
+        let host = makeHost()
         let surface = sizedSurface()
 
         host.mountOrUpdate(
@@ -254,8 +243,7 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
     }
 
     func testAnExplicitPulseIsAPulseEvenWithThePreferenceOff() {
-        let cache = freshCache()
-        let host = makeHost(cache: cache)
+        let host = makeHost()
         let surface = sizedSurface()
 
         host.mountOrUpdate(
@@ -270,8 +258,7 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
     }
 
     func testSpeedMsFlowsThroughToTheSharedClockPeriodAndTheShimmerDuration() {
-        let cache = freshCache()
-        let host = makeHost(cache: cache)
+        let host = makeHost()
         let surface = sizedSurface()
 
         host.mountOrUpdate(

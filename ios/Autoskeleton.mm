@@ -8,12 +8,12 @@
 #import "Autoskeleton-Swift.h"
 #endif
 
-// Task 5.1 (tasks.md Phase 5) / plan.md ADR-1: `getShapes`/`evictShapes`,
+// Task 5.1 (tasks.md Phase 5) / plan.md ADR-1: `getShapes`,
 // now wired to the real `AutoskeletonModuleBridge` (Swift).
 //
 // HISTORY, corrected: an earlier session's investigation concluded this
 // `#import "Autoskeleton-Swift.h"` line itself triggered a "reproducible
-// Xcode New Build System issue" and left `getShapes`/`evictShapes` as
+// Xcode New Build System issue" and left `getShapes` as
 // no-op stubs rather than risk the passing 55/55 iOS baseline. This
 // session re-tested that claim directly, per the maintainer's explicit
 // instruction to exhaust configuration before redesigning: a full
@@ -98,16 +98,6 @@
         Autoskeleton *strongSelf = weakSelf;
         return [strongSelf.viewRegistry_DEPRECATED viewForReactTag:tag];
     }];
-}
-
-- (void)evictShapes:(NSArray *)cacheKeys {
-    NSMutableArray<NSString *> *keys = [NSMutableArray arrayWithCapacity:cacheKeys.count];
-    for (id key in cacheKeys) {
-        if ([key isKindOfClass:[NSString class]]) {
-            [keys addObject:(NSString *)key];
-        }
-    }
-    [self->_bridge evictShapesDispatched:keys];
 }
 
 - (std::shared_ptr<facebook::react::TurboModule>)getTurboModule:

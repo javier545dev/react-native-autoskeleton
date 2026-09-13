@@ -2,14 +2,14 @@ import Foundation
 import UIKit
 
 // Task 5.1 (tasks.md Phase 5) / plan.md ADR-1: the Swift half of the
-// codegen'd Turbo Module `getShapes`/`evictShapes` implementation.
+// codegen'd Turbo Module `getShapes` implementation.
 // `Autoskeleton.mm` (the ObjC++ class satisfying `getTurboModule:`, which
 // must stay Objective-C++ since that factory method returns a C++
 // `std::shared_ptr`) imports the CocoaPods-generated `Autoskeleton-Swift.h`
-// umbrella header and delegates the actual `getShapes`/`evictShapes` body
+// umbrella header and delegates the actual `getShapes` body
 // to this `@objc`-exposed class, so the real logic — resolving the view,
 // calling the EXISTING `AutoskeletonSensor.measure()` (task 3.1), encoding
-// the wire array, writing `AutoskeletonNativeShapeCache` (task 5.2) — is
+// the wire array — is
 // ordinary, directly-Swift-testable code, not ObjC++.
 //
 // Unlike Android, iOS needs NO density-normalization step here: UIKit's
@@ -36,23 +36,19 @@ import UIKit
 @objc(AutoskeletonModuleBridge)
 public final class AutoskeletonModuleBridge: NSObject {
     private let sensor: AutoskeletonSensor
-    private let shapeCache: AutoskeletonNativeShapeCache
     private let uiThreadDispatcher: AutoskeletonUiThreadDispatching
 
     @objc override public init() {
         self.sensor = AutoskeletonSensor()
-        self.shapeCache = AutoskeletonNativeShapeCache.shared
         self.uiThreadDispatcher = AutoskeletonSystemUiThreadDispatcher()
         super.init()
     }
 
     init(
         sensor: AutoskeletonSensor,
-        shapeCache: AutoskeletonNativeShapeCache,
         uiThreadDispatcher: AutoskeletonUiThreadDispatching = AutoskeletonSystemUiThreadDispatcher()
     ) {
         self.sensor = sensor
-        self.shapeCache = shapeCache
         self.uiThreadDispatcher = uiThreadDispatcher
         super.init()
     }
@@ -99,12 +95,12 @@ public final class AutoskeletonModuleBridge: NSObject {
     ///   fix). The dispatched `getShapes(reactTag:...)` entry point below
     ///   supplies a real one — see `AutoskeletonUiThreadDispatcher.swift`'s
     ///   header comment for the full defect writeup. Checked as LATE as
-    ///   possible, right before the one observable side effect
-    ///   (`shapeCache.set`): the traversal itself still runs (it cannot be
-    ///   stopped mid-flight either), but a cancelled caller must never have
-    ///   its abandoned work retroactively poison the SHARED cache under a
-    ///   `cacheKey` that, on a recycled list, may by then belong to a
-    ///   different row.
+    ///   possible: the traversal itself still runs (it cannot be stopped
+    ///   mid-flight either), but a cancelled caller must never be handed
+    ///   geometry for a `cacheKey` that, on a recycled list, may by then
+    ///   belong to a different row. The abandoned work used to ALSO write a
+    ///   shared native cache; that cache is gone, so this guard is now the
+    ///   whole of it.
     func computeWireArray(
         view: UIView,
         cacheKey: String,
@@ -126,7 +122,6 @@ public final class AutoskeletonModuleBridge: NSObject {
         guard !isCancelled() else {
             return nil
         }
-        shapeCache.set(cacheKey, wire)
         return wire
     }
 
@@ -153,10 +148,6 @@ public final class AutoskeletonModuleBridge: NSObject {
             return []
         }
         return wire.map { NSNumber(value: $0) }
-    }
-
-    @objc public func evictShapes(_ cacheKeys: [String]) {
-        shapeCache.evict(cacheKeys)
     }
 
     /// `Autoskeleton.mm`-facing entry point: `getShapes()` is a SYNCHRONOUS
@@ -204,33 +195,5 @@ public final class AutoskeletonModuleBridge: NSObject {
             )
         }
         return result ?? []
-    }
-
-    /// Same dispatch rationale as `getShapes(reactTag:cacheKey:resolveView:)`
-    /// — `evictShapes` only touches `AutoskeletonNativeShapeCache` (not
-    /// UIKit), but is kept on the same dispatch path for consistency and so
-    /// eviction can never reorder ahead of an in-flight `getShapes` write
-    /// dispatched moments earlier.
-    /// `Autoskeleton.mm`-facing entry point for eviction.
-    ///
-    /// Runs INLINE on the calling thread, which is what Android's
-    /// `AutoskeletonModule.evictShapes` has always done. It used to hop to the
-    /// main thread through `runAndWait(timeoutMs: 200)`, and that hop protected
-    /// nothing: `AutoskeletonNativeShapeCache` is an `NSLock`-guarded dictionary
-    /// that touches no UIKit, so eviction has no main-thread requirement at all.
-    /// The stated reason — that eviction must not reorder ahead of an in-flight
-    /// `getShapes` — does not hold either, because `getShapes` is itself a
-    /// synchronous Turbo Module call and has already returned by the time this
-    /// runs.
-    ///
-    /// What it did cost was real: every `store.invalidate()` blocked the JS
-    /// thread for a main-thread round trip, up to 200ms of it, to remove some
-    /// dictionary keys.
-    ///
-    /// The name keeps its `Dispatched` suffix because `Autoskeleton.mm` calls it
-    /// by that selector; renaming it is an ObjC++ change with no behavioural
-    /// benefit.
-    @objc public func evictShapesDispatched(_ cacheKeys: [String]) {
-        evictShapes(cacheKeys)
     }
 }

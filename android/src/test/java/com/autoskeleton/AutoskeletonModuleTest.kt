@@ -91,13 +91,12 @@ class AutoskeletonModuleTest {
         collectDebugSidecars = true,
     )
 
-    private fun moduleFor(view: View, cache: AutoskeletonNativeShapeCache = AutoskeletonNativeShapeCache): AutoskeletonModule {
+    private fun moduleFor(view: View): AutoskeletonModule {
         DisplayMetricsHolder.initDisplayMetricsIfNotInitialized(RuntimeEnvironment.getApplication())
         val reactContext = FakeReactApplicationContext(RuntimeEnvironment.getApplication())
         return AutoskeletonModule(
             reactContext = reactContext,
             viewResolver = AutoskeletonViewResolver { tag -> if (tag == 42) view else null },
-            shapeCache = cache,
         )
     }
 
@@ -153,7 +152,6 @@ class AutoskeletonModuleTest {
 
     @Test
     fun computeWireArrayReturnsTheFlatWireArrayFromARealTraversal() {
-        AutoskeletonNativeShapeCache.clear()
         val fixture = SyntheticHierarchyBuilder.loadFixture("nested-offsets")
         val root = SyntheticHierarchyBuilder.build(fixture)
         val module = moduleFor(root)
@@ -166,29 +164,13 @@ class AutoskeletonModuleTest {
         assertEquals((result.size - 1) % 5, 0)
     }
 
-    @Test
-    fun computeWireArrayWritesTheSameWireArrayIntoTheNativeShapeCache() {
-        val cache = AutoskeletonNativeShapeCache
-        cache.clear()
-        val fixture = SyntheticHierarchyBuilder.loadFixture("nested-offsets")
-        val root = SyntheticHierarchyBuilder.build(fixture)
-        val module = moduleFor(root, cache)
-
-        val result = module.computeWireArray(42.0, "cache-key-2", defaultConfig)
-        val cached = cache.get("cache-key-2")
-
-        assertTrue(result != null)
-        assertTrue(cached != null)
-        assertEquals(result!!.toList(), cached!!.toList())
-    }
-
+    
     // MARK: - Phase-5-remediation (post-7.2 gap closure): config actually
     // arrives at the real `sensor.measure()` options, proven by the wire
     // GEOMETRY changing, not merely that the signature accepts a config.
 
     @Test
     fun computeWireArrayTruncatesTheShapeCountWhenMaxShapesIsTightened() {
-        AutoskeletonNativeShapeCache.clear()
         // "ignore-subtree" has multiple real leaves (used by
         // `AutoskeletonSensorObservabilityTest`'s own shape-cap case for the
         // same reason) — a fixture whose UNTRUNCATED traversal produces more
@@ -216,7 +198,6 @@ class AutoskeletonModuleTest {
 
     @Test
     fun computeWireArrayUsesTheConfiguredDefaultRadiusForAnR3FallbackShape() {
-        AutoskeletonNativeShapeCache.clear()
         val leaf = perCornerLeaf(radiusPx = 8f)
         val module = moduleFor(leaf)
 
@@ -267,8 +248,7 @@ class AutoskeletonModuleTest {
         // `getShapes(double, String, ReadableMap)`) decoded by
         // `toGetShapesConfig()`. `JavaOnlyMap` is the pure-JVM `ReadableMap`
         // implementation, safe under Robolectric with no JNI involved
-        // (mirrors `JavaOnlyArray`'s already-established use in
-        // `evictShapesRemovesOnlyTheRequestedKeys` below). `getShapes()`
+        // (`JavaOnlyArray` is its array-shaped sibling). `getShapes()`
         // itself is deliberately NOT exercised here — same reason
         // `computeWireArray` exists as a separate seam (see this class's
         // own header comment): `Arguments.createArray()` needs a JNI
@@ -345,7 +325,6 @@ class AutoskeletonModuleTest {
         // (`toGetShapesConfig`) and the REAL `AutoskeletonMapHintRegistry`,
         // not a hand-built fake registry (that unit is already covered by
         // `AutoskeletonRadiusResolverTest`).
-        AutoskeletonNativeShapeCache.clear()
         val context = RuntimeEnvironment.getApplication()
         DisplayMetricsHolder.initDisplayMetricsIfNotInitialized(context)
         val leaf = FrameLayout(context)
@@ -377,7 +356,6 @@ class AutoskeletonModuleTest {
         // proves the SENSOR honors (nodeId "collapsed-text-1", h=2 collapses
         // below defaultLineHeight) — this test proves the BRIDGE config
         // reaches that same registry consultation, not a hand-built fake.
-        AutoskeletonNativeShapeCache.clear()
         val fixture = SyntheticHierarchyBuilder.loadFixture("collapsed-text")
         val root = SyntheticHierarchyBuilder.build(fixture)
         val module = moduleFor(root)
@@ -399,7 +377,6 @@ class AutoskeletonModuleTest {
 
     @Test
     fun computeWireArrayIgnoresAHintRegisteredUnderADifferentNodeId() {
-        AutoskeletonNativeShapeCache.clear()
         val context = RuntimeEnvironment.getApplication()
         DisplayMetricsHolder.initDisplayMetricsIfNotInitialized(context)
         val leaf = FrameLayout(context)
@@ -439,7 +416,6 @@ class AutoskeletonModuleTest {
     @Test
     @Config(qualifiers = "xxhdpi")
     fun dpLengthsSurviveTheWireRoundTripUnchangedAtDensity3() {
-        AutoskeletonNativeShapeCache.clear()
         val leaf = perCornerLeaf(radiusPx = 8f, w = 120, h = 120)
         assertEquals(3f, leaf.resources.displayMetrics.density, 0.0001f)
         val module = moduleFor(leaf)
@@ -484,7 +460,6 @@ class AutoskeletonModuleTest {
         // threshold (20px) and the right one (60px), so the two behaviors are
         // distinguishable: pre-fix it emitted ONE 10dp-tall text shape; post-fix
         // it collapses into synthesized lines of exactly 20dp.
-        AutoskeletonNativeShapeCache.clear()
         val context = RuntimeEnvironment.getApplication()
         DisplayMetricsHolder.initDisplayMetricsIfNotInitialized(context)
         val leaf = ReactTextView(context)
@@ -514,8 +489,7 @@ class AutoskeletonModuleTest {
     // same-thread, well within the 200ms `UI_THREAD_DISPATCH_TIMEOUT_MS`).
 
     @Test
-    fun computeWireArrayDoesNotPoisonTheSharedCacheWhenTheCallerTimesOutBeforeTheUiThreadRuns() {
-        AutoskeletonNativeShapeCache.clear()
+    fun computeWireArrayReturnsNullWhenTheCallerTimesOutBeforeTheUiThreadRuns() {
         val fixture = SyntheticHierarchyBuilder.loadFixture("nested-offsets")
         val root = SyntheticHierarchyBuilder.build(fixture)
         val module = moduleFor(root) // default uiThreadDispatcher = AutoskeletonSystemUiThreadDispatcher
@@ -533,41 +507,26 @@ class AutoskeletonModuleTest {
         thread.join(2000)
 
         assertNull("the caller must give up and return null on timeout", result)
-        assertNull(
-            "the abandoned UI-thread computation must not have run yet (queue still paused)",
-            AutoskeletonNativeShapeCache.get("recycled-cache-key"),
-        )
 
-        // Now let the ABANDONED work actually run -- mirrors the real-device
+        // Let the ABANDONED work actually run -- mirrors the real-device
         // timing this defect describes: a busy-but-alive UI thread
         // eventually drains its queue, well after the JS-thread caller
         // already moved on.
         shadowOf(Looper.getMainLooper()).idle()
+        assertNull("the timed-out caller's result must stay null", result)
 
-        // THE ACTUAL DEFECT: pre-fix, `computeWireArray`'s UI-thread block
-        // never checked whether the caller already gave up, so it wrote
-        // into the shared cache regardless -- even though `reactTag` 42 may
-        // by then belong to a completely different recycled row.
-        assertNull(
-            "abandoned work must not retroactively poison the shared cache after the caller already timed out",
-            AutoskeletonNativeShapeCache.get("recycled-cache-key"),
-        )
+        // SCOPE NOTE, deliberately stated rather than quietly dropped: this
+        // test used to assert a SECOND thing — that the abandoned UI-thread
+        // block did not retroactively write stale geometry into the shared
+        // native cache under a `cacheKey` that, on a recycled list, may by
+        // then belong to a different row. That cache no longer exists (the
+        // overlay takes its geometry as a `shapes` prop), so the abandoned
+        // work has no observable side effect left to poison. The
+        // `isCancelled()` guard in `computeWireArray` stays, and what
+        // remains provable about it is exactly what is asserted above.
     }
 
-    @Test
-    fun evictShapesRemovesOnlyTheRequestedKeys() {
-        val cache = AutoskeletonNativeShapeCache
-        cache.clear()
-        cache.set("keep", doubleArrayOf(1.0))
-        cache.set("drop", doubleArrayOf(1.0))
-        val module = moduleFor(FrameLayout(RuntimeEnvironment.getApplication()), cache)
-
-        module.evictShapes(JavaOnlyArray.of("drop"))
-
-        assertTrue(cache.get("keep") != null)
-        assertNull(cache.get("drop"))
-    }
-
+    
     @Test
     fun encodeWireArrayDividesRawViewPixelsByDensity() {
         // plan.md §4.1 "Units": Android divides by density before writing
