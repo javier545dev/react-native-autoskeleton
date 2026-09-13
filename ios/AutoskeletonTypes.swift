@@ -28,6 +28,13 @@ enum AutoskeletonRadiusSource: String {
     case rasterProbe = "raster-probe"
     case hint
     case defaultValue = "default"
+    /// Read back through the same public style API that WROTE the radius.
+    /// Appended LAST because `RADIUS_SOURCES` in `src/core/types.ts` is the
+    /// positional wire encoding for the dev sidecar and is append-only —
+    /// inserting a case would silently re-map every previously captured one.
+    /// Unreachable on iOS today (`layer.cornerRadius` always resolves), and
+    /// present so this mirror is a mirror.
+    case style
 }
 
 /// Mirrors `DegradationFlag` in `src/core/types.ts`. Only the flags an iOS sensor

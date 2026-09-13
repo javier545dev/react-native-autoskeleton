@@ -26,14 +26,20 @@ enum class AutoskeletonShapeSource(val wireValue: String) {
 enum class AutoskeletonRadiusSource(val wireValue: String) {
     MEASURED("measured"),
     OUTLINE("outline"),
-    /** Read back through `BackgroundStyleApplicator.getBorderRadius` — the same
-     *  public RN API that WROTE the radius. Distinct from OUTLINE because the
-     *  outline rung can only ever report an exact 0; anything rounded is
-     *  RADIUS_UNDEFINED there. */
-    STYLE("style"),
     RASTER_PROBE("raster-probe"),
     HINT("hint"),
     DEFAULT("default"),
+    /** Read back through `BackgroundStyleApplicator.getBorderRadius` — the same
+     *  public RN API that WROTE the radius. Distinct from OUTLINE because the
+     *  outline rung can only ever report an exact 0; anything rounded is
+     *  RADIUS_UNDEFINED there.
+     *
+     *  DECLARED LAST, matching `RADIUS_SOURCES` in `src/core/types.ts`. That
+     *  array is the positional wire encoding for the dev sidecar and is
+     *  append-only; this enum was declaring STYLE third, so the two disagreed
+     *  on every index from the third onward. Harmless while native sidecars
+     *  never cross the bridge, and a mislabelled histogram the day they do. */
+    STYLE("style"),
 }
 
 /** Mirrors `DegradationFlag` in `src/core/types.ts`. Only the flags an Android
