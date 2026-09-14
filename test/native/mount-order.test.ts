@@ -230,4 +230,49 @@ describe('<AutoSkeleton> — what is on screen while a cold skeleton mounts', ()
     expect(second.root.findAllByType('AutoskeletonOverlayView').length).toBe(1);
     second.unmount();
   });
+
+  it('covers the cold window on tier-2 as well, through the consumer overlay', async () => {
+    // Tier-2 (Skia) was excluded when the neutral window was first built,
+    // because this arm read both its shapes and its frame size off `snapshot`.
+    // `SkeletonOverlayProps` never needed one — it takes decoded `ShapeInfo[]`
+    // plus width/height — so the exclusion was an accident of how the arm was
+    // fed, not a limit of the contract. An opted-in consumer seeing a bare
+    // frame where tier-1 users see a skeleton is the platform divergence this
+    // repo keeps paying for.
+    const { AutoSkeleton, SkeletonProvider } = await import('../../src/native/AutoSkeleton');
+    const { MemoryShapeStore } = await import('../../src/core/snapshot');
+    const { act, create } = await import('react-test-renderer');
+
+    const seen: Array<{ shapes: number; width: number; height: number }> = [];
+    const RecordingOverlay = (props: { shapes: readonly unknown[]; width: number; height: number }) => {
+      seen.push({ shapes: props.shapes.length, width: props.width, height: props.height });
+      return null;
+    };
+
+    let tree!: TestRendererLike;
+    act(() => {
+      tree = create(
+        createElement(
+          SkeletonProvider,
+          { store: new MemoryShapeStore(), overlay: RecordingOverlay },
+          createElement(
+            AutoSkeleton,
+            { isLoading: true, skeletonKey: 'tier2-cold' },
+            createElement('Text', null, 'content'),
+          ),
+        ),
+      ) as unknown as TestRendererLike;
+    });
+    act(() => {
+      const wrapper = tree.root.findAllByType('View')[0];
+      (wrapper?.props.onLayout as LayoutHandler)({ nativeEvent: { layout: { width: 320, height: 200 } } });
+    });
+
+    // Before any traversal, the consumer's overlay has been handed one
+    // full-bleed rect at the wrapper's real size — not an empty shape list and
+    // not a zero frame.
+    const cold = seen.at(-1);
+    expect(cold).toEqual({ shapes: 1, width: 320, height: 200 });
+    tree.unmount();
+  });
 });

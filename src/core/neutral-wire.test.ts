@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { neutralWire } from './neutral-wire';
+import { neutralShapes, neutralWire } from './neutral-wire';
 import { WIRE_HEADER_SLOTS, WIRE_STRIDE, WIRE_VERSION } from './types';
 
 describe('neutralWire', () => {
@@ -34,5 +34,27 @@ describe('neutralWire', () => {
   // returned []. The ordinary case must produce a paintable buffer.
   it('produces a paintable buffer for an ordinary frame', () => {
     expect(neutralWire(1, 1, 0).length).toBe(WIRE_HEADER_SLOTS + WIRE_STRIDE);
+  });
+});
+
+describe('neutralShapes', () => {
+  it('decodes to the exact rect the wire carries', () => {
+    // The two tiers take the neutral block in different shapes — tier-1 the
+    // wire, tier-2 decoded `ShapeInfo[]` — so they are derived from one place.
+    // If these ever disagree the same cold window looks different depending on
+    // which renderer a consumer opted into.
+    const wire = neutralWire(320, 200, 8);
+    const [shape] = neutralShapes(320, 200, 8);
+    expect(shape).toEqual({ x: 0, y: 0, w: 320, h: 200, r: 8, source: 'container' });
+    expect([shape!.x, shape!.y, shape!.w, shape!.h, shape!.r]).toEqual(wire.slice(1));
+  });
+
+  it('is empty for exactly the frames the wire refuses', () => {
+    expect(neutralShapes(0, 200, 8)).toEqual([]);
+    expect(neutralShapes(320, Number.NaN, 8)).toEqual([]);
+  });
+
+  it('clamps a hostile radius the same way', () => {
+    expect(neutralShapes(320, 200, -4)[0]!.r).toBe(0);
   });
 });

@@ -24,6 +24,7 @@
 // synthetic snapshot there would silently switch off a consumer's fallback and
 // report a measurement that never happened. A wire buffer is a draw-call
 // argument, which is the only layer where this is free of side effects.
+import type { ShapeInfo } from './types';
 import { WIRE_VERSION } from './types';
 
 /** `[VERSION, x, y, w, h, r]` — one rect covering the whole frame.
@@ -38,4 +39,24 @@ export function neutralWire(width: number, height: number, radius: number): read
   }
   const r = Number.isFinite(radius) && radius > 0 ? radius : 0;
   return [WIRE_VERSION, 0, 0, width, height, r];
+}
+
+/** The same rect the wire above carries, already decoded.
+ *
+ *  Tier-1 takes the wire (it crosses the bridge as a `shapes` prop and the
+ *  native host decodes it); tier-2's `SkeletonOverlayProps` takes decoded
+ *  `ShapeInfo[]` plus the frame size. Two shapes of the same fact, derived
+ *  from one place so the neutral block cannot come out different on the two
+ *  tiers — which is exactly the kind of drift this repo keeps finding.
+ *
+ *  `source: 'container'` because that is what it is: one box standing in for
+ *  the whole frame, not a measured leaf. It never reaches the dev sidecar
+ *  histogram — nothing about this shape is measured — but a wrong label here
+ *  would be a lie waiting for someone to read it. */
+export function neutralShapes(width: number, height: number, radius: number): readonly ShapeInfo[] {
+  const wire = neutralWire(width, height, radius);
+  if (wire.length === 0) {
+    return [];
+  }
+  return [{ x: 0, y: 0, w: width, h: height, r: wire[5]!, source: 'container' }];
 }

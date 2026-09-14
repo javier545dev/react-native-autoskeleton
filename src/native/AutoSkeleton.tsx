@@ -73,7 +73,7 @@ import { decodeWire } from '../core/wire';
 import { Hint } from './Hint';
 import { AUTOSKELETON_IGNORE_MARKER_ID, Ignore } from './Ignore';
 import { nativeSensor } from './nativeSensorInstance';
-import { neutralWire } from '../core/neutral-wire';
+import { neutralShapes, neutralWire } from '../core/neutral-wire';
 import { resolveAutoskeletonOverlayNativeComponent } from './renderer/AutoskeletonOverlayHostComponent';
 import { useWireProp } from './renderer/wireProp';
 import type { NativeSensorTarget } from './sensor';
@@ -760,11 +760,23 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
    *
    *  Empty whenever there is no usable size yet — the pre-layout frame — and
    *  the static cover handles that instead. */
+  const measuringNeutral = showMeasuringPlaceholder && layout !== null;
   const measuringWire =
-    showMeasuringPlaceholder && layout !== null && overlayRenderer === undefined
-      ? neutralWire(layout.width, layout.height, theme.defaultRadius)
+    measuringNeutral && overlayRenderer === undefined
+      ? neutralWire(layout!.width, layout!.height, theme.defaultRadius)
       : EMPTY_WIRE;
-  const paintingNeutral = measuringWire.length > 0 && OverlayComponent !== null;
+  /** Tier-2's half of the same block. `SkeletonOverlayProps` takes decoded
+   *  `ShapeInfo[]` plus the frame size — never a `ShapeSnapshot` — so the only
+   *  thing that kept this tier out of the neutral window was that this arm
+   *  READ its shapes and its size off `snapshot`. Both come from the layout
+   *  instead, and `neutralShapes` is derived from `neutralWire` so the two
+   *  tiers cannot render a different block for the same window. */
+  const measuringShapes =
+    measuringNeutral && overlayRenderer !== undefined
+      ? neutralShapes(layout!.width, layout!.height, theme.defaultRadius)
+      : EMPTY_SHAPES;
+  const paintingNeutral =
+    (measuringWire.length > 0 && OverlayComponent !== null) || measuringShapes.length > 0;
 
   const overlayVisible =
     showSkeleton &&
@@ -887,7 +899,7 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
             style={[styles.measuringPlaceholder, { backgroundColor: theme.baseColor, borderRadius: theme.defaultRadius }]}
           />
         )}
-        {overlayVisible && overlayRenderer !== undefined && snapshot !== null && (
+        {overlayVisible && overlayRenderer !== undefined && (snapshot !== null || measuringShapes.length > 0) && (
           <View
             accessible={false}
             importantForAccessibility="no-hide-descendants"
@@ -895,14 +907,14 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
             style={StyleSheet.absoluteFill}
           >
             {createElement(overlayRenderer, {
-              shapes: overlayShapes,
+              shapes: snapshot !== null ? overlayShapes : measuringShapes,
               baseColor: theme.baseColor,
               highlightColor: theme.highlightColor,
               // ADR-8: the shared clock has ONE period, arbitrated in JS
               // upstream of every renderer — identical call to tier-1's below.
               speedMs: resolveSharedShimmerPeriodMs(theme.speedMs),
-              width: snapshot.frameWidth,
-              height: snapshot.frameHeight,
+              width: snapshot !== null ? snapshot.frameWidth : layout!.width,
+              height: snapshot !== null ? snapshot.frameHeight : layout!.height,
               // Tier-2 used to receive ONLY `reducedMotion`, so an explicit
               // `animation="none"` — and `"pulse"` — never reached it at all
               // and it drew the full travelling shimmer for both. Already
