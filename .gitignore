@@ -99,3 +99,6 @@ coverage/
 
 # gentle-ai / pi tooling scratch state (never committed)
 .pi/
+
+# Argent device recordings and screenshots (megabytes of mp4/png, machine-local)
+.argent/
