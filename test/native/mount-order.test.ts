@@ -150,27 +150,36 @@ describe('<AutoSkeleton> — what is on screen while a cold skeleton mounts', ()
     // and the sensor could not measure anything otherwise.
     expect(timeline.every((t) => t.content === 1)).toBe(true);
 
-    // Two of the three steps have no skeleton yet — that part is forced by the
-    // measurement order and cannot be removed.
+    // ONE SKELETON SURFACE, ALWAYS. From the first frame that has a size to
+    // paint, there is exactly one thing covering the content, and it is the
+    // real overlay — first carrying a single full-bleed neutral rect, then the
+    // measured shapes, delivered to the SAME mounted component under the same
+    // `cacheKey`. The native host takes its in-place `update(shapes)` path for
+    // that, which its contract states "MUST NOT restart the shimmer phase", so
+    // the block RESOLVES INTO the shapes instead of being swapped for them.
+    //
+    // This assertion replaces an earlier one that read "it is gone the moment
+    // real geometry exists; two skeletons never overlap". That pinned the hard
+    // cut — blank, then a dead slab, then a different shimmering element — as
+    // correct. The test encoded the defect.
+    const surfaces = (t: (typeof timeline)[number]): number => t.skeleton + t.placeholder;
+
+    // Step 1 is pre-layout: nothing has a size yet, so the static cover is the
+    // only thing that can stand in. Steps 2 and 3 are the overlay.
+    expect(timeline[0]!.placeholder).toBe(1);
     expect(timeline[0]!.skeleton).toBe(0);
-    expect(timeline[1]!.skeleton).toBe(0);
-    // Only the traversal's own result brings the skeleton in.
+    expect(timeline[1]!.skeleton).toBe(1);
     expect(timeline[2]!.skeleton).toBe(1);
 
-    // THE FIX: the content stays mounted — the sensor has to measure it — and
-    // an opaque placeholder is put OVER it for exactly those steps, so the
-    // reader sees a loading state instead of live content.
-    //
-    // Covering, not hiding. The first attempt made the WRAPPER transparent,
-    // which hid the content and the placeholder with it, because the
-    // placeholder lives inside that same wrapper. This assertion counts nodes
-    // and could not have caught that; the wrapper's opacity is asserted here
-    // so the regression is at least visible in the record.
+    // Never two at once, never zero: no gap to see through and no double
+    // paint, at any step.
+    expect(timeline.map(surfaces)).toEqual([1, 1, 1]);
+
+    // The wrapper is never made transparent. An earlier attempt did that to
+    // hide the content and hid the cover with it, because the cover lives
+    // inside the same wrapper. A node-counting test cannot see that; it is
+    // asserted here so the regression stays visible in the record.
     expect(timeline.every((t) => t.opacity === 1)).toBe(true);
-    expect(timeline[0]!.placeholder).toBe(1);
-    expect(timeline[1]!.placeholder).toBe(1);
-    // It is gone the moment real geometry exists; two skeletons never overlap.
-    expect(timeline[2]!.placeholder).toBe(0);
 
     tree.unmount();
   });

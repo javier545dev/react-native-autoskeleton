@@ -73,6 +73,7 @@ import { decodeWire } from '../core/wire';
 import { Hint } from './Hint';
 import { AUTOSKELETON_IGNORE_MARKER_ID, Ignore } from './Ignore';
 import { nativeSensor } from './nativeSensorInstance';
+import { neutralWire } from '../core/neutral-wire';
 import { resolveAutoskeletonOverlayNativeComponent } from './renderer/AutoskeletonOverlayHostComponent';
 import { useWireProp } from './renderer/wireProp';
 import type { NativeSensorTarget } from './sensor';
@@ -122,6 +123,10 @@ export interface SkeletonContextValue {
  *  REQ-NAV-1's hot path work without requiring every consumer to wire a
  *  `SkeletonProvider`. */
 const defaultStore = new MemoryShapeStore();
+
+/** Shared so "no neutral wire" is always the same array — a fresh `[]` per
+ *  render would re-send the overlay's `shapes` prop across the bridge. */
+const EMPTY_WIRE: readonly number[] = [];
 
 /** Stable empty array so tier-1 (which never decodes shapes here) does not
  *  churn `useMemo`'s identity on every snapshot change. */
@@ -266,14 +271,25 @@ function useColdMeasurement(
 ) {
   const layoutRef = useRef<{ width: number; height: number } | null>(null);
   const viewRef = useRef<ComponentRef<typeof View>>(null);
-  const [layoutTick, setLayoutTick] = useState(0);
+  /** The wrapper's own size, in RENDER scope rather than only in the effect's.
+   *  The neutral wire the overlay paints while measuring needs it, and it is
+   *  the earliest moment it exists: `onLayout` precedes the traversal by the
+   *  whole Fabric mounting frame this hook then waits out. Replaces a bare
+   *  tick counter — same re-render, plus the value. */
+  const [layout, setLayout] = useState<{ width: number; height: number } | null>(null);
 
   const onLayout = (event: LayoutChangeEvent): void => {
-    layoutRef.current = {
+    const next = {
       width: event.nativeEvent.layout.width,
       height: event.nativeEvent.layout.height,
     };
-    setLayoutTick((t) => t + 1);
+    layoutRef.current = next;
+    // Only on a real change: `onLayout` can fire with identical metrics, and a
+    // fresh object every time would re-render (and re-send the overlay's wire)
+    // for nothing.
+    setLayout((prev) =>
+      prev !== null && prev.width === next.width && prev.height === next.height ? prev : next
+    );
   };
 
   useEffect(() => {
@@ -333,14 +349,14 @@ function useColdMeasurement(
 
     const frameHandle = requestAnimationFrame(measure);
     return () => cancelAnimationFrame(frameHandle);
-    // `cycleId` PACES the bounded empty-measurement retry (`layoutTick` cannot:
+    // `cycleId` PACES the bounded empty-measurement retry (`layout` cannot:
     // a subtree that is laid out but not yet populated fires no new layout
     // event when its content finally arrives). Same rationale, same bound and
     // same shared-core budget as `web/AutoSkeleton.tsx`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, cacheKey, cycleId, layoutTick, platform]);
+  }, [active, cacheKey, cycleId, layout, platform]);
 
-  return { viewRef, onLayout };
+  return { viewRef, onLayout, layout };
 }
 
 /** Calls `requestHandoff()` and fires `onMetrics` exactly once when the
@@ -585,7 +601,7 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
     ctx.store.emptyMeasurementsFor(cacheKey) < MAX_EMPTY_MEASUREMENTS;
   const cacheHitForCycle = cacheHit && !remeasureEmpty;
 
-  const { viewRef, onLayout } = useColdMeasurement(
+  const { viewRef, onLayout, layout } = useColdMeasurement(
     showSkeleton && (snapshot === null || remeasureEmpty) && !nativeUnavailable,
     cacheKey,
     cycleId,
@@ -700,15 +716,6 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
   // Skia into its own canvas. Tier-1 still requires `OverlayComponent`, so the
   // two arms of this predicate differ only in what "there is something that
   // can draw" means for the selected tier.
-  const overlayVisible = showSkeleton && snapshot !== null && (overlayRenderer !== undefined || OverlayComponent !== null);
-
-  // The cold-miss gate, term for term the same expression `web/AutoSkeleton
-  // .tsx` uses. `props.fallback !== undefined` leads, which is what makes
-  // this addition unable to touch an existing render path: with the prop
-  // omitted it is `false` in every state, and `false` mounts no `View`. The
-  // on-device paint gates and every existing fixture pass no `fallback`, so
-  // the native view hierarchy they assert against is unchanged by
-  // construction rather than by luck.
   const showFallback = props.fallback !== undefined && showSkeleton && noUsableGeometry;
 
   /** The cold-miss window: this cycle WILL paint a skeleton, but the traversal
@@ -733,6 +740,45 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
    *  `!showFallback` because a consumer who supplied a `fallback` asked for
    *  something specific to be on screen in exactly this window. */
   const showMeasuringPlaceholder = showSkeleton && noUsableGeometry && !showFallback;
+
+  /** The wire the overlay paints while the traversal is still running: one
+   *  full-bleed rect, same buffer layout a real traversal returns.
+   *
+   *  This is what turns the cold window from a swap into a refinement. The
+   *  overlay mounts on this, and when the measured buffer arrives under the
+   *  SAME `cacheKey` the native host takes its in-place `update(shapes)` path
+   *  — documented as "MUST NOT restart the shimmer phase" — so the slab
+   *  resolves INTO the measured shapes on one already-animating surface. The
+   *  alternative, a separate placeholder `View`, is three unrelated visuals
+   *  with two hard cuts.
+   *
+   *  Tier-1 only. The tier-2 (Skia) arm reads `snapshot.frameWidth/Height` and
+   *  a real `ShapeSnapshot`, which by definition does not exist yet here; that
+   *  arm keeps the static cover. Stated rather than hidden: tier-2 is an
+   *  explicit opt-in, and closing this gap for it means giving its renderer a
+   *  snapshot-free entry point, which is a bigger change than this one.
+   *
+   *  Empty whenever there is no usable size yet — the pre-layout frame — and
+   *  the static cover handles that instead. */
+  const measuringWire =
+    showMeasuringPlaceholder && layout !== null && overlayRenderer === undefined
+      ? neutralWire(layout.width, layout.height, theme.defaultRadius)
+      : EMPTY_WIRE;
+  const paintingNeutral = measuringWire.length > 0 && OverlayComponent !== null;
+
+  const overlayVisible =
+    showSkeleton &&
+    (snapshot !== null || paintingNeutral) &&
+    (overlayRenderer !== undefined || OverlayComponent !== null);
+
+  // The cold-miss gate, term for term the same expression `web/AutoSkeleton
+  // .tsx` uses. `props.fallback !== undefined` leads, which is what makes
+  // this addition unable to touch an existing render path: with the prop
+  // omitted it is `false` in every state, and `false` mounts no `View`. The
+  // on-device paint gates and every existing fixture pass no `fallback`, so
+  // the native view hierarchy they assert against is unchanged by
+  // construction rather than by luck.
+
 
   // ADR-16 reveal-before-hide: children are ALWAYS mounted underneath the
   // still-painted overlay.
@@ -831,7 +877,7 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
          *  `NEUTRAL_SKELETON_HEIGHT_PX` instead, correctly, because there it
          *  stands in for a key that was never captured and has no laid-out
          *  content to borrow a size from. */}
-        {showMeasuringPlaceholder && (
+        {showMeasuringPlaceholder && !paintingNeutral && (
           <View
             nativeID={AUTOSKELETON_IGNORE_MARKER_ID}
             testID="autoskeleton-measuring"
@@ -879,7 +925,7 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
         {overlayVisible && overlayRenderer === undefined && OverlayComponent !== null && (
           <OverlayComponent
             cacheKey={cacheKey}
-            shapes={overlayWire}
+            shapes={snapshot !== null ? overlayWire : measuringWire}
             baseColor={theme.baseColor}
             highlightColor={theme.highlightColor}
             defaultRadius={theme.defaultRadius}

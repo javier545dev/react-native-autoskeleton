@@ -536,6 +536,48 @@ final class AutoskeletonRendererTier1Tests: XCTestCase {
         XCTAssertTrue(isCovered(surface, CGPoint(x: 25, y: 10)), "the shape must still be covered")
         XCTAssertTrue(isOpaquelyPainted(surface, CGPoint(x: 25, y: 10)), "the shape must still be opaque")
     }
+
+    /// The assumption the whole neutral-wire design rests on: the cold window
+    /// mounts ONE full-bleed rect and then updates to the N measured shapes
+    /// under the same `cacheKey`. If `update` could only revise the frames of a
+    /// fixed shape list, the block would have to be SWAPPED for the shapes
+    /// instead of resolving into them — the hard cut the design exists to
+    /// remove. Nothing proved a shape-COUNT change survived it; every existing
+    /// case here updates 1 -> 1.
+    ///
+    /// `AutoskeletonRendererTier1Test.kt` carries the same case.
+    func testAShapeCountChangeIsAnInPlaceUpdate() throws {
+        let renderer = AutoskeletonRendererTier1()
+        let surface = makeSurface()
+        let clock = AutoskeletonShimmerClock(ticking: AutoskeletonNoOpTicking())
+
+        // Mount on the neutral wire's shape: one rect covering the frame.
+        let handle = renderer.mount(
+            on: surface,
+            shapes: [AutoskeletonShapeInfo(x: 0, y: 0, w: 300, h: 200, r: 8, source: .container, radiusSource: .defaultValue)],
+            theme: makeTheme(),
+            clock: clock,
+            animation: "shimmer"
+        )
+        let gradientLayer = gradient(in: surface)
+        let beginTimeBefore = try XCTUnwrap(
+            gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey)
+        ).beginTime
+        let sublayersAfterMount = surface.layer.sublayers?.count
+
+        // ...then the measured shapes arrive: 1 -> 4.
+        handle.update(shapes: (0..<4).map { i in
+            AutoskeletonShapeInfo(x: 0, y: CGFloat(i) * 40, w: 200, h: 30, r: 4, source: .text, radiusSource: .measured)
+        })
+
+        let beginTimeAfter = try XCTUnwrap(
+            gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey)
+        ).beginTime
+        XCTAssertEqual(beginTimeBefore, beginTimeAfter, "the shimmer phase origin must survive the refinement")
+        // No remount: the same gradient layer, in the same surface.
+        XCTAssertTrue(gradient(in: surface) === gradientLayer)
+        XCTAssertEqual(surface.layer.sublayers?.count, sublayersAfterMount)
+    }
 }
 
 /// Test-only no-op ticker: the renderer tests never need `subscribe()`'s dev/test

@@ -480,4 +480,48 @@ class AutoskeletonRendererTier1Test {
             0.001f,
         )
     }
+
+    /** The assumption the whole neutral-wire design rests on: the cold window
+     *  mounts ONE full-bleed rect and then updates to the N measured shapes
+     *  under the same `cacheKey`. If `update` could only revise the frames of
+     *  a fixed shape list, the block would have to be swapped for the shapes
+     *  instead of resolving into them — the hard cut the design exists to
+     *  remove. Nothing proved a shape-COUNT change survived it; every existing
+     *  case here updates 1 -> 1.
+     *
+     *  `AutoskeletonRendererTier1Tests.swift` carries the same case. */
+    @Test
+    fun aShapeCountChangeIsAnInPlaceUpdate() {
+        val surface = mountedSurface()
+        val scheduler = AutoskeletonRecordingFrameScheduler()
+        val clock = AutoskeletonShimmerClock()
+        val renderer = AutoskeletonRendererTier1()
+
+        // Mount on the neutral wire's shape: one rect covering the frame.
+        val handle = renderer.mount(
+            surface,
+            listOf(AutoskeletonShapeInfo(0f, 0f, 300f, 200f, 8f, AutoskeletonShapeSource.CONTAINER, AutoskeletonRadiusSource.DEFAULT)),
+            theme(),
+            clock,
+            animation = "shimmer",
+            scheduler = scheduler,
+        )
+        val overlay = surface.getChildAt(0) as AutoskeletonShimmerOverlayView
+        overlay.draw(android.graphics.Canvas())
+        val startedAt = clock.startedAt
+        val childrenAfterMount = surface.childCount
+
+        // ...then the measured shapes arrive: 1 -> 4.
+        handle.update(
+            (0 until 4).map { i ->
+                AutoskeletonShapeInfo(0f, i * 40f, 200f, 30f, 4f, AutoskeletonShapeSource.TEXT, AutoskeletonRadiusSource.MEASURED)
+            },
+        )
+        overlay.draw(android.graphics.Canvas())
+
+        assertEquals("the shimmer phase origin must survive the refinement", startedAt, clock.startedAt, 0.0)
+        assertEquals("the shader must not be rebuilt", 1, overlay.shaderInstanceCount)
+        assertEquals("no remount: the same overlay view stays", childrenAfterMount, surface.childCount)
+        assertSame(overlay, surface.getChildAt(0))
+    }
 }
