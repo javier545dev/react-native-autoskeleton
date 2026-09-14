@@ -448,7 +448,20 @@ class PaintGateListInstrumentedTest {
         }
 
         val skeletonCards = visibleSkeletonCards()
-        assertTrue("FIXTURE FAILURE: no skeleton (loading) cards visible after recycling", skeletonCards.isNotEmpty())
+        // The message carries what was actually on screen, because this is the
+        // one assertion in this file that has failed on CI and passed on every
+        // local emulator — including one deliberately scrolled to the bottom
+        // first to imitate fling drift, which did NOT reproduce it. Without
+        // knowing what the runner saw instead, any fix is a guess, and a guess
+        // here costs the 1h40m that job takes to answer.
+        assertTrue(
+            "FIXTURE FAILURE: no skeleton (loading) cards visible after recycling. " +
+                "Real cards on screen: ${realCards.size} " +
+                "(${realCards.mapNotNull { it.contentDescription }.take(4)}). " +
+                "Every node carrying a description: " +
+                "${device.findObjects(By.descStartsWith("")).mapNotNull { it.contentDescription }.take(12)}",
+            skeletonCards.isNotEmpty(),
+        )
         for (card in skeletonCards) {
             val pixel = topQuarterPixel(bitmap, card.visibleBounds)
             assertFalse(
