@@ -37,10 +37,8 @@
 import type { ComponentRef, ReactNode } from 'react';
 import {
   createContext,
-  createElement,
   useContext,
   useEffect,
-  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -69,15 +67,13 @@ import { createHintRegistry, snapshotHintEntries } from '../core/hint-registry';
 import { resolveSharedShimmerPeriodMs } from '../core/shimmer-period';
 import { applyThemeOverride } from '../core/theme-override';
 import type { AnimationKind, OnMetrics, RendererKind, ShapeSnapshot } from '../core/types';
-import { decodeWire } from '../core/wire';
 import { Hint } from './Hint';
 import { AUTOSKELETON_IGNORE_MARKER_ID, Ignore } from './Ignore';
 import { nativeSensor } from './nativeSensorInstance';
-import { neutralShapes, neutralWire } from '../core/neutral-wire';
+import { neutralWire } from '../core/neutral-wire';
 import { resolveAutoskeletonOverlayNativeComponent } from './renderer/AutoskeletonOverlayHostComponent';
 import { useWireProp } from './renderer/wireProp';
 import type { NativeSensorTarget } from './sensor';
-import type { SkeletonOverlayComponent } from './overlayContract';
 import {
   AutoskeletonNativeModuleUnavailableError,
   logNativeModuleUnavailableOnce,
@@ -115,7 +111,6 @@ export interface SkeletonContextValue {
    *  `createSkiaOverlay` from the `autoskeleton/skia` subpath and passing it
    *  here; see `src/index.skia.ts` for why the peers are injected rather than
    *  detected. */
-  readonly overlay?: SkeletonOverlayComponent;
 }
 
 /** Module-level default store, mirroring `web/AutoSkeleton.tsx`'s rationale
@@ -128,9 +123,6 @@ const defaultStore = new MemoryShapeStore();
  *  render would re-send the overlay's `shapes` prop across the bridge. */
 const EMPTY_WIRE: readonly number[] = [];
 
-/** Stable empty array so tier-1 (which never decodes shapes here) does not
- *  churn `useMemo`'s identity on every snapshot change. */
-const EMPTY_SHAPES: readonly import('../core/types').ShapeInfo[] = [];
 const defaultContextValue: SkeletonContextValue = {
   store: defaultStore,
   theme: DEFAULT_THEME,
@@ -150,7 +142,6 @@ export interface SkeletonProviderProps {
   readonly handoffTimeoutMs?: number;
   readonly handoffFadeMs?: number;
   /** ADR-5 tier-2 opt-in; see `SkeletonContextValue.overlay`. */
-  readonly overlay?: SkeletonOverlayComponent;
   readonly children?: ReactNode;
 }
 
@@ -162,7 +153,6 @@ export function SkeletonProvider(props: SkeletonProviderProps): React.JSX.Elemen
     maxShapes: props.maxShapes ?? defaultContextValue.maxShapes,
     handoffTimeoutMs: props.handoffTimeoutMs ?? defaultContextValue.handoffTimeoutMs,
     handoffFadeMs: props.handoffFadeMs ?? defaultContextValue.handoffFadeMs,
-    overlay: props.overlay,
   };
   return <SkeletonContext.Provider value={value}>{props.children}</SkeletonContext.Provider>;
 }
@@ -689,8 +679,12 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
   // drew, which is what RISK-8 uses it for. Before this change it reported
   // whatever the probe said while tier-1 drew regardless, because
   // `SkiaShimmerOverlay` had no call site anywhere in the library.
-  const overlayRenderer = ctx.overlay;
-  const rendererKind: RendererKind = overlayRenderer ? 'skia' : 'native';
+  // Always `'native'` since tier-2 was removed. Kept as a named constant, and
+  // `RendererKind` keeps its `'skia'` member, because `onMetrics.renderer` is
+  // public telemetry: a consumer switching on it should not have to change to
+  // keep compiling, and a value that can no longer occur is cheaper than a
+  // breaking type change.
+  const rendererKind: RendererKind = 'native';
 
   useHandoffAndMetrics(
     isLoading,
@@ -724,17 +718,6 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
   // callback, so the render that discovers the missing module ran one hook
   // fewer than the render before it and React aborted the tree with "Rendered
   // fewer hooks than expected" — turning ADR-15's fail-open into a hard crash,
-  // in production only, since `__DEV__` throws the named error earlier and
-  // never reaches this branch. Both dependencies are computed well above here
-  // (`snapshot`, `overlayRenderer`), so position is the only thing that
-  // changed. `test/native/native-module-unavailable-fail-open.test.ts` mounts
-  // the component with the module absent and fails on the hook-count error if
-  // this is ever moved back down.
-  const overlayShapes = useMemo(
-    () => (overlayRenderer !== undefined && snapshot !== null ? decodeWire(snapshot.data).shapes : EMPTY_SHAPES),
-    [overlayRenderer, snapshot],
-  );
-
   // ADR-15 production fail-open: render children unwrapped, no skeleton,
   // no crash. `__DEV__` never reaches here — `useColdMeasurement`'s
   // `onNativeModuleUnavailable` callback throws first.
@@ -760,10 +743,6 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
   //    Hiding content that is still plainly visible on screen is the same class
   //    of bug in the other direction.
   //
-  // Tier-2 (`overlayRenderer`) needs no native host component: it draws with
-  // Skia into its own canvas. Tier-1 still requires `OverlayComponent`, so the
-  // two arms of this predicate differ only in what "there is something that
-  // can draw" means for the selected tier.
   const showFallback = props.fallback !== undefined && showSkeleton && noUsableGeometry;
 
   /** The cold-miss window: this cycle WILL paint a skeleton, but the traversal
@@ -809,27 +788,20 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
    *  Empty whenever there is no usable size yet — the pre-layout frame — and
    *  the static cover handles that instead. */
   const measuringNeutral = showMeasuringPlaceholder && layout !== null;
-  const measuringWire =
-    measuringNeutral && overlayRenderer === undefined
-      ? neutralWire(layout!.width, layout!.height, theme.defaultRadius)
-      : EMPTY_WIRE;
+  const measuringWire = measuringNeutral
+    ? neutralWire(layout!.width, layout!.height, theme.defaultRadius)
+    : EMPTY_WIRE;
   /** Tier-2's half of the same block. `SkeletonOverlayProps` takes decoded
    *  `ShapeInfo[]` plus the frame size — never a `ShapeSnapshot` — so the only
    *  thing that kept this tier out of the neutral window was that this arm
    *  READ its shapes and its size off `snapshot`. Both come from the layout
-   *  instead, and `neutralShapes` is derived from `neutralWire` so the two
-   *  tiers cannot render a different block for the same window. */
-  const measuringShapes =
-    measuringNeutral && overlayRenderer !== undefined
-      ? neutralShapes(layout!.width, layout!.height, theme.defaultRadius)
-      : EMPTY_SHAPES;
-  const paintingNeutral =
-    (measuringWire.length > 0 && OverlayComponent !== null) || measuringShapes.length > 0;
+   *  instead. */
+  const paintingNeutral = measuringWire.length > 0 && OverlayComponent !== null;
 
   const overlayVisible =
     showSkeleton &&
     (snapshot !== null || paintingNeutral) &&
-    (overlayRenderer !== undefined || OverlayComponent !== null);
+    OverlayComponent !== null;
 
   // The cold-miss gate, term for term the same expression `web/AutoSkeleton
   // .tsx` uses. `props.fallback !== undefined` leads, which is what makes
@@ -947,42 +919,7 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
             style={[styles.measuringPlaceholder, { backgroundColor: theme.baseColor, borderRadius: theme.defaultRadius }]}
           />
         )}
-        {overlayVisible && overlayRenderer !== undefined && (snapshot !== null || measuringShapes.length > 0) && (
-          <View
-            accessible={false}
-            importantForAccessibility="no-hide-descendants"
-            pointerEvents="none"
-            style={StyleSheet.absoluteFill}
-          >
-            {createElement(overlayRenderer, {
-              shapes: snapshot !== null ? overlayShapes : measuringShapes,
-              baseColor: theme.baseColor,
-              highlightColor: theme.highlightColor,
-              // ADR-8: the shared clock has ONE period, arbitrated in JS
-              // upstream of every renderer — identical call to tier-1's below.
-              speedMs: resolveSharedShimmerPeriodMs(theme.speedMs),
-              width: snapshot !== null ? snapshot.frameWidth : layout!.width,
-              height: snapshot !== null ? snapshot.frameHeight : layout!.height,
-              // Tier-2 used to receive ONLY `reducedMotion`, so an explicit
-              // `animation="none"` — and `"pulse"` — never reached it at all
-              // and it drew the full travelling shimmer for both. Already
-              // resolved above; `effectiveAnimation` is idempotent, so tier-2
-              // re-deriving it changes nothing.
-              animation,
-              reducedMotion,
-              // THE SAME LOCAL that went into `composeCacheKey` above, passed
-              // by reference rather than re-derived. `direction` was already
-              // part of the cache key — an RTL snapshot is different geometry
-              // — but no renderer read it, so the highlight swept
-              // left-to-right for an RTL reader too. Reusing the local (rather
-              // than having each renderer ask the platform) is what makes "the
-              // sweep's direction and the snapshot's direction are the same
-              // value" true by construction instead of by agreement.
-              direction,
-            })}
-          </View>
-        )}
-        {overlayVisible && overlayRenderer === undefined && OverlayComponent !== null && (
+        {overlayVisible && OverlayComponent !== null && (
           <OverlayComponent
             cacheKey={cacheKey}
             shapes={snapshot !== null ? overlayWire : measuringWire}

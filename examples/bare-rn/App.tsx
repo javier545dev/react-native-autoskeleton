@@ -42,7 +42,6 @@ import {
 // library's — see `skiaOverlay.ts` for the full argument and the single
 // module-scope `createSkiaOverlay` call this fixture and the browsable
 // tier-2 demo both use.
-import { SKIA_OVERLAY } from './skiaOverlay';
 import { DemoGallery } from './demos/DemoGallery';
 
 /** Exported so the fixture and any future test/tooling share one source of
@@ -511,140 +510,6 @@ function PaintGateListScreen() {
   );
 }
 
-/** Tier-2 (Skia + Reanimated) fixture. Deliberately a SEPARATE screen from
- *  `PaintGateScreen` rather than a flag on it: the existing card/list gates
- *  must keep exercising tier-1, which is the default every consumer gets.
- *  Turning tier-2 on app-wide would have silently deleted tier-1's on-device
- *  coverage while every one of its gates stayed green.
- *
- *  Two `<AutoSkeleton>` trees, the second mounted `TIER2_FIXTURE.lateMountMs`
- *  AFTER the first. ADR-8 says every instance shares one clock, so the two
- *  must shimmer in lock-step despite starting at different wall-clock times —
- *  the single most direct on-device expression of that guarantee, and one no
- *  single-instance gate can see. */
-const TIER2_FIXTURE = {
-  skeletonKeyEarly: 'tier2-card-early',
-  skeletonKeyLate: 'tier2-card-late',
-  lateMountMs: 700,
-  labels: {
-    root: 'tier2-root',
-    toggle: 'tier2-toggle',
-    renderer: 'tier2-renderer',
-    early: 'tier2-early-block',
-    late: 'tier2-late-block',
-  },
-  colors: {
-    // Both content colours must be far outside the grey shimmer ramp AND far
-    // from each other, exactly like the tier-1 fixture's. Both have R = 0,
-    // which is 58 units below the tier-2 ramp's darkest channel — a margin no
-    // compositor noise can cross, and one that survives the RGBA/BGRA channel
-    // ambiguity the pixel reader documents.
-    early: '#0000FF',
-    late: '#00A651',
-  },
-  /** A DELIBERATELY HIGH-CONTRAST theme, passed through the ordinary public
-   *  `SkeletonProvider theme` prop.
-   *
-   *  This is not decoration. The default theme's ramp spans #E2E2E2..#F5F5F5 —
-   *  NINETEEN units per channel, end to end. Any pixel comparison with a
-   *  tolerance at all comparable to simulator compositor noise is therefore
-   *  wider than the entire signal, so two skeletons a full half-period out of
-   *  phase compare EQUAL and an ADR-8 phase gate passes vacuously. That was
-   *  observed here, not theorised: the first version of
-   *  `testTier2InstancesMountedAtDifferentTimesShimmerInPhase` passed against a
-   *  deliberately planted "ignore the shared origin" defect.
-   *
-   *  #3A3A3A..#E8E8E8 spans 174 units instead, so an out-of-phase pair differs
-   *  by an order of magnitude more than the noise floor. The period is left at
-   *  the default 1400 ms because the gate's sampling window is expressed in it. */
-  theme: {
-    baseColor: '#3A3A3A',
-    highlightColor: '#E8E8E8',
-  },
-} as const;
-
-function Tier2Block({
-  label,
-  color,
-  skeletonKey,
-  isLoading,
-  onMetrics,
-}: {
-  label: string;
-  color: string;
-  skeletonKey: string;
-  isLoading: boolean;
-  onMetrics?: (m: { renderer: string }) => void;
-}) {
-  return (
-    // `skeletonOnRefresh`: same rationale as `PaintGateScreen` above — without
-    // it REQ-PTR-1 suppresses the skeleton on every load after the first, so
-    // the tier-2 toggle could never put the Skia overlay back on screen.
-    <AutoSkeleton isLoading={isLoading} skeletonKey={skeletonKey} onMetrics={onMetrics} skeletonOnRefresh>
-      <View
-        accessible
-        accessibilityLabel={label}
-        testID={label}
-        style={[styles.tier2Block, { backgroundColor: color }]}
-      />
-    </AutoSkeleton>
-  );
-}
-
-function PaintGateTier2Screen() {
-  const [isLoading, setIsLoading] = useState(true);
-  const [lateMounted, setLateMounted] = useState(false);
-  const [renderer, setRenderer] = useState<string>('pending');
-
-  useEffect(() => {
-    const t = setTimeout(() => setLateMounted(true), TIER2_FIXTURE.lateMountMs);
-    return () => clearTimeout(t);
-  }, []);
-
-  return (
-    <SkeletonProvider overlay={SKIA_OVERLAY} theme={TIER2_FIXTURE.theme}>
-      <View style={styles.screen} testID={TIER2_FIXTURE.labels.root}>
-        <Pressable
-          accessible
-          accessibilityLabel={TIER2_FIXTURE.labels.toggle}
-          accessibilityRole="button"
-          testID={TIER2_FIXTURE.labels.toggle}
-          style={styles.toggle}
-          onPress={() => setIsLoading((v) => !v)}
-        >
-          <Text style={styles.toggleLabel}>
-            {isLoading ? 'isLoading: true (tap to reveal content)' : 'isLoading: false (tap to reload)'}
-          </Text>
-        </Pressable>
-
-        <Text
-          accessible
-          accessibilityLabel={`${TIER2_FIXTURE.labels.renderer}:${renderer}`}
-          testID={TIER2_FIXTURE.labels.renderer}
-          style={styles.toggleLabel}
-        >
-          {`renderer: ${renderer}`}
-        </Text>
-
-        <Tier2Block
-          label={TIER2_FIXTURE.labels.early}
-          color={TIER2_FIXTURE.colors.early}
-          skeletonKey={TIER2_FIXTURE.skeletonKeyEarly}
-          isLoading={isLoading}
-          onMetrics={(m) => setRenderer(m.renderer)}
-        />
-        {lateMounted ? (
-          <Tier2Block
-            label={TIER2_FIXTURE.labels.late}
-            color={TIER2_FIXTURE.colors.late}
-            skeletonKey={TIER2_FIXTURE.skeletonKeyLate}
-            isLoading={isLoading}
-          />
-        ) : null}
-      </View>
-    </SkeletonProvider>
-  );
-}
 
 function App() {
   const [screen, setScreen] = useState<Screen>('card');
@@ -670,14 +535,12 @@ function App() {
   );
 }
 
-type Screen = 'card' | 'list' | 'tier2';
+type Screen = 'card' | 'list';
 
-/** Cycles card -> list -> tier2 -> card. Exported shape kept trivial so the
+/** Cycles card -> list -> card. Exported shape kept trivial so the
  *  UI tests can reach the tier-2 screen with a known number of taps. */
 function nextScreen(current: Screen): Screen {
-  if (current === 'card') return 'list';
-  if (current === 'list') return 'tier2';
-  return 'card';
+  return current === 'card' ? 'list' : 'card';
 }
 
 function AppContent({
@@ -750,7 +613,6 @@ function AppContent({
       </View>
       {screen === 'card' ? <PaintGateScreen /> : null}
       {screen === 'list' ? <PaintGateListScreen /> : null}
-      {screen === 'tier2' ? <PaintGateTier2Screen /> : null}
     </View>
   );
 }
@@ -808,10 +670,6 @@ const styles = StyleSheet.create({
   },
   content: {
     gap: 16,
-  },
-  tier2Block: {
-    width: 260,
-    height: 120,
   },
   textBlock: {
     width: 260,

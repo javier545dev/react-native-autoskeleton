@@ -38,7 +38,7 @@ either of which would set it alone:
   compiles on 0.77 and 0.78 — the floor is set by the platform that does not,
   because one npm peer range has to cover both.
 - **The `exports` subpaths cannot resolve before 0.79.** `autoskeleton/uniwind`,
-  `/skia` and `/ssr` exist only in the `exports` map, with no root-level shim
+  `/ssr` exists only in the `exports` map, with no root-level shim
   files, and Metro did not enable package exports by default until 0.79. On
   0.77/0.78 those three imports are bundle-time resolution errors — so even a
   fixed Kotlin path would leave three documented entry points dead.
@@ -165,7 +165,6 @@ Legend: **yes** = implemented and reachable from the public API;
 | `debugOverlay` draws | yes | **no** (§5b) | **no** (§5b) |
 | Automatic successor-paint detection (`expectsPlaceholder`) | yes | **no** | **no** |
 | Clipping to scrollable / `overflow` ancestors | yes, any `overflow` ancestor | yes, scroll views (§5e) | yes, scroll views (§5e) |
-| Tier-2 Skia renderer | n/a | yes (opt-in) | yes (opt-in) |
 | `autoskeleton/ssr` build-time replay | yes | n/a | n/a |
 
 ---
@@ -212,8 +211,6 @@ The prop is accepted on all three platforms. Only the web implementation draws.
 - **iOS**: `AutoskeletonOverlayViewHost.mountOrUpdate` takes a
   `debugOverlay: Bool` parameter and never references it in the body.
   `AutoskeletonDebugOverlay.swift` likewise has no production caller.
-- Under the **tier-2 Skia** renderer the prop is not even forwarded to the
-  overlay component.
 
 Both native classes are implemented and unit-tested. Neither is wired. A blank
 overlay on iOS or Android is our gap, not your mistake. Tracked as
@@ -374,85 +371,24 @@ for the life of that mounted component. A component that loads, shows content,
 then loads again **without unmounting** reports the first cycle's cache verdict
 on the second. To observe a genuine cached serve, unmount and remount.
 
-### 5i. Tier-2 skeletons are not in phase with tier-1 skeletons
-
-Both tiers share one **period** (`resolveSharedShimmerPeriodMs`, arbitrated in
-JS). They do not share a phase **origin**:
-
-- Tier-1 reads the native `AutoskeletonShimmerClock`'s `startedAt` and hands
-  CoreAnimation / Choreographer a negative begin offset.
-- Tier-2 runs entirely in JS/Reanimated and has **no route to that value** —
-  the Turbo Module surface is `getShapes` and `evictShapes` only, and
-  `startedAt` is never exposed. It uses its own module-scope
-  `TIER2_SHIMMER_ORIGIN_MS = Date.now()`.
-
-So tier-2 instances are in phase **with each other**, and tier-1 instances are
-in phase with each other, and the two groups run at the same speed with an
-arbitrary fixed offset between them. A screen mixing renderers will not look
-broken, but it is not one wave.
-
-The README previously claimed "both renderers share one shimmer clock". That
-was wrong; corrected 2026-08-30.
-
-### 5j. Per-shape stagger is not implemented
-
-`staggerDelayForIndex` is exported from `autoskeleton/skia` and unit-tested,
-and **nothing calls it**. `SkiaShimmerOverlay` draws one union path under one
-gradient, so there is no per-shape node to delay. Tier-1 has no stagger either.
-Kept exported rather than deleted so the dropped requirement stays visible.
-
-### 5k. The native shape cache is unbounded for the process lifetime
-
-`AutoskeletonNativeShapeCache` (Android) is a plain `ConcurrentHashMap` with no
-size bound and no LRU. It is emptied only by `evictShapes`, which is only
-reachable from `evictNativeShapes` in `src/native/wire-bridge.ts` — and
-**`evictNativeShapes` has no production caller**; only tests call it. The JS
-`MemoryShapeStore` does have LRU eviction, so the two can diverge, and the
-native side only ever grows.
-
-The entries are small (a `[VERSION, x, y, w, h, r] × N` array of doubles per
-distinct cache key, and a cache key includes a bucketed width, so the key space
-is bounded by your distinct `skeletonKey`/`itemType` values × buckets × 2
-directions). It is not an unbounded-per-frame leak. It is still unbounded.
-
-Tracked as [#25](https://github.com/javier545dev/react-native-autoskeleton/issues/25).
-
 ### 5l. `Sensor.observe()` does nothing on native
 
 The native `Sensor.observe()` is a documented no-op returning a stable
 unsubscribe. Invalidation is driven instead by the composite cache key
 (`useWindowDimensions`, `I18nManager`, `PixelRatio.getFontScale()`), so a
 rotation or font-scale change produces a cache miss and a fresh traversal
-without any observer. The web sensor does implement `observe()` with
+without any observer.
+
+What the key cannot describe is your own CONTENT — a list that paginates, a
+detail screen whose second load carries more text. Native closes that by
+re-measuring once per loading cycle and repainting only if the geometry
+actually changed, so a stale layout is corrected without an observer; see
+`test/native/stale-geometry.test.ts`. **Web does not yet do this**, because a
+per-cycle revalidation collides with `AutoSkeletonSSR`'s guarantee that a
+build-time snapshot is replayed with zero traversal. The web sensor does implement `observe()` with
 `ResizeObserver`/`MutationObserver`, but nothing in `src/web/AutoSkeleton.tsx`
 calls it either.
 
 Consequence you can observe: on web the font-scale probe is measured **once
 per session and cached**, so a mid-session browser default-font-size change is
 not picked up (the browser exposes no event for one).
-
-### 5m. NFR-1's tier-2 120 Hz claim is untested
-
-`spec.md` NFR-1 asks tier-2 to sustain 120 Hz on ProMotion displays. There is
-no benchmark that measures it. `benchmarks.yml`'s `bench-ios-traversal` job is
-marked "AUTHORED ONLY" in its own header, and the frame-drop job that does
-exist is Android. Treat the 120 Hz figure as a design target, not a measured
-result.
-
----
-
-## 6. What is deliberately out of scope
-
-- **NativeWind.** Not a gap — an evidence-backed exclusion. NativeWind 4.2.6
-  hard-requires Tailwind v3 and this project's theming story is Tailwind v4;
-  the two cannot share one `node_modules` tree. See
-  [`theming.md`](./theming.md).
-- **Phase 2 of the image pipeline** (blurhash/thumbhash placeholder decoding).
-  Owned by your image component. See [`image-pipeline.md`](./image-pipeline.md).
-- **Per-corner radii.** `ShapeInfo.r` is a single uniform radius.
-- **Rotation on web.** `getBoundingClientRect()` is axis-aligned, so a rotated
-  leaf reports a box larger than itself. Uniform, non-uniform and `zoom`
-  scaling *are* supported.
-- **Closed shadow roots on web.** Open roots are traversed. Closed roots are
-  not merely untraversable, they are undetectable, so there is not even an
-  honest degradation flag to raise.

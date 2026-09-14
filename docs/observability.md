@@ -46,7 +46,7 @@ native, and a dashboard built on them would be measuring nothing.
 | `handoffMs` | real | real | real |
 | `handoffReason` | real; `'successor-painted'` reachable | real, but `'timeout'` whenever `expectsPlaceholder` is set — see §1.3 | same as iOS |
 | `platform` | `'web'` | `'ios'` | `'android'` |
-| `renderer` | `'css'` | `'native'` or `'skia'` | `'native'` or `'skia'` |
+| `renderer` | `'css'` | `'native'` | `'native'` |
 | `radiusSourceHistogram` | real (dev sidecar present) | **always all-zeros** | **always all-zeros** |
 | `degraded` | real | **always `[]`**, except `['native-module-unavailable']` | same as iOS |
 | `cacheKey` | real | real | real |
@@ -139,7 +139,6 @@ it:
 - **iOS** — `AutoskeletonOverlayViewHost.mountOrUpdate` accepts a
   `debugOverlay: Bool` and never references it.
   `AutoskeletonDebugOverlay.swift` likewise has no production caller.
-- Under the **tier-2 Skia** renderer the prop is not forwarded to the overlay
   component at all.
 
 Both native classes are implemented and unit-tested. Neither is wired.
@@ -254,10 +253,6 @@ anything: iOS ended up running two periods at once (already-mounted skeletons
 bake the duration in at their own mount, so they drifted permanently out of
 phase), Android retuned the live clock and visibly jumped every skeleton's
 phase, and on web `speedMs` reached nothing at all.
-
-> This arbitration covers the shared **period**. It does not put tier-1 and
-> tier-2 skeletons in the same **phase** — see
-> [`platform-support.md` §5i](./platform-support.md).
 
 ### 3.4 `<AutoSkeleton.Hint>` `testID` conflict (native)
 

@@ -109,7 +109,7 @@ line is short.</sub>
   (`autoskeleton/ssr`, fed by a build-time capture CLI) resolve out of a single
   `exports` map by condition — not three packages to keep in step.
 - **Zero runtime dependencies.** `package.json` has no `dependencies` field at
-  all. `react` is the only required peer: Skia, Reanimated, uniwind,
+  all. `react` is the only required peer: uniwind,
   `@playwright/test` (the capture CLI) — and `react-native` itself, so a
   web-only consumer never installs it — are all optional peers you opt into.
   `"sideEffects": false`.
@@ -190,7 +190,7 @@ either one of which would set it alone:
   `Float`. `:autoskeleton:compileDebugKotlin` fails outright on 0.77.3 and
   0.78.3, and passes from 0.79.7 up. iOS compiles fine on both; the floor is
   set by the platform that does not.
-- **`autoskeleton/uniwind`, `/skia` and `/ssr` cannot resolve.** Those subpaths
+- **`autoskeleton/uniwind` and `/ssr` cannot resolve.** Those subpaths
   exist only in the `exports` map, and Metro did not enable package exports by
   default until 0.79. On 0.77/0.78 they are bundle-time resolution errors, so
   even with the Kotlin fixed, three documented entry points would be dead.
@@ -326,7 +326,6 @@ The short version. The long version, with the mechanism behind every gap, is
 | Automatic successor-paint detection | yes | **no** | **no** |
 | Clipping to scroll containers | yes | yes | yes |
 | Shimmer sweep follows writing direction | **no** | yes | yes |
-| Tier-2 Skia renderer (opt-in) | n/a | yes | yes |
 | Server rendering (`autoskeleton/ssr`) | yes | n/a | n/a |
 
 Two of these bite hardest:
@@ -587,8 +586,6 @@ key the fallback is what paints.
   that is typechecked in CI against real types.
 - **[SSR capture CLI](docs/ssr-capture-cli.md)** — build-time snapshot capture
   for `<AutoSkeletonSSR>`, and the registry-maintenance cost named openly.
-- **[The Skia renderer (tier 2)](docs/tier2-skia.md)** — the opt-in second
-  native renderer, and what the two tiers do and do not share.
 
 **Contributing**
 
@@ -601,17 +598,6 @@ key the fallback is what paints.
 ---
 
 ## Going further
-
-**[The Skia renderer (tier 2)](docs/tier2-skia.md).** The default native
-renderer has no dependencies and draws on the platform's own compositor, so the
-shimmer keeps running even when the JS thread is blocked. A second renderer
-draws the same skeleton with `@shopify/react-native-skia` and
-`react-native-reanimated`. It is strictly opt-in, and installing the two
-packages is deliberately *not* enough — you build the overlay from your own
-imports and hand it to `SkeletonProvider`, because Metro's dependency graph is
-static. The doc covers the wiring, the Babel plugin ordering, and the honest
-caveat: the two tiers share a shimmer period but not a phase origin, so there
-is a fixed arbitrary offset between tier-1 and tier-2 instances.
 
 **[TypeScript configuration](docs/typescript.md).** This package publishes
 different type declarations per platform condition, so your `tsconfig.json`

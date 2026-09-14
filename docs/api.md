@@ -1,7 +1,7 @@
 # API reference
 
 Every name below was checked against `src/index.native.ts`, `src/index.web.ts`,
-`src/index.ssr.ts`, `src/index.skia.ts`, `src/interop/uniwind.ts` and
+`src/index.ssr.ts`, `src/interop/uniwind.ts` and
 `package.json#exports` — not from memory. Where a symbol exists on one platform
 only, the table says so.
 
@@ -21,7 +21,6 @@ the same everywhere.
 | `autoskeleton` | `react-native` | `index.native.js` | Core + virtualized-list API + native error types |
 | `autoskeleton` | `browser` | `index.web.js` | Core + `IGNORE_ATTRIBUTE` |
 | `autoskeleton` | `default` | `index.js` | Re-exports the web entry verbatim |
-| `autoskeleton/skia` | any | `index.skia.js` | Tier-2 opt-in factory. **Native only** |
 | `autoskeleton/uniwind` | any | `interop/uniwind.js` | `ThemedAutoSkeleton`. **Native only** |
 | `autoskeleton/ssr` | any | `index.ssr.js` | Server-render replay. **Web only** |
 | `autoskeleton/cli` | any | `dist-cli/index.js` | Build-time capture API |
@@ -40,7 +39,7 @@ There is also a binary: `autoskeleton-capture`.
 ```ts
 export { AutoSkeleton, SkeletonProvider, IGNORE_ATTRIBUTE };
 export { MemoryShapeStore };          // the class behind SkeletonProvider's `store` prop
-export { isExactRadiusSource };       // see §8 before aggregating radiusSourceHistogram
+export { isExactRadiusSource };       // see §7 before aggregating radiusSourceHistogram
 export type {
   AutoSkeletonProps, SkeletonProviderProps,
   AnimationKind, DegradationFlag, HandoffReason, OnMetrics, Platform,
@@ -62,15 +61,6 @@ export type {
   UseSkeletonCellOptions, UseSkeletonCellResult,
   SkeletonOverlayComponent, SkeletonOverlayProps,
 };
-```
-
-**`autoskeleton/skia`**
-
-```ts
-export { createSkiaOverlay, staggerDelayForIndex,
-         TIER2_SHIMMER_ORIGIN_MS, tier2PhaseAt };
-export type { SkiaModule, ReanimatedModule, Tier2Peers,
-              SkeletonOverlayComponent, SkeletonOverlayProps };
 ```
 
 **`autoskeleton/uniwind`**
@@ -164,7 +154,7 @@ web you theme through CSS custom properties or the `SkeletonProvider` theme.
 
 `isLoading`, `data`, `fallback` and the function child are identical in name
 and in behaviour on web and native. `AutoSkeletonSSR` does **not** have any of
-them; its fallback story is the captured manifest (§6).
+them; its fallback story is the captured manifest (§5).
 
 ### 2.1 `data`, and which prop decides "loading"
 
@@ -274,7 +264,7 @@ To get a skeleton on every load:
 
 `AutoSkeleton.Ignore` and `AutoSkeleton.Hint` exist on both platforms. There is
 **no** `AutoSkeleton.SSR` or `AutoSkeleton.SSRHydrate` — those are separate
-named exports from `autoskeleton/ssr` (§6).
+named exports from `autoskeleton/ssr` (§5).
 
 #### `<AutoSkeleton.Ignore>`
 
@@ -318,7 +308,7 @@ string for both:
 
 Optional. There is a module-level default store and theme, so a plain
 `<AutoSkeleton>` works with no provider at all. Use the provider to override a
-store (test isolation), a theme, the budgets, or to opt into tier-2.
+store (test isolation), a theme, or the budgets.
 
 | Prop | Type | Default | Platforms |
 |---|---|---|---|
@@ -341,7 +331,6 @@ contract, and it is accepted as a prop in exactly one place —
 | `handoffTimeoutMs` | `number` | `250` | all |
 | `handoffFadeMs` | `number` | `120` | all — **a delay, not a fade** |
 | `radiusFallbackShare` | `number` | `0.3` | **web only** |
-| `overlay` | `SkeletonOverlayComponent` | — | **native only** (tier-2 opt-in) |
 | `children` | `ReactNode` | — | all |
 
 Default theme:
@@ -423,51 +412,7 @@ from the bind path — that is the point of the API.
 
 ---
 
-## 5. Tier-2: `autoskeleton/skia`
-
-```tsx
-import * as Skia from '@shopify/react-native-skia';
-import {
-  Easing, cancelAnimation, useDerivedValue, useSharedValue,
-  withDelay, withRepeat, withSequence, withTiming,
-} from 'react-native-reanimated';
-import { SkeletonProvider } from 'autoskeleton';
-import { createSkiaOverlay } from 'autoskeleton/skia';
-
-// Call ONCE at module scope. A component identity that changes per render
-// remounts the whole Skia canvas.
-const overlay = createSkiaOverlay({
-  skia: Skia,
-  reanimated: {
-    useSharedValue, useDerivedValue, withRepeat, withTiming,
-    withSequence, withDelay, cancelAnimation, Easing,
-  },
-});
-
-<SkeletonProvider overlay={overlay}>…</SkeletonProvider>
-```
-
-`createSkiaOverlay(peers): SkeletonOverlayComponent`
-
-You pass the modules in rather than letting the library import them because
-Metro builds a **static** dependency graph. An import written in your file is
-resolved and bundled; an import the library only reaches conditionally either
-becomes a hard dependency for everyone or does not resolve at all. Installing
-the peers is deliberately **not** enough to turn tier-2 on — React Navigation
-requires Reanimated, so "you happen to have it installed" says nothing about
-which renderer you want.
-
-`onMetrics.renderer` reports `'skia'` under that provider and `'native'`
-elsewhere, so you can confirm which one drew.
-
-Also exported: `staggerDelayForIndex` (**not wired** — see
-[`platform-support.md` §5j](./platform-support.md)), `TIER2_SHIMMER_ORIGIN_MS`
-and `tier2PhaseAt` (the tier-2 phase origin; see §5i there for why it is not
-tier-1's).
-
----
-
-## 6. Server rendering: `autoskeleton/ssr`
+## 5. Server rendering: `autoskeleton/ssr`
 
 The components are named exports, **not** statics on `AutoSkeleton`.
 
@@ -521,7 +466,7 @@ build-token binding.
 
 ---
 
-## 7. Theming interop: `autoskeleton/uniwind` — **native only**
+## 6. Theming interop: `autoskeleton/uniwind` — **native only**
 
 ```tsx
 import { ThemedAutoSkeleton } from 'autoskeleton/uniwind';
@@ -534,7 +479,7 @@ props. See [`theming.md`](./theming.md).
 
 ---
 
-## 8. Types
+## 7. Types
 
 `SkeletonMetrics` is the payload of `onMetrics`:
 
@@ -563,6 +508,10 @@ Supporting unions:
 
 ```ts
 type AnimationKind   = 'shimmer' | 'pulse' | 'none';
+// `'skia'` is retained but can no longer occur: the tier-2 renderer it named
+// was removed. It stays in the union because `onMetrics.renderer` is public
+// telemetry — a consumer switching on it keeps compiling — and a dead member
+// is cheaper than a breaking type change.
 type RendererKind    = 'native' | 'skia' | 'css';
 type Platform        = 'ios' | 'android' | 'web';
 type RadiusSource    = 'measured' | 'outline' | 'raster-probe' | 'hint' | 'default'
@@ -609,7 +558,7 @@ const exact = Object.entries(m.radiusSourceHistogram)
 
 ---
 
-## 9. The composite cache key
+## 8. The composite cache key
 
 You never build this yourself, but knowing what is in it explains every cache
 miss you will see:

@@ -11,8 +11,7 @@ For contributors. If you are *using* the library, you want
 src/core/      platform-free logic: cache keys, wire format, handoff,
                metrics, line synthesis, hint registry. Zero platform imports.
 src/web/       DOM sensor, CSS renderer, debug overlay, SSR components.
-src/native/    Turbo Module bridge, native sensor adapter, list API,
-               tier-2 Skia renderer.
+src/native/    Turbo Module bridge, native sensor adapter, list API.
 src/interop/   optional theming interops (uniwind).
 src/index*.ts  one entry file per platform condition. See below.
 ios/ android/  the native sensor, renderer, shape cache and observability.
@@ -36,7 +35,7 @@ extension search is (1) `.web.js`, (2) `.native.js`, (3) bare `.js`. That is
 why there are three files:
 
 - `src/index.web.ts` — the actual web resolution mechanism. Imports only
-  `src/web/**` and `src/core/**`; **zero** `react-native`, Skia or Reanimated
+  `src/web/**` and `src/core/**`; **zero** `react-native`
   specifiers anywhere in its transitive graph.
 - `src/index.native.ts` — iOS and Android.
 - `src/index.ts` — exists only so a filename-preserving build emits
@@ -169,7 +168,7 @@ tar -tzf .tarball/autoskeleton-0.1.0.tgz | grep <file>
 
 | App | Proves |
 |---|---|
-| `examples/bare-rn` | Bare RN is a co-equal target: `@react-native-community/cli` autolinking, the on-device paint gates, tier-2 Skia opt-in, the full platform-neutral demo gallery, and a real `@shopify/flash-list` for cell recycling. |
+| `examples/bare-rn` | Bare RN is a co-equal target: `@react-native-community/cli` autolinking, the on-device paint gates, the full platform-neutral demo gallery, and a real `@shopify/flash-list` for cell recycling. |
 | `examples/expo` | Expo autolinking, the `autoskeleton/uniwind` interop (native-only, so it has the split `App.web.tsx`), the `expo-image` handoff, and the Expo Web export. |
 | `examples/next` | The SSR path end to end, including the capture CLI's ergonomic cost at more than toy scale. |
 | `examples/vite` | An ordinary web SPA consuming the published web entry, and the Tailwind v4 theming path against a real production build. |
@@ -206,9 +205,6 @@ harness, which is why `playwright.yml` installs them:
 
 Flagged so nobody re-derives them as facts:
 
-- **NFR-1's tier-2 120 Hz target is not measured.** `benchmarks.yml`'s
-  `bench-ios-traversal` job is marked "AUTHORED ONLY" in its own header and the
-  frame-drop job that exists is Android.
 - **The native build matrix now BUILDS the range it expresses.**
   `native-matrix.yml` carries `genuine-app-android-matrix` and
   `genuine-app-ios-matrix` scaffolding a real app per minor from 0.78.3 to

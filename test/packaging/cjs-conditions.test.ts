@@ -62,7 +62,7 @@ function nearestPackageType(absFile: string): 'module' | 'commonjs' {
 /** Every subpath a consumer can `require`, with the condition set Node would
  *  activate for a plain CommonJS caller on the server (no bundler, so neither
  *  `browser` nor `react-native` is asserted). */
-const REQUIRE_SUBPATHS = ['.', './skia', './ssr', './uniwind'] as const;
+const REQUIRE_SUBPATHS = ['.', './ssr', './uniwind'] as const;
 
 describe('CommonJS consumers can reach the CommonJS build', () => {
   it.each(REQUIRE_SUBPATHS)(

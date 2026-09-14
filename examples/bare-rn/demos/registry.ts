@@ -30,7 +30,6 @@ import { MetricsDemo } from './MetricsDemo';
 import { MotionDemo } from './MotionDemo';
 import { RefreshDemo } from './RefreshDemo';
 import { ScrollClipDemo } from './ScrollClipDemo';
-import { SkiaDemo } from './SkiaDemo';
 import { TextDemo } from './TextDemo';
 import { ThemingDemo } from './ThemingDemo';
 
@@ -45,8 +44,7 @@ export type GroupId =
   | 'lists'
   | 'theming'
   | 'diagnostics'
-  | 'server'
-  | 'tier2';
+  | 'server';
 
 export interface DemoGroup {
   readonly id: GroupId;
@@ -102,11 +100,6 @@ export const GROUPS: readonly DemoGroup[] = [
     id: 'server',
     title: 'Server rendering',
     blurb: 'Geometry captured at build time and replayed as a Suspense fallback.',
-  },
-  {
-    id: 'tier2',
-    title: 'Tier 2 (opt-in)',
-    blurb: 'The upgrade path, not the default.',
   },
 ];
 
@@ -241,14 +234,6 @@ export const DEMOS: readonly DemoEntry[] = [
     source: 'demos/MetricsDemo.tsx',
     group: 'diagnostics',
     component: MetricsDemo,
-  },
-  {
-    id: 'skia',
-    title: 'Tier 2 — Skia',
-    summary: 'The opt-in upgrade, wired the way a consumer wires it. Two instances, one shared clock.',
-    source: 'demos/SkiaDemo.tsx',
-    group: 'tier2',
-    component: SkiaDemo,
   },
 ];
 

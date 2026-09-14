@@ -85,7 +85,7 @@ theme through CSS custom properties / Tailwind v4 `@theme` tokens on web. See
 ## The debug overlay is blank
 
 **`debugOverlay` only draws on web.** On iOS and Android the prop is accepted,
-stored, and never read. Under the tier-2 Skia renderer it is not even
+stored, and never read.
 forwarded. This is our gap, not your configuration — see
 [`platform-support.md` §5b](./platform-support.md).
 
@@ -266,41 +266,6 @@ three platforms.
 `handoffFadeMs` is a **removal delay**, not a fade. Nothing animates opacity on
 teardown. Raising it keeps a fully opaque skeleton on screen for longer. The
 name survived a cross-fade design that was never built.
-
----
-
-## Tier-2 (Skia) does not draw / `onMetrics.renderer` says `'native'`
-
-Installing `@shopify/react-native-skia` and `react-native-reanimated` is
-deliberately **not enough**. Tier-2 is opt-in by an explicit act: you build the
-overlay in your own module graph and hand it to the provider.
-
-```tsx
-const overlay = createSkiaOverlay({ skia: Skia, reanimated: { … } });
-<SkeletonProvider overlay={overlay}>…</SkeletonProvider>
-```
-
-Reasons, both real: React Navigation requires Reanimated, so "installed"
-says nothing about intent; and Metro's dependency graph is static, so a
-conditional `require()` inside the library is rewritten into a function that
-throws `Dynamic require … not supported by Metro`, which an earlier
-auto-detection probe silently swallowed into "peer absent". That was observed
-on a real device: an app with both peers installed, pods built and linked,
-reported `renderer: 'native'`.
-
-Also check that Reanimated's Babel plugin is **last** in `babel.config.js`.
-
-## Tier-1 and tier-2 skeletons are out of phase with each other
-
-Expected, and not fixable from your side. Both tiers share one shimmer
-*period*; they do not share a phase *origin*. Tier-1 reads the native shimmer
-clock's `startedAt`; tier-2 runs in JS and has no route to that value, so it
-uses its own module-scope origin. Tier-2 instances are in phase with each
-other, tier-1 instances with each other, and the two groups sit at an arbitrary
-fixed offset. See [`platform-support.md` §5i](./platform-support.md).
-
-Per-shape stagger is not implemented on either tier, despite
-`staggerDelayForIndex` being exported and unit-tested.
 
 ---
 

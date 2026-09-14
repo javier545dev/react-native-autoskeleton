@@ -73,7 +73,7 @@ effectiveAnimation(animation, reducedMotion)
 | `pulse` | `pulse` | `pulse` |
 | `none` | `none` | `none` |
 
-`none` staying `none` is not a detail. Tier-1 previously collapsed all three
+`none` staying `none` is not a detail. The renderer previously collapsed all three
 values into `reducedMotion || animation === 'none'`, so the one value whose
 whole meaning is "do not animate" was the one value guaranteed an animation.
 
@@ -125,11 +125,10 @@ storybook, a preview:
 |---|---|
 | Web CSS | `.askl-anim-shimmer` / `-pulse` / `-none` classes on the overlay, one shared stylesheet, one `@keyframes` pair. The pulse targets `.askl-shimmer-layer` (the element that actually carries the highlight gradient), whose `left:-50%; width:200%` box puts the gradient's 50% stop exactly at the overlay's centre with no transform applied. |
 | Web SSR bundle | A `@media (prefers-reduced-motion: reduce)` block swapping the sweep for the same `askl-pulse` keyframes and the same `--askl-speed` property. |
-| Native tier-1 (iOS) | `CABasicAnimation`. Shimmer translates the gradient layer with `beginTime` derived from the shared clock's absolute origin; pulse parks it at `width / 2` and animates `opacity` with `autoreverses`; `none` sets the gradient's opacity to 0. |
-| Native tier-1 (Android) | Draws every frame itself from the shared clock's phase: the highlight's x-offset is `w / 2` under pulse and a swept value under shimmer, and its alpha is a raised cosine between `153` (= 0.6 × 255) and `255`. |
-| Tier-2 (Skia + Reanimated) | One `useDerivedValue` driving the union path's gradient; `withRepeat`/`withTiming` for the breath. It now receives the `animation` prop — previously it received only `reducedMotion`, so an explicit `animation="none"` reached it as a full shimmer. |
+| Native (iOS) | `CABasicAnimation`. Shimmer translates the gradient layer with `beginTime` derived from the shared clock's absolute origin; pulse parks it at `width / 2` and animates `opacity` with `autoreverses`; `none` sets the gradient's opacity to 0. |
+| Native (Android) | Draws every frame itself from the shared clock's phase: the highlight's x-offset is `w / 2` under pulse and a swept value under shimmer, and its alpha is a raised cosine between `153` (= 0.6 × 255) and `255`. |
 
-A zero or negative `speedMs` cannot express any animation, so tier-2 resolves
+A zero or negative `speedMs` cannot express any animation, so the renderer resolves
 it to `'none'` rather than dividing by zero.
 
 `speedMs` (the `SkeletonProvider` theme's shimmer period, default `1400`) is
@@ -158,14 +157,6 @@ but it does not read the theme's `speedMs` either.
 
 This only affects the window before an `itemType` has been measured, and never
 affects `<AutoSkeleton>`. Stated here rather than left to be discovered.
-
-**Tier-1 and tier-2 do not share a phase origin**, so mixing renderers on one
-screen gives you two groups running at the same speed with a fixed offset
-between them. See
-[`platform-support.md` §5i](./platform-support.md).
-
-**Per-shape stagger is not implemented** on either tier, despite
-`staggerDelayForIndex` being exported from `autoskeleton/skia` and unit-tested.
 
 ---
 

@@ -19,7 +19,6 @@ export type { AutoSkeletonProps, SkeletonProviderProps } from './native/AutoSkel
 /** ADR-5 tier-2 opt-in contract. The TYPES live here so a consumer can name
  *  them without importing `autoskeleton/skia`; the implementation, and the
  *  optional peers it needs, live only in that subpath. */
-export type { SkeletonOverlayComponent, SkeletonOverlayProps } from './native/overlayContract';
 export {
   AutoskeletonNativeModuleUnavailableError,
   AUTOSKELETON_NATIVE_MODULE_UNAVAILABLE_DOCS_URL,
