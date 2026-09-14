@@ -673,6 +673,12 @@ function usePaintDetectionHeuristic(
   }, [phase, controller, wrapperRef, expectsSuccessor]);
 }
 
+/** Module constants, not inline objects: an inline style literal is a new
+ *  object every render, which React treats as a changed prop and re-applies to
+ *  the DOM node each time. */
+const WRAPPER_STYLE: React.CSSProperties = { position: 'relative' };
+const WRAPPER_MEASURING_STYLE: React.CSSProperties = { position: 'relative', opacity: 0 };
+
 export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JSX.Element {
   const ctx = useContext(SkeletonContext);
   const theme = ctx.theme;
@@ -904,6 +910,27 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
   // and "there is nothing measured to paint instead".
   const showFallback = props.fallback !== undefined && showSkeleton && noUsableGeometry;
 
+  /** The cold-miss window, and the same fix native carries — see
+   *  `native/AutoSkeleton.tsx`'s `contentHiddenWhileMeasuring` for the full
+   *  account and `test/native/mount-order.test.ts` for the step-by-step
+   *  sequence it removes.
+   *
+   *  This cycle WILL paint a skeleton but has no geometry yet, so the live
+   *  content sits fully visible for the frames it takes to measure it. The
+   *  content cannot be unmounted — the sensor measures the REAL DOM — but it
+   *  can be unseen.
+   *
+   *  `opacity` does NOT inherit in CSS, so a descendant of a transparent
+   *  wrapper still computes its own `opacity: 1`. `dom-sensor.ts`'s skip is
+   *  per-LEAF and reads that computed value, and its own comment already
+   *  records the consequence: "an `opacity: 0` CONTAINER still has its
+   *  descendants shaped". So the wrapper can be hidden here without the
+   *  root-exemption the native sensors needed for the same trick.
+   *
+   *  `!showFallback` because a consumer who supplied one asked for something
+   *  specific to be on screen in exactly this window. */
+  const contentHiddenWhileMeasuring = showSkeleton && noUsableGeometry && !showFallback;
+
   // ADR-16 reveal-before-hide: `props.children` is ALWAYS mounted (never
   // `display:none`) so it is already painted underneath the still-visible
   // overlay by the time the overlay is removed — there is no instant where
@@ -931,8 +958,12 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
   // above. `|| overlayVisible` covers the handoff tail, where `isLoading` has
   // already flipped false but the transition is not finished.
   return (
-    <div ref={wrapperRef} aria-busy={isLoading || overlayVisible ? true : undefined} style={{ position: 'relative' }}>
-      <div aria-hidden={overlayVisible ? true : undefined} style={{ display: 'contents' }}>
+    <div
+      ref={wrapperRef}
+      aria-busy={isLoading || overlayVisible ? true : undefined}
+      style={contentHiddenWhileMeasuring ? WRAPPER_MEASURING_STYLE : WRAPPER_STYLE}
+    >
+      <div aria-hidden={overlayVisible || contentHiddenWhileMeasuring ? true : undefined} style={{ display: 'contents' }}>
         {children}
       </div>
       {/* The fallback is IN FLOW, not in the absolutely-positioned overlay

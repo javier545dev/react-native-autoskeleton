@@ -91,9 +91,16 @@ describe('<AutoSkeleton> — what is on screen while a cold skeleton mounts', ()
 
     const overlays = (): number => tree.root.findAllByType('AutoskeletonOverlayView').length;
     const contents = (): number => tree.root.findAllByType('Text').length;
-    const timeline: Array<{ step: string; content: number; skeleton: number }> = [];
+    // The wrapper's resolved opacity: 0 means the content is mounted (so it can
+    // be measured) but not shown.
+    const wrapperOpacity = (): number => {
+      const style = tree.root.findAllByType('View')[0]?.props.style;
+      const flat = (Array.isArray(style) ? style : [style]).filter(Boolean) as Array<Record<string, unknown>>;
+      return flat.reduce((acc, s) => (typeof s.opacity === 'number' ? s.opacity : acc), 1);
+    };
+    const timeline: Array<{ step: string; content: number; skeleton: number; opacity: number }> = [];
     const record = (step: string): void => {
-      timeline.push({ step, content: contents(), skeleton: overlays() });
+      timeline.push({ step, content: contents(), skeleton: overlays(), opacity: wrapperOpacity() });
     };
 
     act(() => {
@@ -127,12 +134,22 @@ describe('<AutoSkeleton> — what is on screen while a cold skeleton mounts', ()
     // and the sensor could not measure anything otherwise.
     expect(timeline.every((t) => t.content === 1)).toBe(true);
 
-    // THE DEFECT, stated plainly: two of the three steps have live content on
-    // screen with no skeleton over it.
+    // Two of the three steps have no skeleton yet — that part is forced by the
+    // measurement order and cannot be removed.
     expect(timeline[0]!.skeleton).toBe(0);
     expect(timeline[1]!.skeleton).toBe(0);
     // Only the traversal's own result brings the skeleton in.
     expect(timeline[2]!.skeleton).toBe(1);
+
+    // THE FIX: what CAN be removed is the content being SEEN during those
+    // steps. It stays mounted, because the sensor has to measure it, but the
+    // wrapper is transparent until there is a skeleton to show instead. Both
+    // native sensors exempt the ROOT from their hidden/transparent skip
+    // precisely so this is measurable while invisible.
+    expect(timeline[0]!.opacity).toBe(0);
+    expect(timeline[1]!.opacity).toBe(0);
+    // ...and it comes back the moment the skeleton is up.
+    expect(timeline[2]!.opacity).toBe(1);
 
     tree.unmount();
   });

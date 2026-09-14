@@ -415,4 +415,53 @@ class AutoskeletonSensorTest {
         )
         assertEquals(1, result.shapes.size)
     }
+
+    // MARK: - A transparent ROOT is still measurable
+
+    /** The hidden/transparent skip exists to keep incidental platform subviews
+     *  (a `ScrollView`'s indicators, which start hidden) out of the traversal.
+     *  It must not apply to the ROOT, because the root is not something the
+     *  sensor stumbled upon — it is the exact tree JS asked it to measure.
+     *
+     *  This is what lets a consumer hide the content WHILE it is measured,
+     *  which is the only way to stop the live content being on screen for the
+     *  frames before the skeleton exists (`test/native/mount-order.test.ts`
+     *  pins that sequence). Hiding it was previously self-defeating: the
+     *  traversal started at that same wrapper and refused it.
+     *
+     *  Web already behaves this way — `dom-sensor.ts` checks opacity per LEAF
+     *  and its comment records that "an `opacity: 0` CONTAINER still has its
+     *  descendants shaped" — so this also closes a platform divergence. */
+    @Test
+    fun aTransparentRootIsStillMeasured() {
+        val context = RuntimeEnvironment.getApplication()
+        val root = FrameLayout(context)
+        val child = FrameLayout(context)
+        root.addView(child)
+        BackgroundStyleApplicator.setBackgroundColor(child, Color.RED)
+        root.layout(0, 0, 200, 200)
+        child.layout(0, 0, 200, 200)
+        root.alpha = 0f
+
+        val result = AutoskeletonSensor().measure(root, AutoskeletonSensorOptions.defaults.copy(budgetMs = 1000.0))!!
+        assertEquals(1, result.shapes.size)
+    }
+
+    /** Anti-vacuity, and the other half of the rule: the exemption is for the
+     *  root ONLY. A transparent DESCENDANT contributes no visible pixels and
+     *  must still contribute no shape, or the skip would be gone entirely. */
+    @Test
+    fun aTransparentDescendantIsStillSkipped() {
+        val context = RuntimeEnvironment.getApplication()
+        val root = FrameLayout(context)
+        val child = FrameLayout(context)
+        root.addView(child)
+        BackgroundStyleApplicator.setBackgroundColor(child, Color.RED)
+        root.layout(0, 0, 200, 200)
+        child.layout(0, 0, 200, 200)
+        child.alpha = 0f
+
+        val result = AutoskeletonSensor().measure(root, AutoskeletonSensorOptions.defaults.copy(budgetMs = 1000.0))!!
+        assertEquals(0, result.shapes.size)
+    }
 }

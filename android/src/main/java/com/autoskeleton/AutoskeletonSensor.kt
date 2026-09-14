@@ -178,7 +178,26 @@ class AutoskeletonSensor(
         }
         // A hidden/transparent view contributes no visible pixels, so it must not
         // contribute a skeleton shape either.
-        if (view.visibility != View.VISIBLE || view.alpha <= 0.01f) {
+        //
+        // `depth > 0` — the ROOT is exempt, deliberately. This skip exists to
+        // keep incidental platform subviews out of the traversal (a
+        // `ScrollView`'s indicators start hidden), and the root is not
+        // something the sensor stumbled upon: it is the exact tree JS asked it
+        // to measure. Refusing it because the caller made it transparent is the
+        // sensor declining the job it was given.
+        //
+        // That exemption is what lets a consumer hide the content WHILE it is
+        // measured, which is the only way to keep live content off screen for
+        // the frames before the skeleton exists — see
+        // `test/native/mount-order.test.ts` for the sequence that made this
+        // necessary. Hiding it used to be self-defeating: the traversal starts
+        // at that same wrapper and refused it.
+        //
+        // Web already behaves this way. `dom-sensor.ts` checks opacity per LEAF
+        // and records that "an `opacity: 0` CONTAINER still has its descendants
+        // shaped", so this closes a platform divergence rather than creating
+        // one.
+        if (depth > 0 && (view.visibility != View.VISIBLE || view.alpha <= 0.01f)) {
             return emptyList()
         }
         if (ctx.overBudget()) {

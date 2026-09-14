@@ -157,7 +157,19 @@ final class AutoskeletonSensor {
         // implementation-detail subviews (e.g. `UIScrollView`'s indicator views,
         // which start hidden/zero-alpha) out of the traversal without the sensor
         // needing to know their (private) class names.
-        if view.isHidden || view.alpha <= 0.01 {
+        // `depth > 0` — the ROOT is exempt, deliberately. This skip exists to
+        // keep incidental UIKit subviews out of the traversal, and the root is
+        // not something the sensor stumbled upon: it is the exact tree JS asked
+        // it to measure. Refusing it because the caller made it transparent is
+        // the sensor declining the job it was given.
+        //
+        // That exemption is what lets a consumer hide the content WHILE it is
+        // measured, which is the only way to keep live content off screen for
+        // the frames before the skeleton exists — see
+        // `test/native/mount-order.test.ts`. Web already behaves this way
+        // (`dom-sensor.ts` checks opacity per LEAF), so this closes a platform
+        // divergence rather than creating one.
+        if depth > 0, view.isHidden || view.alpha <= 0.01 {
             return []
         }
         if ctx.overBudget() {

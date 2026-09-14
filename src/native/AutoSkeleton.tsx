@@ -711,6 +711,32 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
   // construction rather than by luck.
   const showFallback = props.fallback !== undefined && showSkeleton && noUsableGeometry;
 
+  /** The cold-miss window: this cycle WILL paint a skeleton, but the traversal
+   *  has not returned geometry yet, so there is nothing to paint. The content
+   *  underneath is fully laid out and visible, and stays that way for the
+   *  frames it takes to measure it — a device recording put that at ~150ms of
+   *  live content before the loader, and `test/native/mount-order.test.ts`
+   *  pins the step-by-step sequence.
+   *
+   *  It cannot be fixed by not mounting the content: the sensor measures the
+   *  REAL view tree, so the content has to exist and be laid out before there
+   *  is anything to measure. What it CAN be fixed by is not SHOWING it. The
+   *  wrapper goes transparent — mounted, measurable, unseen — and comes back
+   *  the instant there is a skeleton to show instead.
+   *
+   *  This is only possible because both native sensors exempt the ROOT from
+   *  their hidden/transparent skip (`AutoskeletonSensorRootVisibilityTests`,
+   *  `AutoskeletonSensorTest.aTransparentRootIsStillMeasured`). Before that,
+   *  hiding the wrapper also stopped it being measured, so the state could
+   *  never resolve.
+   *
+   *  `!showFallback` because a consumer who supplied a `fallback` asked for
+   *  something specific to be on screen in exactly this window; hiding the
+   *  wrapper would hide that too. With no fallback the choice is between the
+   *  live content and nothing, and nothing is the honest one — the content is
+   *  not ready to be read, it is about to be covered. */
+  const contentHiddenWhileMeasuring = showSkeleton && noUsableGeometry && !showFallback;
+
   // ADR-16 reveal-before-hide: children are ALWAYS mounted underneath the
   // still-painted overlay.
   //
@@ -751,9 +777,11 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
         ref={viewRef}
         onLayout={onLayout}
         collapsable={false}
-        accessibilityElementsHidden={overlayVisible}
-        importantForAccessibility={overlayVisible ? 'no-hide-descendants' : 'auto'}
-        style={styles.wrapper}
+        accessibilityElementsHidden={overlayVisible || contentHiddenWhileMeasuring}
+        importantForAccessibility={
+          overlayVisible || contentHiddenWhileMeasuring ? 'no-hide-descendants' : 'auto'
+        }
+        style={contentHiddenWhileMeasuring ? styles.wrapperMeasuring : styles.wrapper}
       >
         {children}
         {/* IN FLOW, above the absolutely-positioned overlays below: on a cold
@@ -881,7 +909,15 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
        *  painted — a screen-reader user would get silence in front of a visible
        *  placeholder. `showFallback` is false whenever the prop is omitted, so
        *  no existing tree changes. */}
-      {(overlayVisible || showFallback) && (
+      {/* `|| contentHiddenWhileMeasuring`: hiding the content from the
+       *  accessibility tree without announcing why leaves a screen-reader user
+       *  with neither the content nor a loading state — a silent gap for the
+       *  frames the traversal takes. `AccessibilityGateInstrumentedTest` caught
+       *  exactly that when the visual fix landed without this line: it found
+       *  the content correctly absent but its own "Loading" control node
+       *  missing from the same tree. Whatever hides the content owes the
+       *  announcement. */}
+      {(overlayVisible || showFallback || contentHiddenWhileMeasuring) && (
         <View
           accessible
           accessibilityLabel={LOADING_ACCESSIBILITY_LABEL}
@@ -896,6 +932,11 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
 
 const styles = StyleSheet.create({
   wrapper: { position: 'relative' },
+  /** `wrapper`, plus invisible. A separate entry rather than an inline array so
+   *  the style object identity stays stable across renders — an inline
+   *  `[styles.wrapper, { opacity: 0 }]` allocates a new array every render and
+   *  re-sends the prop across the bridge each time. */
+  wrapperMeasuring: { position: 'relative', opacity: 0 },
   loadingStatus: { position: 'absolute', width: 1, height: 1 },
 });
 
