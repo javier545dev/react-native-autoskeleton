@@ -173,3 +173,26 @@ export class MemoryShapeStore implements ShapeStore {
     };
   }
 }
+
+/** Whether two snapshots describe the SAME geometry.
+ *
+ *  Used to decide if a revalidating traversal found anything worth repainting.
+ *  The wire buffer IS the geometry, so this compares buffers element-wise
+ *  rather than snapshot identity (which always differs — every traversal
+ *  builds a new object) or `capturedAt` (which always differs too, and is not
+ *  geometry). The frame is compared as well: the same shapes inside a
+ *  differently-sized wrapper is a different skeleton. */
+export function sameGeometry(a: ShapeSnapshot, b: ShapeSnapshot): boolean {
+  if (a.frameWidth !== b.frameWidth || a.frameHeight !== b.frameHeight) {
+    return false;
+  }
+  if (a.data.length !== b.data.length) {
+    return false;
+  }
+  for (let i = 0; i < a.data.length; i++) {
+    if (a.data[i] !== b.data[i]) {
+      return false;
+    }
+  }
+  return true;
+}

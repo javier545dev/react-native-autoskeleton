@@ -64,7 +64,7 @@ import type { SkeletonLoadingSource } from '../core/data-props';
 import { createHandoffController, type HandoffController } from '../core/handoff';
 import { assembleMetrics } from '../core/metrics';
 import { shouldRunHandoffCycle } from '../core/refresh-gate';
-import { isEmptySnapshot, MAX_EMPTY_MEASUREMENTS, MemoryShapeStore } from '../core/snapshot';
+import { isEmptySnapshot, MAX_EMPTY_MEASUREMENTS, MemoryShapeStore, sameGeometry } from '../core/snapshot';
 import { createHintRegistry, snapshotHintEntries } from '../core/hint-registry';
 import { resolveSharedShimmerPeriodMs } from '../core/shimmer-period';
 import { applyThemeOverride } from '../core/theme-override';
@@ -601,8 +601,47 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
     ctx.store.emptyMeasurementsFor(cacheKey) < MAX_EMPTY_MEASUREMENTS;
   const cacheHitForCycle = cacheHit && !remeasureEmpty;
 
+  /** Re-measure ONCE per loading cycle even when the cache answered, and
+   *  repaint only if the answer changed.
+   *
+   *  `composeCacheKey` covers what the PLATFORM can change underneath a
+   *  consumer — width bucket, font scale, direction — so rotating or bumping
+   *  the system text size already misses the cache and re-measures. Nothing in
+   *  it describes the consumer's own CONTENT. A list that paginates, a detail
+   *  screen whose second load carries more text, a card that gains a row: same
+   *  key, genuinely different layout, and the second cycle was served the
+   *  first one's geometry. `test/native/stale-geometry.test.ts` pins that.
+   *
+   *  `Sensor.observe()` exists for this, with `'mutation'` among its
+   *  `InvalidationReason`s, and has no call site on either platform. Wiring a
+   *  real mutation observer into native is a much larger change than this, and
+   *  would still only tell us the tree moved — this asks the question the
+   *  sensor is for, once, at the only moment the answer matters.
+   *
+   *  It costs one extra traversal per cycle (~0.3ms measured) and buys back
+   *  nothing that mattered: the cache's job is the FIRST FRAME, and that is
+   *  untouched — the cached snapshot still paints immediately, this runs after
+   *  it. When the geometry is unchanged, which is the common case, the repaint
+   *  is skipped entirely by the equality check in `onMeasured` below, so the
+   *  shimmer is never interrupted for nothing.
+   *
+   *  NATIVE ONLY, and this one is an open gap rather than a settled split. Web
+   *  has the same defect and the same fix applies, but it collides with a
+   *  guarantee web makes and native does not: `test/web/ssr-hydrate.spec.ts`
+   *  asserts that a snapshot replayed from a build-time capture is served with
+   *  ZERO traversal, and a per-cycle revalidation adds one. Closing it properly
+   *  means distinguishing a snapshot the sensor measured from one a capture
+   *  supplied — the latter is authoritative for its build and should not be
+   *  second-guessed — which is a change to the snapshot's own shape, not to
+   *  this gate. It also measured +23 gzip bytes against NFR-6, which is the
+   *  smaller of the two problems. Left undone deliberately, and visible here
+   *  rather than in a backlog. */
+  const revalidatedCycleRef = useRef<number | null>(null);
+  const shouldRevalidate =
+    snapshot !== null && !noUsableGeometry && revalidatedCycleRef.current !== cycleId;
+
   const { viewRef, onLayout, layout } = useColdMeasurement(
-    showSkeleton && (snapshot === null || remeasureEmpty) && !nativeUnavailable,
+    showSkeleton && (snapshot === null || remeasureEmpty || shouldRevalidate) && !nativeUnavailable,
     cacheKey,
     cycleId,
     ctx.budgetMs,
@@ -611,6 +650,15 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
     ctx.store,
     platform,
     (measured, traversalMs) => {
+      revalidatedCycleRef.current = cycleId;
+      // A revalidation that found the same geometry must change NOTHING: no
+      // state write, no re-render, no repaint of an overlay that is already
+      // correct. Comparing the wire buffers is the whole test — they are the
+      // geometry, and `Float32Array` compares element-wise here rather than by
+      // identity, which a snapshot object would not.
+      if (snapshot !== null && sameGeometry(snapshot, measured)) {
+        return;
+      }
       traversalMsRef.current = traversalMs;
       setColdSnapshot({ key: cacheKey, snapshot: measured });
     },
