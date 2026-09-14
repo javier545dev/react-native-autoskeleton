@@ -64,6 +64,47 @@ export { MemoryShapeStore } from './core/snapshot';
 export type { MemoryShapeStoreOptions } from './core/snapshot';
 export type { ShapeStore } from './core/contracts';
 
+// PRELOADED GEOMETRY — the only way to have a skeleton in the FIRST frame.
+//
+// A cold key cannot be measured in time, and that is physics, not a defect:
+// the sensor measures the real view tree, so the tree must be mounted and laid
+// out before there is anything to measure. `test/native/mount-order.test.ts`
+// pins the resulting sequence. The library covers that window with a neutral
+// block that resolves into the measured shapes, which makes it look right —
+// but the only way to REMOVE it is to already have the geometry.
+//
+// So: measure once, `exportShapeStore` the result, persist it however this app
+// already persists things (MMKV, AsyncStorage, a checked-in JSON file), and
+// `importIntoShapeStore` it into a store handed to `SkeletonProvider` before
+// the first render. Cache hit on the first commit, no cold window at all —
+// `test/native/preloaded-geometry.test.ts` proves exactly that round trip.
+//
+// The import is SYNCHRONOUS on purpose, and that is what makes this work where
+// a `hydrate()` on the store would not: geometry that arrives a tick late has
+// already missed the frame it was needed for.
+//
+// NATIVE ONLY, and not an oversight. Web already has a preloaded-geometry
+// path — `AutoSkeleton.SSR` replays a build-time manifest captured by this
+// package's own CLI, which is strictly better there because it also fixes the
+// server render. Native had nothing. Exporting the same two functions from the
+// web entry as well measured +302 gzip bytes against 79 bytes of NFR-6
+// headroom, to duplicate a capability web already has in a better form and to
+// shorten a window that is one frame there (its traversal runs synchronously
+// inside the measurement effect, unlike Fabric's mounting-phase round trip).
+// Each platform gets the mechanism that fits it; that is not the same thing as
+// one platform missing an API.
+//
+// THE TRAP, stated plainly: persisted geometry outlives the layout it
+// describes. Ship a build that changes a card's padding and the stored
+// snapshot will paint a confidently WRONG skeleton instantly — worse than the
+// neutral block, because it looks deliberate. Key whatever is persisted by
+// something that changes with the UI (app build number is the blunt, correct
+// choice) and drop it on mismatch. The library cannot do this for you: it has
+// no idea which of its consumers' layouts changed.
+export { exportShapeStore, importIntoShapeStore } from './core/snapshot-io';
+export type { SerializedShapeSnapshot } from './core/types';
+export type { ImportReport } from './core/contracts';
+
 // Cross-platform radius telemetry. The same rounded view reports `measured` on
 // iOS and web but `style` on Android — all three exact, different rungs — so a
 // consumer aggregating the histogram needs this predicate rather than a single
