@@ -219,11 +219,26 @@ test.describe('`fallback` — the cold-miss answer', () => {
     await expect(page.locator('[role="status"]')).toContainText('Loading');
   });
 
-  test('with the prop omitted, the wrapper renders exactly the nodes it did before', async ({ page }) => {
-    // The hard constraint of this change. The gate is `props.fallback !==
-    // undefined` FIRST, so with the prop absent the extra JSX slot evaluates
-    // to `false` and React mounts no node at all — this asserts that, rather
-    // than trusting it.
+  test('with the prop omitted, the neutral placeholder stands in until geometry exists', async ({ page }) => {
+    // REVISED, deliberately. This used to assert that omitting `fallback` left
+    // the tree byte-for-byte as it was before `fallback` existed — two
+    // children, one ignore-marked. That constraint belonged to the change that
+    // INTRODUCED `fallback`, whose whole point was to add nothing for anyone
+    // who did not ask for it.
+    //
+    // A later change does ask for something here: with the live content no
+    // longer showing through during the cold-miss window, that window would
+    // otherwise be blank, so a neutral placeholder rides the same lane. It is
+    // gated on `noUsableGeometry`, so it exists only while there is no measured
+    // geometry, and it is ignore-marked for the same reason the fallback is —
+    // the cold traversal runs in exactly this window and must not measure the
+    // library's own placeholder.
+    //
+    // In THIS fixture the children render nothing while loading, so geometry
+    // never arrives and the placeholder stays. That is the documented
+    // conditional-children hole, and the placeholder is `inset: 0` over a
+    // zero-height wrapper there, so it is a node without a pixel: the tree
+    // gains an element, the screen does not change.
     await mount(page, { initialData: null, withFallback: false });
 
     const shape = await page.evaluate(() => {
@@ -232,12 +247,15 @@ test.describe('`fallback` — the cold-miss answer', () => {
         childCount: wrapper.children.length,
         ignoreMarked: wrapper.querySelectorAll('[data-autoskeleton-ignore]').length,
         roles: Array.from(wrapper.children, (c) => c.getAttribute('role')),
+        measuring: wrapper.querySelectorAll('[data-askl-measuring]').length,
       };
     });
-    // Content wrapper + overlay host, and the overlay host is the ONE
-    // ignore-marked node — exactly the pre-change tree.
-    expect(shape.childCount).toBe(2);
-    expect(shape.ignoreMarked).toBe(1);
-    expect(shape.roles).toEqual([null, 'status']);
+    // Content wrapper + placeholder + overlay host.
+    expect(shape.childCount).toBe(3);
+    expect(shape.measuring).toBe(1);
+    // Both the placeholder and the overlay host are ignore-marked; the content
+    // wrapper is not.
+    expect(shape.ignoreMarked).toBe(2);
+    expect(shape.roles).toEqual([null, null, 'status']);
   });
 });

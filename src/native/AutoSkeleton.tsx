@@ -720,22 +720,19 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
    *
    *  It cannot be fixed by not mounting the content: the sensor measures the
    *  REAL view tree, so the content has to exist and be laid out before there
-   *  is anything to measure. What it CAN be fixed by is not SHOWING it. The
-   *  wrapper goes transparent — mounted, measurable, unseen — and comes back
-   *  the instant there is a skeleton to show instead.
+   *  is anything to measure. So something is put OVER it instead — an opaque
+   *  placeholder filling the wrapper, which both hides the content and gives
+   *  the reader a loading state to look at.
    *
-   *  This is only possible because both native sensors exempt the ROOT from
-   *  their hidden/transparent skip (`AutoskeletonSensorRootVisibilityTests`,
-   *  `AutoskeletonSensorTest.aTransparentRootIsStillMeasured`). Before that,
-   *  hiding the wrapper also stopped it being measured, so the state could
-   *  never resolve.
+   *  Covering rather than hiding is deliberate, and the first attempt got it
+   *  wrong: making the WRAPPER transparent hid the content, but the
+   *  placeholder lives inside that same wrapper, so it hid the placeholder
+   *  too and the window stayed blank. A tree-shaped test counts nodes and
+   *  cannot see that; only pixels can.
    *
    *  `!showFallback` because a consumer who supplied a `fallback` asked for
-   *  something specific to be on screen in exactly this window; hiding the
-   *  wrapper would hide that too. With no fallback the choice is between the
-   *  live content and nothing, and nothing is the honest one — the content is
-   *  not ready to be read, it is about to be covered. */
-  const contentHiddenWhileMeasuring = showSkeleton && noUsableGeometry && !showFallback;
+   *  something specific to be on screen in exactly this window. */
+  const showMeasuringPlaceholder = showSkeleton && noUsableGeometry && !showFallback;
 
   // ADR-16 reveal-before-hide: children are ALWAYS mounted underneath the
   // still-painted overlay.
@@ -777,11 +774,11 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
         ref={viewRef}
         onLayout={onLayout}
         collapsable={false}
-        accessibilityElementsHidden={overlayVisible || contentHiddenWhileMeasuring}
+        accessibilityElementsHidden={overlayVisible || showMeasuringPlaceholder}
         importantForAccessibility={
-          overlayVisible || contentHiddenWhileMeasuring ? 'no-hide-descendants' : 'auto'
+          overlayVisible || showMeasuringPlaceholder ? 'no-hide-descendants' : 'auto'
         }
-        style={contentHiddenWhileMeasuring ? styles.wrapperMeasuring : styles.wrapper}
+        style={styles.wrapper}
       >
         {children}
         {/* IN FLOW, above the absolutely-positioned overlays below: on a cold
@@ -814,6 +811,35 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
           >
             {props.fallback}
           </View>
+        )}
+        {/* The neutral placeholder: what the reader sees during the frames the
+         *  traversal needs, now that the live content is hidden instead of
+         *  shown. Without it that window is simply blank.
+         *
+         *  It rides the SAME lane as `fallback` rather than introducing a
+         *  state of its own — same ignore marker (the cold traversal runs in
+         *  exactly this window, so without it the library would measure its
+         *  own placeholder and cache a skeleton OF a skeleton), same
+         *  accessibility exclusion, same `noUsableGeometry` gate. A consumer's
+         *  `fallback` still wins: they asked for something specific here.
+         *
+         *  `absoluteFill`, not a fixed height. The content is mounted and laid
+         *  out underneath — that is WHY it had to be hidden — so the wrapper
+         *  already has the right size and the block inherits it. When the
+         *  measured shapes land, nothing changes size: the block resolves into
+         *  them. Web's SSR neutral block carries a fixed
+         *  `NEUTRAL_SKELETON_HEIGHT_PX` instead, correctly, because there it
+         *  stands in for a key that was never captured and has no laid-out
+         *  content to borrow a size from. */}
+        {showMeasuringPlaceholder && (
+          <View
+            nativeID={AUTOSKELETON_IGNORE_MARKER_ID}
+            testID="autoskeleton-measuring"
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            pointerEvents="none"
+            style={[styles.measuringPlaceholder, { backgroundColor: theme.baseColor, borderRadius: theme.defaultRadius }]}
+          />
         )}
         {overlayVisible && overlayRenderer !== undefined && snapshot !== null && (
           <View
@@ -909,7 +935,7 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
        *  painted — a screen-reader user would get silence in front of a visible
        *  placeholder. `showFallback` is false whenever the prop is omitted, so
        *  no existing tree changes. */}
-      {/* `|| contentHiddenWhileMeasuring`: hiding the content from the
+      {/* `|| showMeasuringPlaceholder`: hiding the content from the
        *  accessibility tree without announcing why leaves a screen-reader user
        *  with neither the content nor a loading state — a silent gap for the
        *  frames the traversal takes. `AccessibilityGateInstrumentedTest` caught
@@ -917,7 +943,7 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
        *  the content correctly absent but its own "Loading" control node
        *  missing from the same tree. Whatever hides the content owes the
        *  announcement. */}
-      {(overlayVisible || showFallback || contentHiddenWhileMeasuring) && (
+      {(overlayVisible || showFallback || showMeasuringPlaceholder) && (
         <View
           accessible
           accessibilityLabel={LOADING_ACCESSIBILITY_LABEL}
@@ -932,11 +958,7 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
 
 const styles = StyleSheet.create({
   wrapper: { position: 'relative' },
-  /** `wrapper`, plus invisible. A separate entry rather than an inline array so
-   *  the style object identity stays stable across renders — an inline
-   *  `[styles.wrapper, { opacity: 0 }]` allocates a new array every render and
-   *  re-sends the prop across the bridge each time. */
-  wrapperMeasuring: { position: 'relative', opacity: 0 },
+  measuringPlaceholder: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   loadingStatus: { position: 'absolute', width: 1, height: 1 },
 });
 

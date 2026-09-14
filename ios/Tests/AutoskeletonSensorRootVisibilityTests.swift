@@ -9,12 +9,11 @@ import XCTest
 /// measure, so refusing it because the caller made it transparent is the sensor
 /// declining the job it was given.
 ///
-/// The exemption is what lets a consumer hide the content WHILE it is measured,
-/// which is the only way to keep live content off screen for the frames before
-/// the skeleton exists — `test/native/mount-order.test.ts` pins that sequence,
-/// and it is what a device recording showed as ~150ms of visible content before
-/// the loader. Hiding it used to be self-defeating: the traversal starts at that
-/// same wrapper and refused it.
+/// It also makes "hide the wrapper while it is measured" a usable technique.
+/// `AutoSkeleton.tsx` does not rely on it — it covers the content with an
+/// opaque placeholder instead — but before this, hiding the wrapper silently
+/// produced an empty snapshot, because the traversal starts at that same
+/// wrapper and refused it.
 ///
 /// Web already behaves this way (`dom-sensor.ts` checks opacity per LEAF and
 /// records that "an `opacity: 0` CONTAINER still has its descendants shaped"),

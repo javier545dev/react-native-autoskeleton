@@ -98,9 +98,25 @@ describe('<AutoSkeleton> — what is on screen while a cold skeleton mounts', ()
       const flat = (Array.isArray(style) ? style : [style]).filter(Boolean) as Array<Record<string, unknown>>;
       return flat.reduce((acc, s) => (typeof s.opacity === 'number' ? s.opacity : acc), 1);
     };
-    const timeline: Array<{ step: string; content: number; skeleton: number; opacity: number }> = [];
+    // The neutral placeholder shown while the content is hidden and no measured
+    // geometry exists yet.
+    const placeholders = (): number =>
+      tree.root.findAllByType('View').filter((v) => v.props.testID === 'autoskeleton-measuring').length;
+    const timeline: Array<{
+      step: string;
+      content: number;
+      skeleton: number;
+      opacity: number;
+      placeholder: number;
+    }> = [];
     const record = (step: string): void => {
-      timeline.push({ step, content: contents(), skeleton: overlays(), opacity: wrapperOpacity() });
+      timeline.push({
+        step,
+        content: contents(),
+        skeleton: overlays(),
+        opacity: wrapperOpacity(),
+        placeholder: placeholders(),
+      });
     };
 
     act(() => {
@@ -141,15 +157,20 @@ describe('<AutoSkeleton> — what is on screen while a cold skeleton mounts', ()
     // Only the traversal's own result brings the skeleton in.
     expect(timeline[2]!.skeleton).toBe(1);
 
-    // THE FIX: what CAN be removed is the content being SEEN during those
-    // steps. It stays mounted, because the sensor has to measure it, but the
-    // wrapper is transparent until there is a skeleton to show instead. Both
-    // native sensors exempt the ROOT from their hidden/transparent skip
-    // precisely so this is measurable while invisible.
-    expect(timeline[0]!.opacity).toBe(0);
-    expect(timeline[1]!.opacity).toBe(0);
-    // ...and it comes back the moment the skeleton is up.
-    expect(timeline[2]!.opacity).toBe(1);
+    // THE FIX: the content stays mounted — the sensor has to measure it — and
+    // an opaque placeholder is put OVER it for exactly those steps, so the
+    // reader sees a loading state instead of live content.
+    //
+    // Covering, not hiding. The first attempt made the WRAPPER transparent,
+    // which hid the content and the placeholder with it, because the
+    // placeholder lives inside that same wrapper. This assertion counts nodes
+    // and could not have caught that; the wrapper's opacity is asserted here
+    // so the regression is at least visible in the record.
+    expect(timeline.every((t) => t.opacity === 1)).toBe(true);
+    expect(timeline[0]!.placeholder).toBe(1);
+    expect(timeline[1]!.placeholder).toBe(1);
+    // It is gone the moment real geometry exists; two skeletons never overlap.
+    expect(timeline[2]!.placeholder).toBe(0);
 
     tree.unmount();
   });

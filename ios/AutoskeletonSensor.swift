@@ -163,12 +163,13 @@ final class AutoskeletonSensor {
         // it to measure. Refusing it because the caller made it transparent is
         // the sensor declining the job it was given.
         //
-        // That exemption is what lets a consumer hide the content WHILE it is
-        // measured, which is the only way to keep live content off screen for
-        // the frames before the skeleton exists — see
-        // `test/native/mount-order.test.ts`. Web already behaves this way
-        // (`dom-sensor.ts` checks opacity per LEAF), so this closes a platform
-        // divergence rather than creating one.
+        // Web already behaves this way — `dom-sensor.ts` checks opacity per
+        // LEAF and records that "an `opacity: 0` CONTAINER still has its
+        // descendants shaped" — so this closes a platform divergence rather
+        // than creating one. It also makes "hide the wrapper while it is
+        // measured" a usable technique, which `AutoSkeleton.tsx` does NOT
+        // currently rely on (it covers the content instead), but which no
+        // longer silently produces an empty snapshot for anyone who tries.
         if depth > 0, view.isHidden || view.alpha <= 0.01 {
             return []
         }

@@ -677,7 +677,6 @@ function usePaintDetectionHeuristic(
  *  object every render, which React treats as a changed prop and re-applies to
  *  the DOM node each time. */
 const WRAPPER_STYLE: React.CSSProperties = { position: 'relative' };
-const WRAPPER_MEASURING_STYLE: React.CSSProperties = { position: 'relative', opacity: 0 };
 
 export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JSX.Element {
   const ctx = useContext(SkeletonContext);
@@ -911,25 +910,19 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
   const showFallback = props.fallback !== undefined && showSkeleton && noUsableGeometry;
 
   /** The cold-miss window, and the same fix native carries — see
-   *  `native/AutoSkeleton.tsx`'s `contentHiddenWhileMeasuring` for the full
+   *  `native/AutoSkeleton.tsx`'s `showMeasuringPlaceholder` for the full
    *  account and `test/native/mount-order.test.ts` for the step-by-step
    *  sequence it removes.
    *
    *  This cycle WILL paint a skeleton but has no geometry yet, so the live
    *  content sits fully visible for the frames it takes to measure it. The
-   *  content cannot be unmounted — the sensor measures the REAL DOM — but it
-   *  can be unseen.
-   *
-   *  `opacity` does NOT inherit in CSS, so a descendant of a transparent
-   *  wrapper still computes its own `opacity: 1`. `dom-sensor.ts`'s skip is
-   *  per-LEAF and reads that computed value, and its own comment already
-   *  records the consequence: "an `opacity: 0` CONTAINER still has its
-   *  descendants shaped". So the wrapper can be hidden here without the
-   *  root-exemption the native sensors needed for the same trick.
+   *  content cannot be unmounted — the sensor measures the REAL DOM — so an
+   *  opaque placeholder is put OVER it instead, which both hides it and gives
+   *  the reader a loading state.
    *
    *  `!showFallback` because a consumer who supplied one asked for something
    *  specific to be on screen in exactly this window. */
-  const contentHiddenWhileMeasuring = showSkeleton && noUsableGeometry && !showFallback;
+  const showMeasuringPlaceholder = showSkeleton && noUsableGeometry && !showFallback;
 
   // ADR-16 reveal-before-hide: `props.children` is ALWAYS mounted (never
   // `display:none`) so it is already painted underneath the still-visible
@@ -961,9 +954,9 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
     <div
       ref={wrapperRef}
       aria-busy={isLoading || overlayVisible ? true : undefined}
-      style={contentHiddenWhileMeasuring ? WRAPPER_MEASURING_STYLE : WRAPPER_STYLE}
+      style={WRAPPER_STYLE}
     >
-      <div aria-hidden={overlayVisible || contentHiddenWhileMeasuring ? true : undefined} style={{ display: 'contents' }}>
+      <div aria-hidden={overlayVisible || showMeasuringPlaceholder ? true : undefined} style={{ display: 'contents' }}>
         {children}
       </div>
       {/* The fallback is IN FLOW, not in the absolutely-positioned overlay
@@ -983,6 +976,32 @@ export function AutoSkeleton<T = unknown>(props: AutoSkeletonProps<T>): React.JS
         <div aria-hidden="true" data-autoskeleton-ignore="true" style={{ display: 'contents' }}>
           {props.fallback}
         </div>
+      )}
+      {/* The neutral placeholder — what the reader sees during the frames the
+       *  traversal needs. Same lane as `fallback`: same ignore marker (the cold
+       *  traversal runs in exactly this window, so without it the library would
+       *  measure its own placeholder), same accessibility exclusion, same
+       *  `noUsableGeometry` gate.
+       *
+       *  `inset: 0` over the wrapper rather than a fixed height: the content is
+       *  mounted and laid out underneath, so the wrapper already has the right
+       *  size and this inherits it — when the measured shapes land, nothing
+       *  changes size. SSR's `NeutralSkeletonBlock` carries a fixed
+       *  `NEUTRAL_SKELETON_HEIGHT_PX` instead, correctly, because there it
+       *  stands in for a key that was never captured and has no laid-out
+       *  content to borrow a size from. */}
+      {showMeasuringPlaceholder && (
+        <div
+          aria-hidden="true"
+          data-autoskeleton-ignore="true"
+          data-askl-measuring="true"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: theme.baseColor,
+            borderRadius: theme.defaultRadius,
+          }}
+        />
       )}
       {showSkeleton && (
         <div
