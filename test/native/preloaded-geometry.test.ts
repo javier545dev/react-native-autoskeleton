@@ -67,7 +67,18 @@ describe('preloaded geometry removes the cold window entirely', () => {
   });
 
   afterEach(() => {
-    globalThis.requestAnimationFrame = realRaf as typeof globalThis.requestAnimationFrame;
+    // Restore to a FUNCTION, never to `undefined`. Node has no
+    // `requestAnimationFrame`/`cancelAnimationFrame`, so the captured
+    // "original" is `undefined`, and React can run a passive cleanup — which
+    // calls `cancelAnimationFrame` — AFTER this hook has run. Putting
+    // `undefined` back turns that into `TypeError: cancelAnimationFrame is not
+    // a function`, which is what broke CI while passing locally: it depends on
+    // which file ran last, and vitest does not guarantee that order.
+    globalThis.requestAnimationFrame =
+      typeof realRaf === 'function' ? realRaf : ((() => 0) as typeof globalThis.requestAnimationFrame);
+    // This file stubbed `cancelAnimationFrame` too and never put anything
+    // back, which is half of the same bug.
+    globalThis.cancelAnimationFrame = (() => undefined) as typeof globalThis.cancelAnimationFrame;
   });
 
   it('a store seeded from a previous run paints shapes in the first commit', async () => {

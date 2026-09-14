@@ -79,8 +79,17 @@ describe('<AutoSkeleton> — what is on screen while a cold skeleton mounts', ()
   });
 
   afterEach(() => {
-    globalThis.requestAnimationFrame = realRaf as typeof globalThis.requestAnimationFrame;
-    globalThis.cancelAnimationFrame = realCaf as typeof globalThis.cancelAnimationFrame;
+    // Restore to a FUNCTION, never to `undefined`. Node has no
+    // `requestAnimationFrame`/`cancelAnimationFrame`, so the captured
+    // "original" is `undefined`, and React can run a passive cleanup — which
+    // calls `cancelAnimationFrame` — AFTER this hook has run. Putting
+    // `undefined` back turns that into `TypeError: cancelAnimationFrame is not
+    // a function`, which is what broke CI while passing locally: it depends on
+    // which file ran last, and vitest does not guarantee that order.
+    globalThis.requestAnimationFrame =
+      typeof realRaf === 'function' ? realRaf : ((() => 0) as typeof globalThis.requestAnimationFrame);
+    globalThis.cancelAnimationFrame =
+      typeof realCaf === 'function' ? realCaf : ((() => undefined) as typeof globalThis.cancelAnimationFrame);
   });
 
   it('paints the content BEFORE the skeleton on a cold key, and names every step it takes', async () => {
