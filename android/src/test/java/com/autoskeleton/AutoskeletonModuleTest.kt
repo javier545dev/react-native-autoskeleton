@@ -91,6 +91,24 @@ class AutoskeletonModuleTest {
         collectDebugSidecars = true,
     )
 
+    /** `defaultConfig` with the time budget out of the way.
+     *
+     *  Every case whose subject is GEOMETRY — shape counts, synthesized line
+     *  counts, wire sizes — must use this. The production default is 2ms and a
+     *  cold-JVM traversal can exceed it purely from JIT/classloading warm-up,
+     *  as `AutoskeletonSensorTest.shapeCapReachedTruncatesAndFlagsDegraded`
+     *  already records. That is not theoretical: it took down
+     *  `bare-rn-android-matrix` (run 34905353685) on a CI runner while passing
+     *  on every local machine, by truncating a baseline the test then compared
+     *  against. Cases that are genuinely ABOUT the budget keep `defaultConfig`
+     *  or set their own. */
+    private val geometryConfig = AutoskeletonGetShapesConfig(
+        defaultRadius = 0f,
+        budgetMs = 1000.0,
+        maxShapes = AUTOSKELETON_DEFAULT_MAX_SHAPES,
+        collectDebugSidecars = true,
+    )
+
     private fun moduleFor(view: View): AutoskeletonModule {
         DisplayMetricsHolder.initDisplayMetricsIfNotInitialized(RuntimeEnvironment.getApplication())
         val reactContext = FakeReactApplicationContext(RuntimeEnvironment.getApplication())
@@ -156,7 +174,7 @@ class AutoskeletonModuleTest {
         val root = SyntheticHierarchyBuilder.build(fixture)
         val module = moduleFor(root)
 
-        val result = module.computeWireArray(42.0, "cache-key-1", defaultConfig)
+        val result = module.computeWireArray(42.0, "cache-key-1", geometryConfig)
 
         assertTrue(result != null)
         assertTrue("expected at least a VERSION slot + one shape (6 slots)", result!!.size >= 6)
@@ -179,7 +197,7 @@ class AutoskeletonModuleTest {
         val root = SyntheticHierarchyBuilder.build(fixture)
         val module = moduleFor(root)
 
-        val untruncated = module.computeWireArray(42.0, "untruncated", defaultConfig)!!
+        val untruncated = module.computeWireArray(42.0, "untruncated", geometryConfig)!!
         val untruncatedShapeCount = (untruncated.size - 1) / 5
         assertTrue(
             "fixture must produce >1 shape for this test to prove anything; got $untruncatedShapeCount",
@@ -189,7 +207,7 @@ class AutoskeletonModuleTest {
         val tightened = module.computeWireArray(
             42.0,
             "truncated",
-            defaultConfig.copy(maxShapes = 1),
+            geometryConfig.copy(maxShapes = 1),
         )!!
 
         assertEquals(1.0, tightened[0], 0.0001) // WIRE_VERSION untouched
@@ -201,8 +219,8 @@ class AutoskeletonModuleTest {
         val leaf = perCornerLeaf(radiusPx = 8f)
         val module = moduleFor(leaf)
 
-        val withRadius16 = module.computeWireArray(42.0, "r16", defaultConfig.copy(defaultRadius = 16f))!!
-        val withRadius3 = module.computeWireArray(42.0, "r3", defaultConfig.copy(defaultRadius = 3f))!!
+        val withRadius16 = module.computeWireArray(42.0, "r16", geometryConfig.copy(defaultRadius = 16f))!!
+        val withRadius3 = module.computeWireArray(42.0, "r3", geometryConfig.copy(defaultRadius = 3f))!!
 
         assertEquals(6, withRadius16.size)
         assertEquals(6, withRadius3.size)
@@ -336,7 +354,7 @@ class AutoskeletonModuleTest {
         val hinted = module.computeWireArray(
             42.0,
             "hinted",
-            defaultConfig.copy(hints = listOf(AutoskeletonHintEntry(nodeId = "card", lines = null, radius = 20f))),
+            geometryConfig.copy(hints = listOf(AutoskeletonHintEntry(nodeId = "card", lines = null, radius = 20f))),
         )!!
 
         assertEquals(6, hinted.size)
@@ -363,11 +381,11 @@ class AutoskeletonModuleTest {
         val hinted = module.computeWireArray(
             42.0,
             "lines-hinted",
-            defaultConfig.copy(
+            geometryConfig.copy(
                 hints = listOf(AutoskeletonHintEntry(nodeId = "collapsed-text-1", lines = 3, radius = null)),
             ),
         )!!
-        val unhinted = module.computeWireArray(42.0, "lines-unhinted", defaultConfig)!!
+        val unhinted = module.computeWireArray(42.0, "lines-unhinted", geometryConfig)!!
 
         val hintedShapeCount = (hinted.size - 1) / 5
         val unhintedShapeCount = (unhinted.size - 1) / 5
@@ -388,7 +406,7 @@ class AutoskeletonModuleTest {
         val unhinted = module.computeWireArray(
             42.0,
             "unhinted",
-            defaultConfig.copy(hints = listOf(AutoskeletonHintEntry(nodeId = "unrelated", lines = null, radius = 20f))),
+            geometryConfig.copy(hints = listOf(AutoskeletonHintEntry(nodeId = "unrelated", lines = null, radius = 20f))),
         )!!
 
         assertEquals(0.0, unhinted[5], 0.0001) // no background radius set, no matching hint -> R1 MEASURED 0
@@ -421,13 +439,13 @@ class AutoskeletonModuleTest {
         val module = moduleFor(leaf)
 
         // R3 fallback rung: `<SkeletonProvider defaultRadius={16}>`.
-        val fromDefaultRadius = module.computeWireArray(42.0, "dpi3-default", defaultConfig.copy(defaultRadius = 16f))!!
+        val fromDefaultRadius = module.computeWireArray(42.0, "dpi3-default", geometryConfig.copy(defaultRadius = 16f))!!
         // R0 hint rung: `<AutoSkeleton.Hint radius={20}>`.
         leaf.setTag(com.facebook.react.R.id.view_tag_native_id, "card")
         val fromHint = module.computeWireArray(
             42.0,
             "dpi3-hint",
-            defaultConfig.copy(hints = listOf(AutoskeletonHintEntry(nodeId = "card", lines = null, radius = 20f))),
+            geometryConfig.copy(hints = listOf(AutoskeletonHintEntry(nodeId = "card", lines = null, radius = 20f))),
         )!!
 
         assertEquals(6, fromDefaultRadius.size)
@@ -467,7 +485,7 @@ class AutoskeletonModuleTest {
         assertEquals(3f, leaf.resources.displayMetrics.density, 0.0001f)
         val module = moduleFor(leaf)
 
-        val wire = module.computeWireArray(42.0, "dpi3-collapsed-text", defaultConfig)!!
+        val wire = module.computeWireArray(42.0, "dpi3-collapsed-text", geometryConfig)!!
 
         // round(30px / 60px) == 1, floored at 1 by `defaultLineCount`.
         assertEquals("one synthesized line", 6, wire.size)
