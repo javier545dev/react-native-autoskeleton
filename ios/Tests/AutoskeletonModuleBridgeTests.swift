@@ -2,16 +2,15 @@
 import UIKit
 import XCTest
 
-/// Task 5.1/5.2 (tasks.md Phase 5) / plan.md ADR-1, ADR-9: `AutoskeletonModuleBridge`'s
-/// measure+encode+cache pipeline and `AutoskeletonNativeShapeCache`'s get/set/
-/// evict semantics — pure Swift-to-Swift, no ObjC boundary (see
-/// `Autoskeleton.mm`'s header comment for why the ObjC++ `getShapes`/
-/// `evictShapes` glue itself is NOT yet wired to this bridge).
+/// Task 5.1 (tasks.md Phase 5) / plan.md ADR-1: `AutoskeletonModuleBridge`'s
+/// measure+encode pipeline — pure Swift-to-Swift, no ObjC boundary (see
+/// `Autoskeleton.mm`'s header comment for why the ObjC++ `getShapes` glue
+/// itself is NOT yet wired to this bridge).
+///
+/// This used to also cover the native shape cache's get/set/evict semantics.
+/// That cache is gone: the overlay takes its geometry as a `shapes` prop, so
+/// the buffer `computeWireArray` returns is the only copy there is.
 final class AutoskeletonModuleBridgeTests: XCTestCase {
-    private func freshCache() -> AutoskeletonNativeShapeCache {
-        let cache = AutoskeletonNativeShapeCache()
-        return cache
-    }
 
     /// Mirrors `.defaults` exactly, as an explicit `AutoskeletonGetShapesConfig`
     /// — the "nothing configured" baseline most tests below use so only the
@@ -27,7 +26,7 @@ final class AutoskeletonModuleBridgeTests: XCTestCase {
     // MARK: - AutoskeletonModuleBridge
 
     func testComputeWireArrayReturnsNilWhenViewIsNotLaidOutYet() {
-        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor(), shapeCache: freshCache())
+        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor())
         let view = UIView(frame: .zero)
         XCTAssertNil(bridge.computeWireArray(view: view, cacheKey: "k", config: defaultConfig))
     }
@@ -35,8 +34,7 @@ final class AutoskeletonModuleBridgeTests: XCTestCase {
     func testComputeWireArrayReturnsTheFlatWireArrayFromARealTraversal() throws {
         let fixture = try SyntheticHierarchyBuilder.loadFixture(named: "nested-offsets")
         let (_, root) = SyntheticHierarchyBuilder.build(fixture)
-        let cache = freshCache()
-        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor(), shapeCache: cache)
+        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor())
 
         let result = bridge.computeWireArray(view: root, cacheKey: "cache-key-1", config: defaultConfig)
 
@@ -46,18 +44,6 @@ final class AutoskeletonModuleBridgeTests: XCTestCase {
         XCTAssertEqual((result!.count - 1) % 5, 0)
     }
 
-    func testComputeWireArrayWritesTheSameWireArrayIntoTheNativeShapeCache() throws {
-        let fixture = try SyntheticHierarchyBuilder.loadFixture(named: "nested-offsets")
-        let (_, root) = SyntheticHierarchyBuilder.build(fixture)
-        let cache = freshCache()
-        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor(), shapeCache: cache)
-
-        let result = bridge.computeWireArray(view: root, cacheKey: "cache-key-2", config: defaultConfig)
-        let cached = cache.get("cache-key-2")
-
-        XCTAssertNotNil(result)
-        XCTAssertEqual(result, cached)
-    }
 
     func testEncodeWireArrayIsPureAndNeedsNoViewOrSensor() {
         let shapes = [
@@ -71,7 +57,7 @@ final class AutoskeletonModuleBridgeTests: XCTestCase {
     }
 
     func testGetShapesReturnsAnEmptyArrayForANilView() {
-        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor(), shapeCache: freshCache())
+        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor())
         XCTAssertEqual(
             bridge.getShapes(
                 view: nil, cacheKey: "k", defaultRadius: 0, budgetMs: 2, maxShapes: 60,
@@ -92,7 +78,7 @@ final class AutoskeletonModuleBridgeTests: XCTestCase {
         // fixture that only ever had one shape to begin with.
         let fixture = try SyntheticHierarchyBuilder.loadFixture(named: "ignore-subtree")
         let (_, root) = SyntheticHierarchyBuilder.build(fixture)
-        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor(), shapeCache: freshCache())
+        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor())
 
         let untruncated = try XCTUnwrap(bridge.computeWireArray(view: root, cacheKey: "untruncated", config: defaultConfig))
         let untruncatedShapeCount = (untruncated.count - 1) / 5
@@ -121,7 +107,7 @@ final class AutoskeletonModuleBridgeTests: XCTestCase {
         // ever reserved.
         let fixture = try SyntheticHierarchyBuilder.loadFixture(named: "nested-offsets")
         let (_, root) = SyntheticHierarchyBuilder.build(fixture)
-        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor(), shapeCache: freshCache())
+        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor())
         let config = AutoskeletonGetShapesConfig(
             defaultRadius: defaultConfig.defaultRadius,
             budgetMs: -1,
@@ -149,7 +135,7 @@ final class AutoskeletonModuleBridgeTests: XCTestCase {
         let view = UIView(frame: CGRect(x: 0, y: 0, width: 40, height: 40))
         view.backgroundColor = .red
         view.layer.cornerRadius = 12
-        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor(), shapeCache: freshCache())
+        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor())
 
         let withZero = try XCTUnwrap(
             bridge.computeWireArray(
@@ -179,7 +165,7 @@ final class AutoskeletonModuleBridgeTests: XCTestCase {
         view.accessibilityIdentifier = "card"
         view.backgroundColor = .red
         view.layer.cornerRadius = 12
-        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor(), shapeCache: freshCache())
+        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor())
         let config = AutoskeletonGetShapesConfig(
             defaultRadius: 0, budgetMs: 2, maxShapes: 60, collectDebugSidecars: true,
             hints: [AutoskeletonHintEntry(nodeId: "card", lines: nil, radius: 20)]
@@ -195,7 +181,7 @@ final class AutoskeletonModuleBridgeTests: XCTestCase {
         view.accessibilityIdentifier = "card"
         view.backgroundColor = .red
         view.layer.cornerRadius = 12
-        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor(), shapeCache: freshCache())
+        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor())
         let config = AutoskeletonGetShapesConfig(
             defaultRadius: 0, budgetMs: 2, maxShapes: 60, collectDebugSidecars: true,
             hints: [AutoskeletonHintEntry(nodeId: "unrelated", lines: nil, radius: 20)]
@@ -215,66 +201,18 @@ final class AutoskeletonModuleBridgeTests: XCTestCase {
     func testComputeWireArrayDoesNotWriteToTheCacheWhenIsCancelledReturnsTrue() throws {
         let fixture = try SyntheticHierarchyBuilder.loadFixture(named: "nested-offsets")
         let (_, root) = SyntheticHierarchyBuilder.build(fixture)
-        let cache = freshCache()
-        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor(), shapeCache: cache)
+        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor())
 
         // The traversal itself still runs (it cannot be stopped mid-flight
         // either -- see `AutoskeletonSystemUiThreadDispatcher`'s own doc
-        // comment), but the observable side effect -- the cache write --
-        // must be skipped once the caller has already given up.
+        // comment), but a caller that has already given up must not be
+        // handed a result. Before the native cache was removed this guard
+        // also protected a shared write; now the return value is the whole
+        // observable, which is what this asserts.
         let result = bridge.computeWireArray(
             view: root, cacheKey: "recycled-cache-key", config: defaultConfig, isCancelled: { true }
         )
 
-        XCTAssertNil(result, "a cancelled computation must not hand back a result to write anywhere else either")
-        XCTAssertNil(cache.get("recycled-cache-key"), "abandoned work must not poison the shared cache")
-    }
-
-    func testComputeWireArrayStillWritesToTheCacheWhenIsCancelledReturnsFalse() throws {
-        // Negative control / default-argument regression guard: omitting
-        // `isCancelled` (every pre-existing call site in this file) must
-        // keep writing to the cache exactly as before.
-        let fixture = try SyntheticHierarchyBuilder.loadFixture(named: "nested-offsets")
-        let (_, root) = SyntheticHierarchyBuilder.build(fixture)
-        let cache = freshCache()
-        let bridge = AutoskeletonModuleBridge(sensor: AutoskeletonSensor(), shapeCache: cache)
-
-        let result = bridge.computeWireArray(view: root, cacheKey: "normal-cache-key", config: defaultConfig)
-
-        XCTAssertNotNil(result)
-        XCTAssertEqual(cache.get("normal-cache-key"), result)
-    }
-
-    // MARK: - AutoskeletonNativeShapeCache
-
-    func testCacheGetReturnsNilForAnUnknownKey() {
-        XCTAssertNil(freshCache().get("missing"))
-    }
-
-    func testCacheSetThenGetRoundTripsTheExactWireArray() {
-        let cache = freshCache()
-        let wire: [Double] = [1, 10, 20, 30, 40, 4]
-        cache.set("k", wire)
-        XCTAssertEqual(cache.get("k"), wire)
-    }
-
-    func testCacheEvictRemovesOnlyTheRequestedKeys() {
-        let cache = freshCache()
-        cache.set("a", [1])
-        cache.set("b", [1])
-        cache.set("c", [1])
-
-        cache.evict(["a", "c"])
-
-        XCTAssertNil(cache.get("a"))
-        XCTAssertEqual(cache.count, 1)
-        XCTAssertNil(cache.get("c"))
-    }
-
-    func testCacheEvictOfAnUnknownKeyIsANoOp() {
-        let cache = freshCache()
-        cache.set("a", [1])
-        cache.evict(["does-not-exist"])
-        XCTAssertEqual(cache.count, 1)
+        XCTAssertNil(result, "a cancelled computation must not hand back a result")
     }
 }

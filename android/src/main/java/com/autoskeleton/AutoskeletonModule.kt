@@ -84,6 +84,60 @@ private fun ReadableArray.toHintEntries(): List<AutoskeletonHintEntry> =
     )
   }
 
+/** THE dp -> pixel boundary, and the ONLY place JS-authored lengths enter the
+ *  sensor's pixel-space pipeline.
+ *
+ *  Every length in [AutoskeletonGetShapesConfig] came from JS, where the unit is
+ *  always the density-independent point: `<SkeletonProvider defaultRadius={8}>`
+ *  means 8dp and `<AutoSkeleton.Hint radius={20}>` means 20dp — the same numbers
+ *  iOS applies verbatim, because 1pt IS iOS's density-independent unit
+ *  (`ios/AutoskeletonSensor.swift` uses the hint as points with no scaling step).
+ *  Every length in [AutoskeletonSensorOptions] is in raw view PIXELS instead,
+ *  because pixels are the only unit the traversal can compare its geometry
+ *  against: frames come out of `offsetDescendantRectToMyCoords` in pixels (see
+ *  `AutoskeletonShapeInfo`'s own doc comment), and `encodeWireArray` divides the
+ *  whole result by `density` on the way back out.
+ *
+ *  Before this function existed, the three JS-origin lengths below were injected
+ *  into that pixel pipeline UNSCALED and then divided by density anyway, so each
+ *  came out `1/density` too small on the wire:
+ *   - `defaultRadius={8}` painted 2.67dp on a 3x device instead of 8dp;
+ *   - `<AutoSkeleton.Hint radius={20}>` painted 6.67dp against iOS's 20pt;
+ *   - `defaultLineHeight` (20, not a `config` field yet, but the same dp literal
+ *     iOS declares in POINTS in `AutoskeletonTypes.swift`) made the collapsed-text
+ *     test `frame.h < defaultLineHeight` compare pixel heights against ~6.7dp
+ *     instead of 20dp, and made every synthesized line 20px tall instead of 20dp.
+ *  `AutoskeletonOverlayView.kt`'s `defaultRadius.toFloat() * density` is this exact
+ *  multiplication, already correct on the RENDERER half of this library — this is
+ *  the sensor half catching up to it.
+ *
+ *  Converting HERE, once, rather than at each of the three use sites is
+ *  deliberate. This is the single production entry point (`AutoskeletonSensor`'s
+ *  `refine()` is reached from no production Android code path — only tests call
+ *  it), so one multiplication keeps all three correct, and it leaves
+ *  [AutoskeletonSensorOptions] and [AutoskeletonPublicApiRadiusResolver] with
+ *  their single unambiguous "pixels in, pixels out" contract — the contract
+ *  `AutoskeletonRadiusLadderInstrumentedTest` builds its resolvers against
+ *  directly with real on-device pixel radii, and which therefore does not move.
+ *
+ *  MEASURED geometry is deliberately untouched: `x/y/w/h` already originate in
+ *  pixels and are already correct end to end, so the wire values for them are
+ *  byte-identical before and after this conversion. */
+internal fun AutoskeletonGetShapesConfig.toSensorOptions(density: Float): AutoskeletonSensorOptions {
+  val defaults = AutoskeletonSensorOptions.defaults
+  val defaultRadiusPx = defaultRadius * density
+  return defaults.copy(
+    // `lines` is a COUNT, not a length — only `radius` is scaled.
+    hints = AutoskeletonMapHintRegistry(hints.map { it.copy(radius = it.radius?.times(density)) }),
+    radiusResolver = AutoskeletonPublicApiRadiusResolver(defaultRadius = defaultRadiusPx),
+    budgetMs = budgetMs,
+    maxShapes = maxShapes,
+    defaultRadius = defaultRadiusPx,
+    defaultLineHeight = defaults.defaultLineHeight * density,
+    collectDebugSidecars = collectDebugSidecars,
+  )
+}
+
 /** Package-visible seam (same DI pattern as `AutoskeletonTracing`/
  *  `AutoskeletonWarningEmitter`): resolves a `View` by React tag, or `null`
  *  when the tag is unknown / not yet mounted. Production uses the PUBLIC
@@ -128,10 +182,9 @@ class AutoskeletonSystemViewResolver(private val reactContext: ReactApplicationC
  *  2. The Runnable posted to `UiThreadUtil.runOnUiThread` is NEVER
  *     cancellable once posted (Android exposes no handle for it) — it
  *     keeps running after the caller times out and moves on. `block` used
- *     to run to completion regardless, including its own shared-state
- *     writes (`AutoskeletonModule.computeWireArray`'s `shapeCache.set`),
- *     writing stale geometry into the shared cache for a `cacheKey` that,
- *     on a recycled list, may by then belong to a different row. Since the
+ *     to run to completion regardless, handing back geometry for a
+ *     `cacheKey` that, on a recycled list, may by then belong to a
+ *     different row. Since the
  *     Runnable itself cannot be forcibly cancelled, `block` now receives a
  *     cooperative `isCancelled: () -> Boolean` check it MUST consult before
  *     any observable side effect — see `computeWireArray`'s own guard.
@@ -190,9 +243,12 @@ object AutoskeletonSystemUiThreadDispatcher : AutoskeletonUiThreadDispatcher {
 // points, comparable across platforms and directly usable by the
 // golden-parity tests (plan.md §4.1 "Units").
 //
-// ADR-9: the native shape cache is written HERE (native writes data only
-// for a traversal JS requested — this call IS that request) and evicted
-// only via `evictShapes`, which JS calls from `store.invalidate()`.
+// ADR-9 previously had this method ALSO write a native shape cache the
+// overlay read back by `cacheKey`. That cache is gone: JS already holds this
+// wire array (it is this method's return value, decoded by
+// `native/sensor.ts`), so the cache was a second copy of data the caller
+// already had, and its `evictShapes` counterpart had no call site anywhere in
+// `src/`. The overlay takes the buffer as a `shapes` prop instead.
 //
 // Phase-5-remediation (post-7.2 gap closure): `getShapes` used to hardcode
 // `AutoskeletonSensorOptions.defaults` (`budgetMs`/`maxShapes`/
@@ -222,11 +278,18 @@ object AutoskeletonSystemUiThreadDispatcher : AutoskeletonUiThreadDispatcher {
 // pattern (`AutoskeletonSensor.kt`: `AutoskeletonPublicApiRadiusResolver(options.defaultRadius)`)
 // is now mirrored here instead: the resolver is constructed FRESH per call
 // from the real per-call `config.defaultRadius`.
+//
+// Units defect (this session): threading `config` into the sensor closed the
+// "the value never arrives" half of that gap, but left a unit mismatch behind —
+// `config`'s lengths are dp (they came from JS) while the sensor works in
+// pixels, so `defaultRadius`, every `radius` hint, and `defaultLineHeight`
+// entered the pixel pipeline unscaled and were then divided by density on the
+// way out, arriving `1/density` too small. `AutoskeletonGetShapesConfig.toSensorOptions(density)`
+// above is now the single conversion point; see its doc comment.
 class AutoskeletonModule(
   reactContext: ReactApplicationContext,
   private val sensor: AutoskeletonSensor = AutoskeletonSensor(),
   private val viewResolver: AutoskeletonViewResolver = AutoskeletonSystemViewResolver(reactContext),
-  private val shapeCache: AutoskeletonNativeShapeCache = AutoskeletonNativeShapeCache,
   private val uiThreadDispatcher: AutoskeletonUiThreadDispatcher = AutoskeletonSystemUiThreadDispatcher,
 ) : NativeAutoskeletonSpec(reactContext) {
 
@@ -250,41 +313,33 @@ class AutoskeletonModule(
    *  wait so a stuck UI thread degrades to `null` instead of hanging the
    *  JS thread forever.
    *
-   *  Adversarial-review defect (2026-08-28): the `shapeCache.set` write
-   *  below is the USER-VISIBLE half of the timeout defect — a timed-out
-   *  caller already moved on, but the posted UI-thread Runnable itself
-   *  cannot be cancelled (Android exposes no handle for that), so it used
-   *  to keep running and write stale geometry into the SHARED cache under
-   *  `cacheKey`, which on a recycled list may by then belong to a
-   *  completely different row. The traversal itself still runs (it cannot
-   *  be stopped mid-flight either), but the observable side effect — the
-   *  cache write — is now guarded by `isCancelled()`, checked as late as
-   *  possible, right before the mutation. */
+   *  Adversarial-review defect (2026-08-28): a timed-out caller already
+   *  moved on, but the posted UI-thread Runnable itself cannot be cancelled
+   *  (Android exposes no handle for that), so it kept running and wrote
+   *  stale geometry into the then-shared native cache under `cacheKey`,
+   *  which on a recycled list may by then have belonged to a completely
+   *  different row. That cache is gone — the overlay takes its geometry as
+   *  a prop — so there is no longer a shared mutation to poison, but the
+   *  `isCancelled()` guard stays: handing back geometry for a row the
+   *  caller has already abandoned is still wrong, and it is what the
+   *  timeout test pins. */
   internal fun computeWireArray(reactTag: Double, cacheKey: String, config: AutoskeletonGetShapesConfig): DoubleArray? =
     uiThreadDispatcher.runAndWait(UI_THREAD_DISPATCH_TIMEOUT_MS) { isCancelled ->
       val view = viewResolver.resolve(reactTag.toInt()) ?: return@runAndWait null
       val density = view.resources?.displayMetrics?.density?.takeIf { it > 0f } ?: 1f
 
-      val measured = sensor.measure(
-        view,
-        AutoskeletonSensorOptions.defaults.copy(
-          hints = AutoskeletonMapHintRegistry(config.hints),
-          radiusResolver = AutoskeletonPublicApiRadiusResolver(defaultRadius = config.defaultRadius),
-          budgetMs = config.budgetMs,
-          maxShapes = config.maxShapes,
-          defaultRadius = config.defaultRadius,
-          collectDebugSidecars = config.collectDebugSidecars,
-        ),
-      ) ?: return@runAndWait null
+      // `config` is in dp (it came from JS); `AutoskeletonSensorOptions` is in
+      // pixels (the traversal's own unit). `toSensorOptions` is the single
+      // conversion between the two — see its doc comment for why it lives there
+      // and not at each use site.
+      val measured = sensor.measure(view, config.toSensorOptions(density)) ?: return@runAndWait null
 
       val wire = encodeWireArray(measured.shapes, density)
       if (isCancelled()) {
-        // The caller already gave up waiting -- do not retroactively
-        // poison the shared cache with geometry nobody will read via this
-        // call, and which may now belong to a different recycled row.
+        // The caller already gave up waiting -- do not hand back geometry
+        // that may now belong to a different recycled row.
         return@runAndWait null
       }
-      shapeCache.set(cacheKey, wire)
       wire
     }
 
@@ -295,11 +350,6 @@ class AutoskeletonModule(
       result.pushDouble(value)
     }
     return result
-  }
-
-  override fun evictShapes(cacheKeys: ReadableArray) {
-    val keys = (0 until cacheKeys.size()).mapNotNull { cacheKeys.getString(it) }
-    shapeCache.evict(keys)
   }
 
   companion object {

@@ -63,6 +63,7 @@ describe('assembleMetrics — cold-load scenario (REQ-OBS-METRICS-1)', () => {
       'raster-probe': 0,
       hint: 1,
       default: 0,
+      style: 0,
     });
     expect(metrics.cacheKey).toBe(KEY);
   });
@@ -106,6 +107,7 @@ describe('assembleMetrics — hot-load scenario (REQ-OBS-METRICS-1)', () => {
       'raster-probe': 0,
       hint: 0,
       default: 0,
+      style: 0,
     });
   });
 });

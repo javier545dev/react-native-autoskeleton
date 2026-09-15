@@ -19,6 +19,31 @@
 // (visible per the sensor's own check), while the user never sees it
 // because it renders entirely outside the viewport. `position: 'absolute'`
 // keeps it out of the surrounding synthetic rows' layout flow either way.
+//
+// SECOND real, on-device-found defect, same two style properties (2026-08-30):
+// moving the template off-screen fixed the alpha exclusion but left the
+// container with a leading position and NO horizontal size constraint. A Yoga
+// absolutely-positioned box that declares only `left` resolves its width from
+// its own CONTENT — the intrinsic width — so every width-INHERITING child in
+// the template (`flex: 1`, `width: '100%'`, `alignSelf: 'stretch'`) collapsed
+// to zero, and both native sensors drop a zero-width frame outright. Measured
+// while writing `examples/bare-rn/demos/ListDemo.tsx`: a row whose text column
+// used `flex: 1` cached a 92.19 x 88 snapshot where the real row is
+// 411.43 x 88, and every skeleton row painted as a lone avatar square with
+// nothing beside it. Re-measured on an Android emulator 2026-08-30 with the
+// paint-gate fixture: 144dp measured against a 379dp container.
+//
+// The missing width was never the consumer's to supply. This host is mounted
+// INSIDE the very `SkeletonList`/`SkeletonCell` whose rows the snapshot will
+// be drawn for, so its parent already carries the real content width — the
+// list knows its own width even though the template does not. Declaring BOTH
+// `left` and `right` is what makes Yoga read it: for an absolute box with no
+// explicit `width`, `width = parentContentWidth - left - right`, so
+// `left + right === 0` resolves to exactly the parent's content width while
+// `left` still carries the box off-screen. Nothing is threaded through
+// `renderTemplate`, and a template written the natural way — inheriting its
+// width like the real row does — now measures at the width the real row will
+// actually have.
 
 import type { ComponentRef, ReactNode, RefObject } from 'react';
 import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
@@ -54,6 +79,12 @@ const styles = StyleSheet.create({
   invisibleTemplate: {
     position: 'absolute',
     left: OFFSCREEN_OFFSET,
+    // Yoga resolves an absolute box with no explicit `width` but both
+    // horizontal insets to `parentContentWidth - left - right`. These two
+    // cancel, so the template is laid out at exactly its parent's content
+    // width — the real row width — while `left` keeps it off-screen. They
+    // must stay exact negatives of each other; see this file's header.
+    right: -OFFSCREEN_OFFSET,
     top: OFFSCREEN_OFFSET,
   },
 });

@@ -21,6 +21,7 @@ import com.facebook.react.uimanager.DisplayMetricsHolder
 import com.facebook.react.uimanager.LengthPercentage
 import com.facebook.react.uimanager.LengthPercentageType
 import com.facebook.react.uimanager.style.BorderRadiusProp
+import com.facebook.react.views.text.ReactTextView
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -29,6 +30,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
 
 /**
  * Task 5.1 (tasks.md Phase 5) / plan.md ADR-1: `AutoskeletonModule`'s
@@ -89,13 +91,30 @@ class AutoskeletonModuleTest {
         collectDebugSidecars = true,
     )
 
-    private fun moduleFor(view: View, cache: AutoskeletonNativeShapeCache = AutoskeletonNativeShapeCache): AutoskeletonModule {
+    /** `defaultConfig` with the time budget out of the way.
+     *
+     *  Every case whose subject is GEOMETRY — shape counts, synthesized line
+     *  counts, wire sizes — must use this. The production default is 2ms and a
+     *  cold-JVM traversal can exceed it purely from JIT/classloading warm-up,
+     *  as `AutoskeletonSensorTest.shapeCapReachedTruncatesAndFlagsDegraded`
+     *  already records. That is not theoretical: it took down
+     *  `bare-rn-android-matrix` (run 34905353685) on a CI runner while passing
+     *  on every local machine, by truncating a baseline the test then compared
+     *  against. Cases that are genuinely ABOUT the budget keep `defaultConfig`
+     *  or set their own. */
+    private val geometryConfig = AutoskeletonGetShapesConfig(
+        defaultRadius = 0f,
+        budgetMs = 1000.0,
+        maxShapes = AUTOSKELETON_DEFAULT_MAX_SHAPES,
+        collectDebugSidecars = true,
+    )
+
+    private fun moduleFor(view: View): AutoskeletonModule {
         DisplayMetricsHolder.initDisplayMetricsIfNotInitialized(RuntimeEnvironment.getApplication())
         val reactContext = FakeReactApplicationContext(RuntimeEnvironment.getApplication())
         return AutoskeletonModule(
             reactContext = reactContext,
             viewResolver = AutoskeletonViewResolver { tag -> if (tag == 42) view else null },
-            shapeCache = cache,
         )
     }
 
@@ -105,6 +124,26 @@ class AutoskeletonModuleTest {
      *  reports a radius (plan.md ADR-2 R1 dead end), so a rounded leaf
      *  reliably falls through to the R3 `defaultRadius` fallback rung this
      *  task wires from `config`. */
+    /** A leaf whose corners differ, which is the R3 rung's remaining reason to
+     *  exist. R1b recovers any UNIFORM `borderRadius` straight off the style, so
+     *  a uniformly-rounded view no longer reaches `defaultRadius` at all; four
+     *  independent corners still do, because `ShapeInfo.r` is one scalar and the
+     *  ladder will not guess which corner to paint. */
+    private fun perCornerLeaf(radiusPx: Float, w: Int = 40, h: Int = 40): FrameLayout {
+        val context = RuntimeEnvironment.getApplication()
+        DisplayMetricsHolder.initDisplayMetricsIfNotInitialized(context)
+        val view = FrameLayout(context)
+        view.layout(0, 0, w, h)
+        BackgroundStyleApplicator.setBackgroundColor(view, Color.RED)
+        BackgroundStyleApplicator.setBorderRadius(
+            view,
+            BorderRadiusProp.BORDER_TOP_LEFT_RADIUS,
+            LengthPercentage(radiusPx, LengthPercentageType.POINT),
+        )
+        view.background?.setBounds(0, 0, view.width, view.height)
+        return view
+    }
+
     private fun roundedLeaf(radiusPx: Float, w: Int = 40, h: Int = 40): FrameLayout {
         val context = RuntimeEnvironment.getApplication()
         DisplayMetricsHolder.initDisplayMetricsIfNotInitialized(context)
@@ -131,12 +170,11 @@ class AutoskeletonModuleTest {
 
     @Test
     fun computeWireArrayReturnsTheFlatWireArrayFromARealTraversal() {
-        AutoskeletonNativeShapeCache.clear()
         val fixture = SyntheticHierarchyBuilder.loadFixture("nested-offsets")
         val root = SyntheticHierarchyBuilder.build(fixture)
         val module = moduleFor(root)
 
-        val result = module.computeWireArray(42.0, "cache-key-1", defaultConfig)
+        val result = module.computeWireArray(42.0, "cache-key-1", geometryConfig)
 
         assertTrue(result != null)
         assertTrue("expected at least a VERSION slot + one shape (6 slots)", result!!.size >= 6)
@@ -144,29 +182,13 @@ class AutoskeletonModuleTest {
         assertEquals((result.size - 1) % 5, 0)
     }
 
-    @Test
-    fun computeWireArrayWritesTheSameWireArrayIntoTheNativeShapeCache() {
-        val cache = AutoskeletonNativeShapeCache
-        cache.clear()
-        val fixture = SyntheticHierarchyBuilder.loadFixture("nested-offsets")
-        val root = SyntheticHierarchyBuilder.build(fixture)
-        val module = moduleFor(root, cache)
-
-        val result = module.computeWireArray(42.0, "cache-key-2", defaultConfig)
-        val cached = cache.get("cache-key-2")
-
-        assertTrue(result != null)
-        assertTrue(cached != null)
-        assertEquals(result!!.toList(), cached!!.toList())
-    }
-
+    
     // MARK: - Phase-5-remediation (post-7.2 gap closure): config actually
     // arrives at the real `sensor.measure()` options, proven by the wire
     // GEOMETRY changing, not merely that the signature accepts a config.
 
     @Test
     fun computeWireArrayTruncatesTheShapeCountWhenMaxShapesIsTightened() {
-        AutoskeletonNativeShapeCache.clear()
         // "ignore-subtree" has multiple real leaves (used by
         // `AutoskeletonSensorObservabilityTest`'s own shape-cap case for the
         // same reason) — a fixture whose UNTRUNCATED traversal produces more
@@ -175,7 +197,7 @@ class AutoskeletonModuleTest {
         val root = SyntheticHierarchyBuilder.build(fixture)
         val module = moduleFor(root)
 
-        val untruncated = module.computeWireArray(42.0, "untruncated", defaultConfig)!!
+        val untruncated = module.computeWireArray(42.0, "untruncated", geometryConfig)!!
         val untruncatedShapeCount = (untruncated.size - 1) / 5
         assertTrue(
             "fixture must produce >1 shape for this test to prove anything; got $untruncatedShapeCount",
@@ -185,7 +207,7 @@ class AutoskeletonModuleTest {
         val tightened = module.computeWireArray(
             42.0,
             "truncated",
-            defaultConfig.copy(maxShapes = 1),
+            geometryConfig.copy(maxShapes = 1),
         )!!
 
         assertEquals(1.0, tightened[0], 0.0001) // WIRE_VERSION untouched
@@ -194,19 +216,26 @@ class AutoskeletonModuleTest {
 
     @Test
     fun computeWireArrayUsesTheConfiguredDefaultRadiusForAnR3FallbackShape() {
-        AutoskeletonNativeShapeCache.clear()
-        val leaf = roundedLeaf(radiusPx = 8f)
+        val leaf = perCornerLeaf(radiusPx = 8f)
         val module = moduleFor(leaf)
-        val density = leaf.resources.displayMetrics.density
 
-        val withRadius16 = module.computeWireArray(42.0, "r16", defaultConfig.copy(defaultRadius = 16f))!!
-        val withRadius3 = module.computeWireArray(42.0, "r3", defaultConfig.copy(defaultRadius = 3f))!!
+        val withRadius16 = module.computeWireArray(42.0, "r16", geometryConfig.copy(defaultRadius = 16f))!!
+        val withRadius3 = module.computeWireArray(42.0, "r3", geometryConfig.copy(defaultRadius = 3f))!!
 
         assertEquals(6, withRadius16.size)
         assertEquals(6, withRadius3.size)
         // Slot 5 is the single container shape's `r` (VERSION + x,y,w,h,r).
-        assertEquals(16.0 / density, withRadius16[5], 0.0001)
-        assertEquals(3.0 / density, withRadius3[5], 0.0001)
+        //
+        // Units defect: this used to assert `16.0 / density` and `3.0 / density`,
+        // which enshrined the bug — `config.defaultRadius` is a dp value authored
+        // in JS (`<SkeletonProvider defaultRadius={16}>`), so 16 in must be 16 out
+        // on a wire that is itself in dp. The old expectation only ever looked
+        // right because Robolectric's default density is 1, making the stray
+        // division invisible; on a real 3x device it meant a `defaultRadius={16}`
+        // painted 5.33dp. `dpLengthsSurviveTheWireRoundTripUnchangedAtDensity3`
+        // below is the case that would now catch a regression.
+        assertEquals(16.0, withRadius16[5], 0.0001)
+        assertEquals(3.0, withRadius3[5], 0.0001)
     }
 
     @Test
@@ -237,8 +266,7 @@ class AutoskeletonModuleTest {
         // `getShapes(double, String, ReadableMap)`) decoded by
         // `toGetShapesConfig()`. `JavaOnlyMap` is the pure-JVM `ReadableMap`
         // implementation, safe under Robolectric with no JNI involved
-        // (mirrors `JavaOnlyArray`'s already-established use in
-        // `evictShapesRemovesOnlyTheRequestedKeys` below). `getShapes()`
+        // (`JavaOnlyArray` is its array-shaped sibling). `getShapes()`
         // itself is deliberately NOT exercised here — same reason
         // `computeWireArray` exists as a separate seam (see this class's
         // own header comment): `Arguments.createArray()` needs a JNI
@@ -315,7 +343,6 @@ class AutoskeletonModuleTest {
         // (`toGetShapesConfig`) and the REAL `AutoskeletonMapHintRegistry`,
         // not a hand-built fake registry (that unit is already covered by
         // `AutoskeletonRadiusResolverTest`).
-        AutoskeletonNativeShapeCache.clear()
         val context = RuntimeEnvironment.getApplication()
         DisplayMetricsHolder.initDisplayMetricsIfNotInitialized(context)
         val leaf = FrameLayout(context)
@@ -323,16 +350,20 @@ class AutoskeletonModuleTest {
         leaf.setTag(com.facebook.react.R.id.view_tag_native_id, "card")
         BackgroundStyleApplicator.setBackgroundColor(leaf, Color.RED)
         val module = moduleFor(leaf)
-        val density = leaf.resources.displayMetrics.density
 
         val hinted = module.computeWireArray(
             42.0,
             "hinted",
-            defaultConfig.copy(hints = listOf(AutoskeletonHintEntry(nodeId = "card", lines = null, radius = 20f))),
+            geometryConfig.copy(hints = listOf(AutoskeletonHintEntry(nodeId = "card", lines = null, radius = 20f))),
         )!!
 
         assertEquals(6, hinted.size)
-        assertEquals(20.0 / density, hinted[5], 0.0001) // slot 5 = r
+        // Units defect: this used to assert `20.0 / density`. A hint radius is a
+        // dp value authored in JS (`<AutoSkeleton.Hint radius={20}>`) and iOS
+        // applies that same 20 verbatim as points, so a 20 in must stay a 20 out
+        // — the division made Android paint 6.67dp against iOS's 20pt on a 3x
+        // device, invisible here only because Robolectric's default density is 1.
+        assertEquals(20.0, hinted[5], 0.0001) // slot 5 = r
     }
 
     @Test
@@ -343,7 +374,6 @@ class AutoskeletonModuleTest {
         // proves the SENSOR honors (nodeId "collapsed-text-1", h=2 collapses
         // below defaultLineHeight) — this test proves the BRIDGE config
         // reaches that same registry consultation, not a hand-built fake.
-        AutoskeletonNativeShapeCache.clear()
         val fixture = SyntheticHierarchyBuilder.loadFixture("collapsed-text")
         val root = SyntheticHierarchyBuilder.build(fixture)
         val module = moduleFor(root)
@@ -351,11 +381,11 @@ class AutoskeletonModuleTest {
         val hinted = module.computeWireArray(
             42.0,
             "lines-hinted",
-            defaultConfig.copy(
+            geometryConfig.copy(
                 hints = listOf(AutoskeletonHintEntry(nodeId = "collapsed-text-1", lines = 3, radius = null)),
             ),
         )!!
-        val unhinted = module.computeWireArray(42.0, "lines-unhinted", defaultConfig)!!
+        val unhinted = module.computeWireArray(42.0, "lines-unhinted", geometryConfig)!!
 
         val hintedShapeCount = (hinted.size - 1) / 5
         val unhintedShapeCount = (unhinted.size - 1) / 5
@@ -365,7 +395,6 @@ class AutoskeletonModuleTest {
 
     @Test
     fun computeWireArrayIgnoresAHintRegisteredUnderADifferentNodeId() {
-        AutoskeletonNativeShapeCache.clear()
         val context = RuntimeEnvironment.getApplication()
         DisplayMetricsHolder.initDisplayMetricsIfNotInitialized(context)
         val leaf = FrameLayout(context)
@@ -377,10 +406,95 @@ class AutoskeletonModuleTest {
         val unhinted = module.computeWireArray(
             42.0,
             "unhinted",
-            defaultConfig.copy(hints = listOf(AutoskeletonHintEntry(nodeId = "unrelated", lines = null, radius = 20f))),
+            geometryConfig.copy(hints = listOf(AutoskeletonHintEntry(nodeId = "unrelated", lines = null, radius = 20f))),
         )!!
 
         assertEquals(0.0, unhinted[5], 0.0001) // no background radius set, no matching hint -> R1 MEASURED 0
+    }
+
+    // MARK: - Units defect: dp in from JS, dp out on the wire, at a density
+    // that is NOT 1.
+    //
+    // Every case above runs at Robolectric's default density of 1, where a
+    // stray `/ density` or a missing `* density` is arithmetically invisible —
+    // which is exactly how `config.defaultRadius`, `config.hints[].radius` and
+    // `defaultLineHeight` came to be injected into the sensor's PIXEL-space
+    // pipeline as raw dp values and then divided by density on the way out,
+    // shipping every one of them `1/density` too small on real devices. These
+    // cases pin the round trip at density 3, so the bug cannot come back
+    // unnoticed.
+    //
+    // `@Config(qualifiers = "xxhdpi")` is the mechanism: Robolectric 4.14.1
+    // applies the resource qualifier to the whole `Configuration`/
+    // `DisplayMetrics` for the test, giving `densityDpi = 480` and therefore
+    // `density = 3.0` — asserted below before anything else, so a Robolectric
+    // upgrade that stopped honoring the qualifier fails loudly here instead of
+    // silently degrading these into more density-1 tests that prove nothing.
+
+    @Test
+    @Config(qualifiers = "xxhdpi")
+    fun dpLengthsSurviveTheWireRoundTripUnchangedAtDensity3() {
+        val leaf = perCornerLeaf(radiusPx = 8f, w = 120, h = 120)
+        assertEquals(3f, leaf.resources.displayMetrics.density, 0.0001f)
+        val module = moduleFor(leaf)
+
+        // R3 fallback rung: `<SkeletonProvider defaultRadius={16}>`.
+        val fromDefaultRadius = module.computeWireArray(42.0, "dpi3-default", geometryConfig.copy(defaultRadius = 16f))!!
+        // R0 hint rung: `<AutoSkeleton.Hint radius={20}>`.
+        leaf.setTag(com.facebook.react.R.id.view_tag_native_id, "card")
+        val fromHint = module.computeWireArray(
+            42.0,
+            "dpi3-hint",
+            geometryConfig.copy(hints = listOf(AutoskeletonHintEntry(nodeId = "card", lines = null, radius = 20f))),
+        )!!
+
+        assertEquals(6, fromDefaultRadius.size)
+        assertEquals(6, fromHint.size)
+        assertEquals("defaultRadius={16} is 16dp in, so it must be 16dp out", 16.0, fromDefaultRadius[5], 0.0001)
+        assertEquals("Hint radius={20} is 20dp in, so it must be 20dp out", 20.0, fromHint[5], 0.0001)
+
+        // MEASURED geometry must NOT move: `view.layout(0, 0, 120, 120)` is 120
+        // raw PIXELS (Robolectric's `layout()` takes pixels regardless of
+        // density), so the wire's dp value is still 120/3 = 40. This is the
+        // guard that the fix converted only the JS-authored lengths and left
+        // the already-correct pixel geometry alone.
+        assertEquals(0.0, fromDefaultRadius[1], 0.0001) // x
+        assertEquals(0.0, fromDefaultRadius[2], 0.0001) // y
+        assertEquals(40.0, fromDefaultRadius[3], 0.0001) // w
+        assertEquals(40.0, fromDefaultRadius[4], 0.0001) // h
+    }
+
+    @Test
+    @Config(qualifiers = "xxhdpi")
+    fun collapsedTextIsDetectedAgainstADpLineHeightNotARawPixelOneAtDensity3() {
+        // `defaultLineHeight` (20) is the same dp literal iOS declares in POINTS
+        // (`ios/AutoskeletonTypes.swift`), so `frame.h < defaultLineHeight` must
+        // compare a pixel height against 20dp = 60px here, never against a bare
+        // 20px (≈6.7dp) — that mismatch made Android refuse to collapse text iOS
+        // collapses, and made every synthesized line 20px (6.7dp) tall instead of
+        // 20dp.
+        //
+        // This leaf is 30px = 10dp tall, chosen to sit strictly between the wrong
+        // threshold (20px) and the right one (60px), so the two behaviors are
+        // distinguishable: pre-fix it emitted ONE 10dp-tall text shape; post-fix
+        // it collapses into synthesized lines of exactly 20dp.
+        val context = RuntimeEnvironment.getApplication()
+        DisplayMetricsHolder.initDisplayMetricsIfNotInitialized(context)
+        val leaf = ReactTextView(context)
+        leaf.layout(0, 0, 120, 30)
+        assertEquals(3f, leaf.resources.displayMetrics.density, 0.0001f)
+        val module = moduleFor(leaf)
+
+        val wire = module.computeWireArray(42.0, "dpi3-collapsed-text", geometryConfig)!!
+
+        // round(30px / 60px) == 1, floored at 1 by `defaultLineCount`.
+        assertEquals("one synthesized line", 6, wire.size)
+        assertEquals(
+            "a synthesized line is exactly defaultLineHeight tall — 20dp, not 20px (6.67dp)",
+            20.0,
+            wire[4],
+            0.0001,
+        )
     }
 
     // MARK: - Adversarial-review defect (2026-08-28): a timed-out `getShapes`
@@ -393,8 +507,7 @@ class AutoskeletonModuleTest {
     // same-thread, well within the 200ms `UI_THREAD_DISPATCH_TIMEOUT_MS`).
 
     @Test
-    fun computeWireArrayDoesNotPoisonTheSharedCacheWhenTheCallerTimesOutBeforeTheUiThreadRuns() {
-        AutoskeletonNativeShapeCache.clear()
+    fun computeWireArrayReturnsNullWhenTheCallerTimesOutBeforeTheUiThreadRuns() {
         val fixture = SyntheticHierarchyBuilder.loadFixture("nested-offsets")
         val root = SyntheticHierarchyBuilder.build(fixture)
         val module = moduleFor(root) // default uiThreadDispatcher = AutoskeletonSystemUiThreadDispatcher
@@ -412,41 +525,26 @@ class AutoskeletonModuleTest {
         thread.join(2000)
 
         assertNull("the caller must give up and return null on timeout", result)
-        assertNull(
-            "the abandoned UI-thread computation must not have run yet (queue still paused)",
-            AutoskeletonNativeShapeCache.get("recycled-cache-key"),
-        )
 
-        // Now let the ABANDONED work actually run -- mirrors the real-device
+        // Let the ABANDONED work actually run -- mirrors the real-device
         // timing this defect describes: a busy-but-alive UI thread
         // eventually drains its queue, well after the JS-thread caller
         // already moved on.
         shadowOf(Looper.getMainLooper()).idle()
+        assertNull("the timed-out caller's result must stay null", result)
 
-        // THE ACTUAL DEFECT: pre-fix, `computeWireArray`'s UI-thread block
-        // never checked whether the caller already gave up, so it wrote
-        // into the shared cache regardless -- even though `reactTag` 42 may
-        // by then belong to a completely different recycled row.
-        assertNull(
-            "abandoned work must not retroactively poison the shared cache after the caller already timed out",
-            AutoskeletonNativeShapeCache.get("recycled-cache-key"),
-        )
+        // SCOPE NOTE, deliberately stated rather than quietly dropped: this
+        // test used to assert a SECOND thing — that the abandoned UI-thread
+        // block did not retroactively write stale geometry into the shared
+        // native cache under a `cacheKey` that, on a recycled list, may by
+        // then belong to a different row. That cache no longer exists (the
+        // overlay takes its geometry as a `shapes` prop), so the abandoned
+        // work has no observable side effect left to poison. The
+        // `isCancelled()` guard in `computeWireArray` stays, and what
+        // remains provable about it is exactly what is asserted above.
     }
 
-    @Test
-    fun evictShapesRemovesOnlyTheRequestedKeys() {
-        val cache = AutoskeletonNativeShapeCache
-        cache.clear()
-        cache.set("keep", doubleArrayOf(1.0))
-        cache.set("drop", doubleArrayOf(1.0))
-        val module = moduleFor(FrameLayout(RuntimeEnvironment.getApplication()), cache)
-
-        module.evictShapes(JavaOnlyArray.of("drop"))
-
-        assertTrue(cache.get("keep") != null)
-        assertNull(cache.get("drop"))
-    }
-
+    
     @Test
     fun encodeWireArrayDividesRawViewPixelsByDensity() {
         // plan.md §4.1 "Units": Android divides by density before writing

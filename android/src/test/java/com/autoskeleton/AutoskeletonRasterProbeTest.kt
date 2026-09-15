@@ -197,17 +197,28 @@ class AutoskeletonRasterProbeTest {
         assertTrue(refined.shapes.none { it.radiusSource == AutoskeletonRadiusSource.RASTER_PROBE })
     }
 
+    /**
+     * R2 is no longer reachable through the sensor, and this records why.
+     *
+     * TWO independent changes closed its last route. First, R1b now recovers any
+     * uniform `borderRadius` straight off the style
+     * (`BackgroundStyleApplicator.getBorderRadius`), so no RN view with a rounded
+     * background is left unresolved for R2 to help with. Second, the container
+     * rule now reads the RN background COLOUR — matching iOS — so a view whose
+     * only background is a raw `Drawable` assigned outside RN's props is not a
+     * paintable container and emits no shape at all.
+     *
+     * `OutlineBlindRoundedDrawable` is exactly such a drawable: it has a
+     * `ConstantState` (which RN's real background lacks, per task 4.2's finding)
+     * and an un-overridden `getOutline`. It was the only construct that could
+     * drive R2 end to end, and RN never produces it.
+     *
+     * The probe's own behaviour stays covered by the eight direct tests above.
+     * This one now pins the reachability claim instead, so a future change that
+     * silently re-opens the path fails here.
+     */
     @Test
-    fun refineRecoversRasterProbeSourcedRadiusForAConstantStateHavingBackground() {
-        // NOT `gradientBackground`: `GradientDrawable.getOutline()` is well-behaved
-        // and correctly reports its own configured corner radius, so R1 would
-        // resolve it directly and R2 would never even be attempted — that's real,
-        // correct behavior, but it means GradientDrawable can't exercise R2's own
-        // code path. `OutlineBlindRoundedDrawable` below has a `ConstantState` (so
-        // R2 CAN attempt it, unlike RN's real background drawable — task 4.2's
-        // finding) but leaves `getOutline()` un-overridden, so `Outline.getRadius()`
-        // stays at its constructor default (`RADIUS_UNDEFINED`) exactly like the
-        // characterized RN "rounded" case — the one case R2 exists to help with.
+    fun rasterProbeIsUnreachableThroughTheSensorForANonRnBackground() {
         val view = freshView()
         view.background = OutlineBlindRoundedDrawable(radiusPx = 8f).also {
             it.setBounds(0, 0, view.width, view.height)
@@ -219,10 +230,15 @@ class AutoskeletonRasterProbeTest {
             view,
             AutoskeletonSensorOptions.defaults.copy(budgetMs = 1000.0),
             probe,
-            enableRasterProbe = true, // task 4.3's on-device gate defaults this to false
+            enableRasterProbe = true,
         )!!
-        assertTrue(probe.attemptedProbeCount > 0)
-        assertTrue(refined.shapes.any { it.radiusSource == AutoskeletonRadiusSource.RASTER_PROBE })
+
+        assertEquals(
+            "a raw Drawable is not an RN background colour, so the view is not a paintable container",
+            0,
+            refined.shapes.size,
+        )
+        assertEquals("with no shape to resolve, the probe is never attempted", 0, probe.attemptedProbeCount)
     }
 }
 

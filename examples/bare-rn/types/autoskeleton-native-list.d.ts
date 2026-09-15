@@ -73,4 +73,24 @@ declare module 'autoskeleton' {
     readonly rowSpacing?: number;
   }
   export const SkeletonListFooter: ComponentType<SkeletonListFooterProps>;
+
+  export interface ShapeSnapshot {
+    readonly key: string;
+    readonly frameWidth: number;
+    readonly frameHeight: number;
+    readonly data: readonly number[];
+  }
+  export interface UseSkeletonCellOptions {
+    readonly itemType: string;
+    readonly skeletonKey?: string;
+    readonly renderTemplate?: () => ReactNode;
+  }
+  export interface UseSkeletonCellResult {
+    readonly snapshot: ShapeSnapshot | null;
+    readonly cacheHit: boolean;
+    readonly isFallback: boolean;
+    readonly cacheKey: string;
+    readonly pendingTemplateNode: ReactNode | null;
+  }
+  export function useSkeletonCell(options: UseSkeletonCellOptions): UseSkeletonCellResult;
 }

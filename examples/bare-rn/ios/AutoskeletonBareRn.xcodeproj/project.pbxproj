@@ -10,6 +10,7 @@
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
 		79CD242AA7BFBB9583629689 /* PaintGateUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D05568F595BC26A6EB54B85C /* PaintGateUITests.swift */; };
+		A1B2C3D4E5F60718293A4B5C /* PaintGateRtlUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5D /* PaintGateRtlUITests.swift */; };
 		7CAECD301E7BAA9890CD96FE /* libPods-AutoskeletonBareRn.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 75A37CF0FE200E31489F459A /* libPods-AutoskeletonBareRn.a */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
 		B552F5B9D31D18FFCFCC7850 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
@@ -39,6 +40,7 @@
 		B872349FD176C51A7135EA3E /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		C25184059A81BA76B8458975 /* AutoskeletonBareRnPaintGateUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AutoskeletonBareRnPaintGateUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		D05568F595BC26A6EB54B85C /* PaintGateUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PaintGateUITests.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718293A4B5D /* PaintGateRtlUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PaintGateRtlUITests.swift; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
@@ -78,6 +80,7 @@
 			isa = PBXGroup;
 			children = (
 				D05568F595BC26A6EB54B85C /* PaintGateUITests.swift */,
+				A1B2C3D4E5F60718293A4B5D /* PaintGateRtlUITests.swift */,
 			);
 			name = AutoskeletonBareRnPaintGateUITests;
 			path = AutoskeletonBareRnPaintGateUITests;
@@ -324,6 +327,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				79CD242AA7BFBB9583629689 /* PaintGateUITests.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5C /* PaintGateRtlUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

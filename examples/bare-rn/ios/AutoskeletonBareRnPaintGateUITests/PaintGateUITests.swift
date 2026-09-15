@@ -93,12 +93,32 @@ final class PaintGateUITests: XCTestCase {
     // post-toggle pixels is real production timing, not an arbitrary sleep.
     private static let handoffSettleSeconds: TimeInterval = 0.6
 
+    /// `src/native/AutoSkeleton.tsx`'s `DEFAULT_THEME.speedMs` — the shimmer
+    /// clock's PERIOD. Hardcoded here for the same reason the colours above are:
+    /// a drift in the production default must fail this gate loudly.
+    private static let shimmerPeriodSeconds: TimeInterval = 1.4
+    /// Sampling window for the across-the-cycle gate: one and a half full
+    /// periods, so the sweep is guaranteed to pass through BOTH of its extremes
+    /// (`-width` and `+width`) inside the window regardless of the phase the
+    /// first sample happens to land on.
+    private static let cycleSampleSpanSeconds: TimeInterval = shimmerPeriodSeconds * 1.5
+    /// Sampled as fast as `XCUIScreen.main.screenshot()` allows; the small sleep
+    /// only keeps the loop from spinning the CPU flat out.
+    private static let cycleSampleInterval: TimeInterval = 0.05
+    /// A one-shot sample can never see this defect, so a run that collected too
+    /// few samples is a FIXTURE FAILURE, not a pass.
+    private static let minCycleSamples = 12
+
     private static let labelToggle = "paint-gate-toggle"
     private static let labelContent = "paint-gate-content"
     private static let labelImage = "paint-gate-image"
     private static let labelCard = "paint-gate-rounded-card"
     private static let labelIgnoredContent = "paint-gate-ignored-content"
     private static let labelIgnoredSibling = "paint-gate-ignored-sibling"
+    /// `PaintGateListScreen` is one tap away from launch — the cycle length and
+    /// order are part of the fixture contract (`App.tsx`'s `onToggleScreen`).
+    private static let labelScreenToggle = "paint-gate-screen-toggle"
+    private static let labelTemplateWidth = "paint-gate-list-template-width"
 
     /// `src/native/AutoSkeleton.tsx`'s `LOADING_ACCESSIBILITY_LABEL`, and the
     /// exact string `src/web/AutoSkeleton.tsx` already renders inside its
@@ -648,5 +668,571 @@ final class PaintGateUITests: XCTestCase {
                 "hierarchy after \(Int(Self.accessibilitySettleTimeout))s — a permanent 'Loading' " +
                 "announcement on loaded content is worse than none."
         )
+    }
+
+    // MARK: - G.18: the covered region must be STATIONARY across the cycle
+
+    /// Every other assertion in this file samples a SINGLE frame — `pollUntilPixel`
+    /// returns as soon as ONE sample satisfies its predicate — and the colour
+    /// check is a RAMP check, deliberately built to tolerate the sweep. That
+    /// combination is blind to the class of defect where the shimmer translates
+    /// the SKELETON instead of translating a highlight THROUGH it: at some
+    /// instant in every cycle the skeleton does sit over the probe, so a
+    /// poll-until-satisfied gate always finds its frame and passes, while for
+    /// most of the cycle the real content is exposed.
+    ///
+    /// This gate samples ACROSS one and a half full 1400 ms periods instead and
+    /// requires EVERY sample to be covered, at two different probe points. It is
+    /// the on-device sibling of
+    /// `AutoskeletonRendererTier1Tests.testAPointOverContentStaysCoveredAndOpaque
+    /// AcrossTheWholeShimmerCycle`, which asserts the same invariant against the
+    /// layer tree directly.
+    func testSkeletonCoverageStaysStationaryAcrossAWholeShimmerCycle() {
+        let frames = contentFrames([Self.labelImage, Self.labelCard])
+        let imageFrame = frame(frames, Self.labelImage)
+        let cardFrame = frame(frames, Self.labelCard)
+
+        // Same settle discipline as every other assertion here: wait for the
+        // real overlay to exist before judging it, never a guessed sleep.
+        guard pollUntilPixel(frame: imageFrame, satisfying: { pixel in
+            self.colorInRamp(pixel, from: Self.skeletonBaseColor, to: Self.skeletonHighlightColor)
+        }) != nil else {
+            XCTFail("FIXTURE FAILURE: could not sample a pixel from the screenshot at \(imageFrame)")
+            return
+        }
+
+        var imageSamples: [RGB] = []
+        var cardSamples: [RGB] = []
+        let start = Date()
+        let deadline = start.addingTimeInterval(Self.cycleSampleSpanSeconds)
+        repeat {
+            let image = screenshotImage()
+            guard let imagePixel = centerPixelColor(image, frame: imageFrame),
+                  let cardPixel = centerPixelColor(image, frame: cardFrame)
+            else {
+                XCTFail("FIXTURE FAILURE: could not sample the screenshot mid-cycle")
+                return
+            }
+            imageSamples.append(imagePixel)
+            cardSamples.append(cardPixel)
+            Thread.sleep(forTimeInterval: Self.cycleSampleInterval)
+        } while Date() < deadline
+        let span = Date().timeIntervalSince(start)
+
+        XCTAssertGreaterThanOrEqual(
+            imageSamples.count, Self.minCycleSamples,
+            "FIXTURE FAILURE: only \(imageSamples.count) samples in \(span)s — too few to " +
+                "observe a \(Self.shimmerPeriodSeconds)s cycle, so this gate proved nothing."
+        )
+        XCTAssertGreaterThanOrEqual(
+            span, Self.shimmerPeriodSeconds,
+            "FIXTURE FAILURE: sampled for only \(span)s, less than one full shimmer period."
+        )
+
+        assertCoveredAtEverySample(
+            imageSamples,
+            probe: "paint-gate-image",
+            contentColor: Self.contentImageColor,
+            frame: imageFrame
+        )
+        assertCoveredAtEverySample(
+            cardSamples,
+            probe: "paint-gate-rounded-card",
+            contentColor: Self.contentCardColor,
+            frame: cardFrame
+        )
+
+        // Anti-vacuity: a completely frozen screen would satisfy every
+        // assertion above. The shimmer must still be MOVING — the highlight
+        // sweeps through the probe once per period, so the sampled colour
+        // cannot be byte-identical across a full cycle.
+        XCTAssertGreaterThan(
+            Set(imageSamples.map { "\($0.r),\($0.g),\($0.b)" }).count, 1,
+            "Every one of the \(imageSamples.count) samples over \(span)s was the exact same " +
+                "colour — the shimmer is not animating at all, so \"the covered region never " +
+                "moved\" is vacuously true rather than earned."
+        )
+    }
+
+    /// Fails on the FIRST uncovered sample with its index, so the report names
+    /// the phase at which the skeleton stopped covering the content.
+    private func assertCoveredAtEverySample(
+        _ samples: [RGB],
+        probe: String,
+        contentColor: RGB,
+        frame: CGRect,
+        rampFrom: RGB = PaintGateUITests.skeletonBaseColor,
+        rampTo: RGB = PaintGateUITests.skeletonHighlightColor
+    ) {
+        for (index, pixel) in samples.enumerated() {
+            let inRamp = colorInRamp(pixel, from: rampFrom, to: rampTo)
+            let isContent = colorsClose(pixel, contentColor)
+            XCTAssertFalse(
+                isContent,
+                "At sample \(index + 1)/\(samples.count) of one shimmer cycle, the real content " +
+                    "(\(hex(contentColor))) was DIRECTLY VISIBLE at \(probe) " +
+                    "(\(frame.midX), \(frame.midY)). The skeleton is only covering it at part " +
+                    "of the cycle — the covered region is travelling with the sweep instead of " +
+                    "staying put while a highlight sweeps through it."
+            )
+            XCTAssertTrue(
+                inRamp,
+                "At sample \(index + 1)/\(samples.count) of one shimmer cycle, \(probe) was " +
+                    "\(hex(pixel)) — outside the shimmer ramp " +
+                    "(\(hex(rampFrom))..\(hex(rampTo))). The " +
+                    "skeleton must cover this point at EVERY phase, not merely at some of them."
+            )
+        }
+    }
+
+    // MARK: - Tier-2 (Skia + Reanimated) gates
+    //
+    // Everything below runs against the `tier2` screen of
+    // `examples/bare-rn/App.tsx`, which is wrapped in
+    // `<SkeletonProvider overlay={createSkiaOverlay(...)}>` — the real,
+    // documented ADR-5 opt-in a consumer writes, with the two optional peers
+    // imported by the APP's own module graph. There is no test-only backdoor
+    // into tier-2 and there must never be one: the thing being gated is
+    // precisely that the shipped opt-in path works.
+    //
+    // The `card` and `list` screens deliberately stay on tier-1, so every
+    // pre-existing gate in this file keeps exercising the default tier. Making
+    // the whole app tier-2 would have silently deleted tier-1's on-device
+    // coverage while every one of its assertions stayed green.
+
+    /// `examples/bare-rn/App.tsx` `TIER2_FIXTURE`.
+    private static let tier2Root = "tier2-root"
+    private static let tier2Toggle = "tier2-toggle"
+    private static let tier2Renderer = "tier2-renderer"
+    private static let tier2Early = "tier2-early-block"
+    private static let tier2Late = "tier2-late-block"
+    private static let tier2EarlyColor: RGB = (0x00, 0x00, 0xFF)
+    private static let tier2LateColor: RGB = (0x00, 0xA6, 0x51)
+    /// `TIER2_FIXTURE.theme` — a DELIBERATELY high-contrast ramp, 174 units per
+    /// channel end to end against the default theme's 19. See that fixture's
+    /// doc comment: with a 19-unit ramp, any tolerance large enough to absorb
+    /// simulator compositor noise is wider than the whole signal, and the phase
+    /// gate below passes vacuously. That was observed against a planted defect,
+    /// not assumed.
+    private static let tier2BaseColor: RGB = (0x3A, 0x3A, 0x3A)
+    private static let tier2HighlightColor: RGB = (0xE8, 0xE8, 0xE8)
+    /// End-to-end excursion of the tier-2 ramp, per channel.
+    private static let tier2RampSpan = 0xE8 - 0x3A
+    /// `TIER2_FIXTURE.lateMountMs` (700 ms) plus generous slack for the second
+    /// block's own cold `getShapes` round-trip. Real fixture timing, not a
+    /// guessed sleep: the fixture's mount delay is the thing being waited on,
+    /// and it is what creates the phase offset the ADR-8 gate below exists to
+    /// detect.
+    private static let tier2LateMountSettleSeconds: TimeInterval = 3
+
+    /// Walks the screen switcher card -> list -> tier2. Two taps, because the
+    /// switcher cycles; a timeout here is a FIXTURE FAILURE.
+    private func goToTier2Screen() {
+        waitForMount()
+        let screenToggle = element(PAINT_GATE_SCREEN_TOGGLE)
+        XCTAssertTrue(
+            screenToggle.waitForExistence(timeout: Self.mountTimeout),
+            "FIXTURE FAILURE: the screen switcher never mounted."
+        )
+        screenToggle.tap()
+        screenToggle.tap()
+        XCTAssertTrue(
+            element(Self.tier2Root).waitForExistence(timeout: Self.mountTimeout),
+            "FIXTURE FAILURE: the tier-2 screen never mounted after two switcher taps."
+        )
+    }
+
+    private let PAINT_GATE_SCREEN_TOGGLE = "paint-gate-screen-toggle"
+
+    /// Reads both tier-2 block frames where the content is genuinely reachable
+    /// (the LOADED state — REQ-A11Y-1 hides it while the skeleton paints), then
+    /// returns the app to a fresh COLD `isLoading` cycle for the caller's pixel
+    /// assertions. Same discipline and same rationale as `contentFrames`; no
+    /// coordinate is ever guessed.
+    ///
+    /// The relaunch is NOT ceremony and must not be replaced by a second toggle
+    /// tap. Toggling `isLoading` back to true on an instance whose content has
+    /// already been shown is REQ-PTR-1's stale-while-revalidate path, where
+    /// `shouldRunHandoffCycle` suppresses the overlay ENTIRELY and the real
+    /// content stays visible by design — observed here first as a tier-2 gate
+    /// failing with "the real content (#0000FF) was DIRECTLY VISIBLE at sample
+    /// 1", which was the fixture doing the wrong thing, not the renderer.
+    private func tier2Frames() -> (early: CGRect, late: CGRect) {
+        goToTier2Screen()
+        waitForLateTier2Block()
+
+        let toggle = element(Self.tier2Toggle)
+        XCTAssertTrue(toggle.exists, "FIXTURE FAILURE: could not locate the tier-2 isLoading toggle")
+        toggle.tap()
+
+        var frames: [String: CGRect] = [:]
+        for identifier in [Self.tier2Early, Self.tier2Late] {
+            let el = element(identifier)
+            XCTAssertTrue(
+                el.waitForExistence(timeout: Self.accessibilitySettleTimeout),
+                "FIXTURE FAILURE: \"\(identifier)\" never became reachable in the LOADED state."
+            )
+            frames[identifier] = el.frame
+        }
+
+        app.terminate()
+        app.launch()
+        goToTier2Screen()
+        waitForLateTier2Block()
+
+        return (frames[Self.tier2Early] ?? .zero, frames[Self.tier2Late] ?? .zero)
+    }
+
+    /// The second tier-2 block mounts on a `TIER2_FIXTURE.lateMountMs` timer, so
+    /// sampling before it exists would race the fixture rather than the library.
+    /// It is only reachable through the accessibility tree while its skeleton is
+    /// NOT painted, so this waits on the tier-2 TOGGLE plus the fixture's own
+    /// mount delay instead of on the block itself.
+    private func waitForLateTier2Block() {
+        XCTAssertTrue(
+            element(Self.tier2Toggle).waitForExistence(timeout: Self.mountTimeout),
+            "FIXTURE FAILURE: the tier-2 screen's toggle never mounted."
+        )
+        Thread.sleep(forTimeInterval: Self.tier2LateMountSettleSeconds)
+    }
+
+    /// Samples both probes from the SAME screenshot, repeatedly, for
+    /// `cycleSampleSpanSeconds`. Returning paired samples from one rasterization
+    /// is what makes the phase comparison meaningful: two probes read from two
+    /// different frames could differ purely because time passed between them.
+    private func sampleAcrossCycle(_ a: CGRect, _ b: CGRect) -> (a: [RGB], b: [RGB], span: TimeInterval) {
+        var aSamples: [RGB] = []
+        var bSamples: [RGB] = []
+        let start = Date()
+        let deadline = start.addingTimeInterval(Self.cycleSampleSpanSeconds)
+        repeat {
+            let image = screenshotImage()
+            guard let pa = centerPixelColor(image, frame: a), let pb = centerPixelColor(image, frame: b) else {
+                XCTFail("FIXTURE FAILURE: could not sample the screenshot mid-cycle")
+                return (aSamples, bSamples, Date().timeIntervalSince(start))
+            }
+            aSamples.append(pa)
+            bSamples.append(pb)
+            Thread.sleep(forTimeInterval: Self.cycleSampleInterval)
+        } while Date() < deadline
+        return (aSamples, bSamples, Date().timeIntervalSince(start))
+    }
+
+    /// RISK-8's own stated detection signal, both halves of it.
+    ///
+    /// The `card` screen has NOT opted in, and both optional peers ARE
+    /// installed and linked in this app. It must still report `native`. Before
+    /// this session that assertion would have been meaningless in both
+    /// directions at once: the tier was chosen by a `require()` with a variable
+    /// specifier, which Metro compiles to an unconditional throw, so the probe
+    /// answered "peers absent" no matter what — AND `SkiaShimmerOverlay` had no
+    /// call site anywhere in the library, so tier-1 drew regardless of the
+    /// answer. Verified on this exact simulator before the fix:
+    /// `onMetrics.renderer` reported `native` with Skia 2.11.1 and Reanimated
+    /// 4.6.0 installed, pods built and linked.
+    func testTierIsReportedByWhatActuallyDrewNotByWhatIsInstalled() {
+        waitForMount()
+        let toggle = element(Self.labelToggle)
+        XCTAssertTrue(toggle.exists, "FIXTURE FAILURE: could not locate the isLoading toggle")
+        toggle.tap()
+        XCTAssertEqual(
+            awaitRendererReadout("paint-gate-renderer"), "native",
+            "The default `card` screen never opted in to tier-2, but both optional peers are " +
+                "installed in this app. It must still report the tier that actually drew."
+        )
+
+        goToTier2Screen()
+        let tier2Toggle = element(Self.tier2Toggle)
+        XCTAssertTrue(tier2Toggle.waitForExistence(timeout: Self.mountTimeout), "FIXTURE FAILURE: no tier-2 toggle")
+        tier2Toggle.tap()
+        XCTAssertEqual(
+            awaitRendererReadout(Self.tier2Renderer), "skia",
+            "The tier-2 screen passed a real `createSkiaOverlay(...)` to `<SkeletonProvider overlay>`, " +
+                "so `onMetrics.renderer` must report `skia` — and it must report it because Skia DREW, " +
+                "not because a probe found a package on disk."
+        )
+    }
+
+    /// Reads `<id>:<kind>` off the fixture's readout element, waiting out the
+    /// `pending` state that precedes the first `onMetrics` callback.
+    private func awaitRendererReadout(_ identifier: String) -> String {
+        let readout = element(identifier)
+        XCTAssertTrue(
+            readout.waitForExistence(timeout: Self.accessibilitySettleTimeout),
+            "FIXTURE FAILURE: renderer readout \"\(identifier)\" never appeared."
+        )
+        let deadline = Date().addingTimeInterval(Self.accessibilitySettleTimeout)
+        var label = readout.label
+        while label.hasSuffix(":pending") && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.1)
+            label = readout.label
+        }
+        guard let kind = label.split(separator: ":").last.map(String.init) else {
+            XCTFail("FIXTURE FAILURE: unreadable renderer readout \"\(label)\"")
+            return ""
+        }
+        return kind
+    }
+
+    /// The tier-2 sibling of
+    /// `testSkeletonCoverageStaysStationaryAcrossAWholeShimmerCycle`, and it
+    /// exists for exactly the reason that one does: every other pixel assertion
+    /// in this file samples a SINGLE frame against a colour RAMP that was
+    /// deliberately built to tolerate the sweep, so the combination is blind to
+    /// a shimmer that translates the SKELETON instead of translating a
+    /// highlight THROUGH it. A gate that tolerates variation along the axis a
+    /// defect moves cannot see that defect.
+    ///
+    /// Tier-2 has that failure mode available to it in a form tier-1 does not:
+    /// the Skia mask path and the Skia gradient are two independent nodes, and
+    /// a `<Group transform>` or a mask offset applied one level too high would
+    /// move both together while every sampled pixel stayed inside the ramp.
+    func testTier2SkeletonCoverageStaysStationaryAcrossAWholeShimmerCycle() {
+        let frames = tier2Frames()
+
+        guard pollUntilPixel(frame: frames.early, satisfying: { pixel in
+            self.colorInRamp(pixel, from: Self.tier2BaseColor, to: Self.tier2HighlightColor)
+        }) != nil else {
+            XCTFail("FIXTURE FAILURE: could not sample a pixel at \(frames.early)")
+            return
+        }
+
+        let samples = sampleAcrossCycle(frames.early, frames.late)
+
+        XCTAssertGreaterThanOrEqual(
+            samples.a.count, Self.minCycleSamples,
+            "FIXTURE FAILURE: only \(samples.a.count) samples in \(samples.span)s — too few to " +
+                "observe a \(Self.shimmerPeriodSeconds)s cycle, so this gate proved nothing."
+        )
+        XCTAssertGreaterThanOrEqual(
+            samples.span, Self.shimmerPeriodSeconds,
+            "FIXTURE FAILURE: sampled for only \(samples.span)s, less than one full shimmer period."
+        )
+
+        assertCoveredAtEverySample(
+            samples.a, probe: Self.tier2Early, contentColor: Self.tier2EarlyColor, frame: frames.early,
+            rampFrom: Self.tier2BaseColor, rampTo: Self.tier2HighlightColor
+        )
+        assertCoveredAtEverySample(
+            samples.b, probe: Self.tier2Late, contentColor: Self.tier2LateColor, frame: frames.late,
+            rampFrom: Self.tier2BaseColor, rampTo: Self.tier2HighlightColor
+        )
+
+        // Anti-vacuity: a completely frozen screen satisfies every assertion
+        // above. Expressed as a FRACTION OF THE RAMP rather than "more than one
+        // distinct colour", which a single unit of compositor dither satisfies.
+        let excursion = channelExcursion(samples.a)
+        XCTAssertGreaterThanOrEqual(
+            excursion, Self.tier2RampSpan / 2,
+            "The tier-2 shimmer only varied by \(excursion) units across \(samples.span)s, out of " +
+                "a \(Self.tier2RampSpan)-unit ramp — it is not sweeping through this probe, so " +
+                "\"the covered region never moved\" is vacuously true rather than earned."
+        )
+    }
+
+    /// ADR-8, in the only form a screen can express it: two skeletons that
+    /// STARTED AT DIFFERENT TIMES must be at the same phase.
+    ///
+    /// The fixture mounts the second block `TIER2_FIXTURE.lateMountMs` after the
+    /// first, so a renderer that starts its own `withRepeat` from zero on mount
+    /// — which is exactly what tier-2 did before this session — puts the two
+    /// blocks permanently out of phase by that offset. No single-instance gate
+    /// can see that: each block on its own stays inside the ramp at every
+    /// sample, sweeps at the right rate, and covers its content perfectly. The
+    /// defect only exists BETWEEN them.
+    func testTier2InstancesMountedAtDifferentTimesShimmerInPhase() {
+        let frames = tier2Frames()
+
+        guard pollUntilPixel(frame: frames.early, satisfying: { pixel in
+            self.colorInRamp(pixel, from: Self.skeletonBaseColor, to: Self.skeletonHighlightColor)
+        }) != nil else {
+            XCTFail("FIXTURE FAILURE: could not sample a pixel at \(frames.early)")
+            return
+        }
+
+        let samples = sampleAcrossCycle(frames.early, frames.late)
+
+        XCTAssertGreaterThanOrEqual(
+            samples.a.count, Self.minCycleSamples,
+            "FIXTURE FAILURE: only \(samples.a.count) paired samples in \(samples.span)s."
+        )
+        XCTAssertGreaterThanOrEqual(
+            samples.span, Self.shimmerPeriodSeconds,
+            "FIXTURE FAILURE: sampled for only \(samples.span)s, less than one full shimmer period."
+        )
+
+        // ANTI-VACUITY, deliberately BEFORE the phase assertion: two
+        // STATIONARY skeletons are trivially "in phase". This gate is only
+        // meaningful if the shimmer genuinely swept a large part of the ramp
+        // through both probes inside the window, so a frozen — or barely
+        // moving — screen must fail HERE rather than pass below.
+        //
+        // The threshold is a FRACTION OF THE RAMP, not "more than one distinct
+        // colour". `Set(samples).count > 1` is satisfied by a single unit of
+        // compositor dither and proves nothing; requiring most of the ramp to
+        // actually pass through the probe is the assertion that has teeth.
+        let minExcursion = Self.tier2RampSpan / 2
+        for (label, series) in [("EARLY", samples.a), ("LATE", samples.b)] {
+            let excursion = channelExcursion(series)
+            XCTAssertGreaterThanOrEqual(
+                excursion, minExcursion,
+                "The \(label) tier-2 block only varied by \(excursion) units across " +
+                    "\(samples.span)s, out of a \(Self.tier2RampSpan)-unit ramp. The shimmer is " +
+                    "not sweeping through this probe, so \"the two blocks are in phase\" would be " +
+                    "vacuously true rather than earned."
+            )
+        }
+
+        // THE PHASE ASSERTION, AND AN HONEST TOLERANCE.
+        //
+        // The tolerance is DERIVED FROM MEASUREMENT, not chosen to make this
+        // green. Three facts fix it:
+        //
+        //  * With the shared origin REMOVED (a deliberately planted "phase = 0"
+        //    defect), the two blocks measured 167 units apart out of 174 —
+        //    essentially antiphase, which is what a 700 ms mount offset against
+        //    a 1400 ms period must produce.
+        //  * With the shared origin in place, iOS measured within 32 units and
+        //    Android measured 60 and 64 units in two of three runs.
+        //  * That residual is NOT noise and NOT a defect in the join. It is the
+        //    JS-to-UI-thread dispatch latency: `tier2PhaseAt` is evaluated on
+        //    the JS thread inside an effect, and the animation it produces
+        //    begins on the UI thread whenever Reanimated next processes it.
+        //    ~60 units of a 174-unit ramp is ~0.17 of a period, i.e. ~240 ms —
+        //    entirely plausible for a debug bundle on an emulator immediately
+        //    after a `getShapes` bridge round-trip.
+        //
+        // Reanimated's public API cannot close that gap: every animation it
+        // builds is START-RELATIVE (`withTiming.onStart` stamps
+        // `animation.startTime = now`), `withDelay` clamps a negative delay to
+        // zero (`if (now - startTime >= delayMs)`, so it can wait but never
+        // seek), and the only absolute clock, `global._getAnimationTimestamp()`,
+        // is declared in `privateGlobals.d.ts` and is not public API. So exact
+        // phase LOCK is not achievable here; joining the shared wave to within
+        // the dispatch latency is.
+        //
+        // 80 is therefore what this gate can honestly assert: it is above the
+        // measured residual on the slower of the two platforms and less than
+        // half the divergence the defect it exists to catch produces. It is
+        // NOT a widened tolerance hiding a failure — the pre-fix code fails it
+        // by more than 2x.
+        //
+        // Both probes sit at the same X within their own equally-wide, equally
+        // positioned blocks, so at any instant one shared wave puts the same
+        // point of the gradient over both.
+        let phaseTolerance = 80
+        var worst = 0
+        var worstIndex = 0
+        for (index, pair) in zip(samples.a, samples.b).enumerated() {
+            let delta = max(abs(pair.0.r - pair.1.r), max(abs(pair.0.g - pair.1.g), abs(pair.0.b - pair.1.b)))
+            if delta > worst {
+                worst = delta
+                worstIndex = index
+            }
+        }
+        XCTAssertLessThanOrEqual(
+            worst, phaseTolerance,
+            "At paired sample \(worstIndex + 1)/\(samples.a.count) the EARLY block was " +
+                "\(hex(samples.a[worstIndex])) and the LATE block was \(hex(samples.b[worstIndex])) " +
+                "— \(worst) units apart, out of a \(Self.tier2RampSpan)-unit ramp. They were " +
+                "mounted 700ms apart, and ADR-8 gives every instance ONE clock with an absolute " +
+                "origin, so they must be at the same phase. A renderer that starts its own sweep " +
+                "from zero on mount is permanently offset by however late it mounted."
+        )
+    }
+
+    // MARK: - Virtualized lists
+
+    /// iOS's FIRST on-device list assertion. Until now every virtualized-list
+    /// gate lived on Android alone, so an iOS-side regression in the list
+    /// template path had nothing to fail against — worth stating plainly
+    /// rather than leaving as an unexplained asymmetry.
+    ///
+    /// REAL, on-device-found defect (2026-08-30): `TemplateMeasurementHost`
+    /// mounts the off-screen template in a `position: 'absolute'` container.
+    /// A Yoga absolute box declaring only a leading position resolves its
+    /// width from its own CONTENT, so the template was laid out at its
+    /// INTRINSIC width and every width-inheriting child (`flex: 1`,
+    /// `width: '100%'`, `alignSelf: 'stretch'`) collapsed to zero — a 92.19pt
+    /// snapshot for a 411.43pt row, painting a lone avatar square. The fix
+    /// declares both horizontal insets so Yoga resolves the box to its
+    /// parent's content width; the parent is the list, which has always known
+    /// the real width.
+    ///
+    /// This compares the header itemType's MEASURED snapshot width against the
+    /// width of the very container its `SkeletonList` is mounted in — a direct
+    /// parent/child pair, so agreement is the right answer rather than an
+    /// approximation of it. Both numbers ride in the readout's accessibility
+    /// label (`TemplateWidthReadout` in `App.tsx`) because an explicit
+    /// `accessibilityLabel` replaces a `Text`'s content in the tree XCUITest
+    /// queries; the Android gate reads that identical encoding.
+    func testListTemplateIsMeasuredAtItsContainersWidthNotItsIntrinsicWidth() {
+        waitForMount()
+        let screenToggle = element(Self.labelScreenToggle)
+        XCTAssertTrue(
+            screenToggle.waitForExistence(timeout: Self.mountTimeout),
+            "FIXTURE FAILURE: could not locate the screen toggle"
+        )
+        screenToggle.tap()
+
+        // The deferred template measurement is scheduled off the interaction
+        // frame and retried across a bounded RAF budget, so poll for a
+        // RESOLVED readout rather than guessing a sleep — the same discipline
+        // `pollUntilPixel` uses for the overlay round-trip.
+        let readout = app.descendants(matching: .any)
+            .matching(identifier: Self.labelTemplateWidth).firstMatch
+        XCTAssertTrue(
+            readout.waitForExistence(timeout: Self.mountTimeout),
+            "FIXTURE FAILURE: PaintGateListScreen never mounted its template-width readout"
+        )
+
+        var label = ""
+        var measured = -1
+        var container = -1
+        let deadline = Date().addingTimeInterval(Self.mountTimeout)
+        repeat {
+            label = readout.label
+            let parts = label
+                .replacingOccurrences(of: "\(Self.labelTemplateWidth):", with: "")
+                .split(separator: "/")
+            if parts.count == 2, let m = Int(parts[0]), let c = Int(parts[1]) {
+                measured = m
+                container = c
+            }
+            if measured > 0 && container > 0 { break }
+            Thread.sleep(forTimeInterval: Self.pollInterval)
+        } while Date() < deadline
+
+        XCTAssertGreaterThan(
+            container, 0,
+            "FIXTURE FAILURE: the SkeletonList's container never reported a width (readout: " +
+                "'\(label)') — the screen never laid out, so there is no width to compare against."
+        )
+        XCTAssertGreaterThan(
+            measured, 0,
+            "The header itemType never resolved to a measured snapshot at all (readout: " +
+                "'\(label)') within \(Int(Self.mountTimeout))s."
+        )
+        // One point of rounding either way; anything wider is the
+        // intrinsic-width collapse, not float noise.
+        XCTAssertLessThanOrEqual(
+            abs(measured - container), 1,
+            "The off-screen template measured \(measured)pt wide, but the container its " +
+                "SkeletonList is mounted in is \(container)pt wide. The template is being laid " +
+                "out at its INTRINSIC width, so every width-inheriting child in it collapsed, " +
+                "and every skeleton row drawn from this snapshot is the wrong width. The list " +
+                "knows its own width; the template must inherit it, rather than the consumer " +
+                "threading an explicit width through renderTemplate to compensate."
+        )
+    }
+
+    /// Largest end-to-end variation any single channel showed across `samples`.
+    /// Per-channel rather than per-pixel-distance because the shimmer is grey:
+    /// all three channels move together, and taking the max keeps a single
+    /// noisy channel from inflating the result.
+    private func channelExcursion(_ samples: [RGB]) -> Int {
+        guard !samples.isEmpty else { return 0 }
+        let r = samples.map(\.r), g = samples.map(\.g), b = samples.map(\.b)
+        return max(r.max()! - r.min()!, max(g.max()! - g.min()!, b.max()! - b.min()!))
     }
 }

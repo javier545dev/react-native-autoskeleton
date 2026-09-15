@@ -27,3 +27,7 @@ export {
   SSR_BUILD_ATTRIBUTE,
   SSR_BUILD_CSS_VARIABLE,
 } from './web/ssr/integrity';
+
+// `AutoSkeletonSSRHydrate`'s `store` prop is typed against this interface, so
+// it has to be nameable from the same subpath that declares the prop.
+export type { ShapeStore } from './core/contracts';

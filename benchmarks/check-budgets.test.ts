@@ -8,7 +8,17 @@
 
 import { describe, expect, it } from 'vitest';
 import { checkAbsoluteBudgets } from './check-budgets';
+import { loadBudgets } from './support/budgets';
 import type { BenchmarkResults } from './support/types';
+
+// Byte figures are derived from the budget, never spelled out. The previous
+// version hardcoded 7950 / 8185 / 9220 against an assumed 9216 budget, so the
+// day the NFR-6 budget moved these tests failed for a reason that had nothing
+// to do with the behaviour they describe — and, worse, they would have gone
+// GREEN against a budget that had silently drifted the other way. What the gate
+// promises is "at or above the budget fails, below it passes"; that is what is
+// asserted.
+const WEB_ENTRY_BUDGET = loadBudgets().webEntryGzipBytes;
 
 function passingResults(): BenchmarkResults {
   return {
@@ -17,7 +27,7 @@ function passingResults(): BenchmarkResults {
     serializationP95Ms: 0.1,
     droppedFrames: 0,
     droppedFramesMeasured: true,
-    webEntryGzipBytes: 7950,
+    webEntryGzipBytes: WEB_ENTRY_BUDGET - 1,
   };
 }
 
@@ -36,18 +46,18 @@ describe('checkAbsoluteBudgets', () => {
     expect(violations.some((v) => v.metric === 'cacheLookupP95Ms')).toBe(true);
   });
 
-  it('flags webEntryGzipBytes at or above 9216 (NFR-6, revised a second time to 9 kB)', () => {
-    const violations = checkAbsoluteBudgets({ ...passingResults(), webEntryGzipBytes: 9220 });
+  it('flags webEntryGzipBytes AT the budget — NFR-6 is a hard gate, not a tolerance', () => {
+    const violations = checkAbsoluteBudgets({ ...passingResults(), webEntryGzipBytes: WEB_ENTRY_BUDGET });
     expect(violations.some((v) => v.metric === 'webEntryGzipBytes')).toBe(true);
   });
 
-  it('does NOT flag webEntryGzipBytes at 7950 (the last real measured value)', () => {
-    const violations = checkAbsoluteBudgets({ ...passingResults(), webEntryGzipBytes: 7950 });
-    expect(violations.some((v) => v.metric === 'webEntryGzipBytes')).toBe(false);
+  it('flags webEntryGzipBytes above the budget', () => {
+    const violations = checkAbsoluteBudgets({ ...passingResults(), webEntryGzipBytes: WEB_ENTRY_BUDGET + 4 });
+    expect(violations.some((v) => v.metric === 'webEntryGzipBytes')).toBe(true);
   });
 
-  it('does NOT flag webEntryGzipBytes at 8185 (the pre-revision-2 razor-thin measurement, now comfortably under 9216)', () => {
-    const violations = checkAbsoluteBudgets({ ...passingResults(), webEntryGzipBytes: 8185 });
+  it('does NOT flag webEntryGzipBytes one byte under the budget', () => {
+    const violations = checkAbsoluteBudgets({ ...passingResults(), webEntryGzipBytes: WEB_ENTRY_BUDGET - 1 });
     expect(violations.some((v) => v.metric === 'webEntryGzipBytes')).toBe(false);
   });
 

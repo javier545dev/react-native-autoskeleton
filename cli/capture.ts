@@ -296,7 +296,8 @@ async function main(): Promise<void> {
   }
 }
 
-// Only run as a CLI when invoked directly (`node cli/capture.js ...`), never
+// Only run as a CLI when invoked directly (the published `autoskeleton-capture`
+// bin, which points at the bundled `dist-cli/capture.js`), never
 // as a side effect of `import { runCapture } from './capture'` (tests and
 // `<AutoSkeleton.SSR>`'s tooling import the named export only).
 if (require.main === module) {

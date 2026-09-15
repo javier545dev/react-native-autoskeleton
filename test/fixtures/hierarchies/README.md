@@ -28,8 +28,10 @@ Required cases (plan.md §7.1/§7.2/§7.3), each as its own fixture file:
 
 - nested containers with offsets
 - a scrolled ancestor (`UIScrollView` / Android scroll container)
-- the container rule, both branches (leaves present → leaves win; no leaves →
-  container itself is emitted)
+- the container rule, all three branches (leaves present → leaves win; no leaves
+  but a non-transparent background → the container itself is emitted; no leaves
+  and no background → **nothing is emitted**, even when the box reserves real
+  layout space — `container-rule-sized-but-transparent`)
 - an `Ignore` subtree (`accessibilityIdentifier` / `nativeID` / `data-*`)
 - a collapsed text node that must synthesize N line rects
 - a transformed ancestor

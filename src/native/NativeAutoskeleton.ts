@@ -107,11 +107,6 @@ export interface Spec extends TurboModule {
    * platforms — see the `AutoskeletonGetShapesConfig` doc above.
    */
   getShapes(reactTag: number, cacheKey: string, config: AutoskeletonGetShapesConfig): Array<number>;
-
-  /** ADR-9: JS is the sole authority for eviction/invalidation. Removes the
-   * given keys from the native-side `NativeShapeCache` so it can never
-   * diverge from the JS `ShapeStore` after a JS-side `invalidate()`. */
-  evictShapes(cacheKeys: Array<string>): void;
 }
 
 export default TurboModuleRegistry.get<Spec>('Autoskeleton');

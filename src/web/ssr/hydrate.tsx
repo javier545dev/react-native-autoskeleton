@@ -80,7 +80,13 @@ export function AutoSkeletonSSRHydrate(props: AutoSkeletonSSRHydrateProps): null
  *  it runs in an effect, never during render, so it cannot influence markup
  *  and therefore cannot introduce a hydration mismatch. */
 function warnOnManifestCssDrift(manifest: AutoSkeletonSSRManifest): void {
-  if (process.env['NODE_ENV'] === 'production' || typeof document === 'undefined') {
+  // Dot access, never `process.env['NODE_ENV']` — see the note in
+  // `core/shimmer-period.ts`. This one mattered most: the SSR entry's whole
+  // audience is Next, whose client `process.env` shim makes a bracket read
+  // `undefined`, so `undefined === 'production'` is false and this guard
+  // stopped guarding — running a `getComputedStyle` on every hydrate of a
+  // production app, for a warning nobody would see.
+  if (process.env.NODE_ENV === 'production' || typeof document === 'undefined') {
     return;
   }
   const cssToken = getComputedStyle(document.documentElement)

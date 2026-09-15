@@ -49,6 +49,18 @@ class AutoskeletonSensorObservabilityTest {
         return view
     }
 
+    /** The R3 case that survives R1b: four independent corners, which
+     *  `ShapeInfo.r` cannot represent. */
+    private fun applyPerCornerBackground(view: FrameLayout, radiusPx: Float) {
+        BackgroundStyleApplicator.setBackgroundColor(view, Color.RED)
+        BackgroundStyleApplicator.setBorderRadius(
+            view,
+            BorderRadiusProp.BORDER_TOP_LEFT_RADIUS,
+            LengthPercentage(radiusPx, LengthPercentageType.POINT),
+        )
+        view.background?.setBounds(0, 0, view.width, view.height)
+    }
+
     private fun applyRoundedBackground(view: FrameLayout, radiusPx: Float? = null) {
         BackgroundStyleApplicator.setBackgroundColor(view, Color.RED)
         if (radiusPx != null) {
@@ -123,12 +135,15 @@ class AutoskeletonSensorObservabilityTest {
             override fun radius(nodeId: String) = if (nodeId == "hinted-0" || nodeId == "hinted-1") 6f else null
         }
 
-        // 8 rounded, unhinted leaves -> real R1 (Outline.getRadius() undefined for
-        // rounded, per the measured on-device limitation in spec.md §1.1) -> R3
-        // DEFAULT rung. No RN internal class touched anywhere in this path.
+        // 8 PER-CORNER, unhinted leaves -> R1's outline is undefined AND R1b
+        // declines (one scalar cannot carry four different corners) -> R3 DEFAULT
+        // rung. These used to be uniformly-rounded leaves, which reached R3 only
+        // because the ladder could not read a uniform radius at all; R1b closed
+        // that, so the fixture moved to the case that still legitimately falls
+        // back. No RN internal class touched anywhere in this path.
         for (i in 0 until 8) {
             val leaf = freshLeaf(x = i * 40)
-            applyRoundedBackground(leaf, radiusPx = 8f)
+            applyPerCornerBackground(leaf, radiusPx = 8f)
             root.addView(leaf)
         }
         // 2 hinted leaves -> R0 HINT rung, never DEFAULT.

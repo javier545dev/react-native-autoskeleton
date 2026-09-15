@@ -10,8 +10,9 @@
 
 import { StyleSheet, View } from 'react-native';
 import { resolveSharedShimmerPeriodMs } from '../../core/shimmer-period';
-import type { AnimationKind, ShapeSnapshot } from '../../core/types';
+import type { AnimationKind, Direction, ShapeSnapshot } from '../../core/types';
 import { resolveAutoskeletonOverlayNativeComponent } from '../renderer/AutoskeletonOverlayHostComponent';
+import { wireOf } from '../renderer/wireProp';
 import { FallbackSkeletonBlock } from './FallbackSkeletonBlock';
 
 export interface SyntheticRowProps {
@@ -23,6 +24,15 @@ export interface SyntheticRowProps {
   readonly highlightColor: string;
   readonly defaultRadius: number;
   readonly speedMs: number;
+  /** The writing direction the snapshot was measured for. REQUIRED, not
+   *  optional-with-a-default: every caller already holds this value — it is
+   *  the one they handed `composeCacheKey` to build `cacheKey` — so passing it
+   *  costs nothing, while a default would let a call site silently paint an
+   *  RTL snapshot with an LTR sweep and never fail to compile. This row
+   *  renderer deliberately does NOT read `I18nManager` itself: two independent
+   *  reads can only ever agree by luck, and the value that must agree is the
+   *  one already baked into `cacheKey`. */
+  readonly direction: Direction;
 }
 
 export function SyntheticRow(props: SyntheticRowProps): React.JSX.Element {
@@ -33,17 +43,26 @@ export function SyntheticRow(props: SyntheticRowProps): React.JSX.Element {
   // one place the shared period has to be resolved for all three. See
   // `core/shimmer-period.ts` for why the FIRST period wins.
   const speedMs = resolveSharedShimmerPeriodMs(props.speedMs);
+  // `wireOf`, not the memoized `useWireProp`: this component is deliberately
+  // hook-free — `test/native/shimmer-period-wiring.test.ts` invokes it as a
+  // plain function to assert what it forwards, which is only possible while
+  // it stays one. The per-render `Array.from` it costs is bounded by the row
+  // count, and `AutoSkeleton.tsx` (a real component) still memoizes its own.
+  // See `wireProp.ts` for why the overlay takes the buffer as a prop at all.
+  const shapes = wireOf(props.snapshot);
   if (props.snapshot && OverlayComponent) {
     return (
       <View style={{ height: props.snapshot.frameHeight, width: '100%' }}>
         <OverlayComponent
           cacheKey={props.cacheKey}
+          shapes={shapes}
           baseColor={props.baseColor}
           highlightColor={props.highlightColor}
           defaultRadius={props.defaultRadius}
           speedMs={speedMs}
           animation={props.animation}
           reducedMotion={props.reducedMotion}
+          writingDirection={props.direction}
           debugOverlay={false}
           accessible={false}
           importantForAccessibility="no-hide-descendants"

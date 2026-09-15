@@ -56,12 +56,43 @@ import type { Double, WithDefault } from 'react-native/Libraries/Types/CodegenTy
 
 export interface NativeProps extends ViewProps {
   readonly cacheKey: string;
+  /** The wire array this overlay paints: `[VERSION, x,y,w,h,r] x N`, in
+   *  density-independent points, exactly as `getShapes` returned it.
+   *
+   *  Supersedes the `cacheKey` lookup ADR-9 specified. JS ALREADY holds this
+   *  buffer — `native/sensor.ts` decodes the very same `getShapes` payload to
+   *  populate the JS store — so the native cache was a second copy of data
+   *  the caller already had, kept alive by a key, evicted by nothing.
+   *
+   *  Empty means "nothing measured yet for this key", which is the same
+   *  no-op the cache miss used to be. */
+  readonly shapes: ReadonlyArray<Double>;
   readonly baseColor: string;
   readonly highlightColor: string;
   readonly defaultRadius: Double;
   readonly speedMs: Double;
   readonly animation?: WithDefault<'shimmer' | 'pulse' | 'none', 'shimmer'>;
   readonly reducedMotion: boolean;
+  /** The writing direction the snapshot behind `cacheKey` was measured for —
+   *  literally the same value `composeCacheKey` received, so the sweep can
+   *  never travel against the geometry it is painting.
+   *
+   *  DELIBERATELY NOT NAMED `direction`. `NativeProps extends ViewProps`, and
+   *  Fabric's C++ `ViewProps` inherits `YogaStylableProps`, which already
+   *  parses a raw prop literally called `direction` into its `YGStyle`
+   *  (`YogaStylableProps.cpp`) — and its accepted values are the very strings
+   *  this prop carries, `"ltr"`/`"rtl"`. Declaring `direction` here would not
+   *  collide at the C++ member level (Yoga's lands inside `yogaStyle`, not as a
+   *  member of that name), but BOTH parsers read the same `RawProps` entry, so
+   *  setting this prop would silently also set the overlay's Yoga layout
+   *  direction. That is a side effect nobody asked for on a view whose whole
+   *  job is to be an `absoluteFill` sibling, so the prop carries the name of
+   *  the quantity instead, which collides with nothing.
+   *
+   *  `WithDefault<..., 'ltr'>` keeps every existing consumer byte-identical:
+   *  an omitted prop is `'ltr'`, which is the only behaviour any renderer had
+   *  before this field existed. */
+  readonly writingDirection?: WithDefault<'ltr' | 'rtl', 'ltr'>;
   /** REQ-OBS-OVERLAY-1: delegates to the existing native
    *  `AutoskeletonDebugOverlay` (tasks 3.3/4.5) — outline + index/source/
    *  hit-miss + radius-rung badge per shape, dev-build only. */

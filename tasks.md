@@ -2622,6 +2622,162 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       window), task 6.5 / `core/refresh-gate.ts` (the suppression that made the defect permanent).
       Complexity: S. Surface: web only.
       One commit plus this docs commit, on `feat/typed-hint-channel`. Not pushed, no PR opened.
+- [x] **G.17** (2026-08-29, branch `feat/expo-web-support`, stacked on the G.16 branch tip
+      `6a4faa1`) **Expo Web (react-native-web) support — made real and gated, and two stated
+      premises corrected by measurement.**
+
+      **The open question — does the DOM sensor work against react-native-web's output? — is
+      answered YES, empirically.** The worry was structural and reasonable: RNW emits none of the
+      semantic markup `src/web/dom-sensor.ts` was written against. A `<View>` is a `<div>` with
+      `display:flex` and `background-color: rgba(0,0,0,0)`; a top-level `<Text>` is ALSO a `<div>`
+      (a `<span>` when nested inside another `<Text>`) carrying `display:inline`, never a
+      text-bearing tag; an `<Image>` is a `<div>` wrapping a `background-image` div PLUS an
+      `opacity: 0` `<img>`. The reason it works anyway is that `isTextLeaf` never required a
+      text-bearing TAG — it requires zero element children and non-empty `textContent`, which an
+      RNW `<Text>` div satisfies exactly — so `Range.getClientRects()` still fragments per line
+      box. Measured against a real RNW render in a real browser, not read off the source: a
+      64x64 `borderRadius: 32` `<View>` shapes to `(0,0,64,64,r=32)`; a wrapped `<Text>` shapes to
+      one rect per visual line box, each matching `Range.getClientRects()` within 0.5 px and each
+      strictly narrower and shorter than the element's own border box; `<TextInput>` renders a real
+      `<input>` and shapes to its border box; `numberOfLines={1}` clips correctly through the
+      existing `computeClipBox` path.
+
+      **One real defect found, minimal fix, +12 B.** Every loaded RNW `<Image>` produced TWO exactly
+      coincident shapes — the `background-image` div AND the full-size `opacity: 0` accessibility
+      `<img>` RNW renders so the browser's image context menu works. Invisible in a screenshot,
+      but double the shape count against `maxShapes`, double the traversal work and double the
+      clip-path payload on an image-heavy screen. The general rule behind it also fires on ordinary
+      markup: an `opacity: 0` leaf paints nothing, so an opaque skeleton block over it draws a shape
+      where the user sees empty space. Fixed with a three-line guard in `leafShape()` — placed
+      THERE and not at the top of `traverse()` because every caller of `leafShape` has already paid
+      for `getComputedStyle`, so the rule is free, whereas hoisting it would force a
+      `getComputedStyle` on every text leaf and every recursing container (a real NFR-3 traversal
+      regression to catch a rarer case). Consequences recorded in the code rather than hidden: an
+      `opacity: 0` TEXT leaf is still shaped, and an `opacity: 0` CONTAINER still has its
+      descendants shaped.
+
+      **PREMISE CORRECTED #1 — the list API's absence on web is a RUNTIME `undefined`, not a compile
+      error.** The task brief stated a universal Expo app using `SkeletonList` "gets a compile
+      error, not a silent runtime `undefined`, because `types` is nested per condition". Measured:
+      it does not. `expo/tsconfig.base.json` (extended by every Expo app, `examples/expo` included)
+      hard-sets `customConditions: ['react-native']` with no platform variation, and TypeScript has
+      no notion of a build platform — one tsconfig typechecks a universal app for iOS, Android AND
+      web at once, against the NATIVE declarations. Proven three ways in `examples/expo`:
+      `npx tsc --noEmit` reports ZERO errors for `import { AutoSkeleton, SkeletonList } from
+      'autoskeleton'` (with a control error planted first to prove the typecheck was live);
+      `expo export --platform web` bundles it successfully; and the served page reports
+      `AutoSkeleton=function SkeletonList=undefined` with an empty page-error list. G.4's
+      per-condition `types` nesting is real and correct — it just never reaches an Expo consumer,
+      because Expo pins the condition. Turned into a gate rather than left as a finding:
+      `test/packaging/entries.test.ts` gained a test that reads Expo's OWN installed
+      `tsconfig.base.json`, asserts it contains `react-native` and NOT `browser`, then asserts the
+      resulting resolution declares `SkeletonList` while the `browser` runtime target does not
+      (with the native runtime target as the anti-vacuity control). Falsified by temporarily adding
+      `browser` to the installed Expo tsconfig — 1 failed / 42 passed, then restored.
+
+      **PREMISE CORRECTED #2 — the Expo export gate cannot guard the `exports` condition ORDER, and
+      does not pretend to.** Planting the pre-6a4faa1 order (`react-native` before `browser`) and
+      re-running the new Expo gate: 4 passed. That is correct, not a hole: `@expo/metro-config`
+      scopes `react-native` to ios/android/tvos/macos and gives web only `['browser']`, so the
+      order is unobservable from Expo. It is observable from `@react-native/metro-config`, which
+      asserts `react-native` on every platform including web. `test/packaging/entries.test.ts`
+      remains the only guard for that ordering, and it already covers it explicitly.
+
+      **The list API: native-only NON-GOAL, recommended with a measured reason, not asserted.** All
+      three candidate answers were BUILT and measured against NFR-6 (baseline 8862 B of 9216 B,
+      354 B headroom): throwing native-only stubs **9097 B** (+235); a stub-level graceful
+      degradation **9108 B** (+246); a degradation with a truthful `composeCacheKey` and store read
+      **9152 B** (+290, 64 B left). Every option consumes 66-82 % of all remaining headroom, against
+      24 B and 12 B for the last two real web fixes — so shipping one is materially the same
+      decision as revising the budget a third time, which is the maintainer's call, not this task's.
+      The semantic argument points the same way independently of bytes: the API's contract is
+      virtualized-cell recycling amortisation, and web has neither recycling nor a bridge, so
+      `useSkeletonCell`'s `cacheHit`/`isFallback`/`pendingTemplateNode`/`templateRef`/
+      `onTemplateLayout` and `templateTraversalCounter` have no web referent — a web export would
+      report structurally meaningless values. It is also an already-gated decision:
+      `entries.test.ts` has asserted since G.4 that `[browser, types]` must NOT declare
+      `SkeletonList`. All three experiments were reverted; nothing from them is in the diff except
+      the numbers, which are now in `spec.md` §4 so the maintainer can spend the bytes deliberately.
+
+      **`examples/expo` now actually has a web target.** It previously shipped the template's
+      `"web": "expo start --web"` script and ZERO web dependencies, so it could not run at all:
+      `react-native-web@~0.21.0` and `react-dom@19.2.3` added (both pinned to Expo SDK 57's own
+      `bundledNativeModules` values, not to `latest`), plus an `export:web` script. The screen is a
+      new `App.web.tsx`, NOT a modification of `App.tsx`: `App.tsx` is the task 7.2 NATIVE E2E
+      fixture and drives `ThemedAutoSkeleton` from `autoskeleton/uniwind`, which imports
+      `src/native/AutoSkeleton` and therefore fails a web build outright with `Importing
+      native-only module "react-native/Libraries/Utilities/codegenNativeComponent" on web` —
+      observed, not predicted, on the first export attempt. Metro resolves `App.web.tsx` ahead of
+      `App.tsx` for `--platform web`, so native is untouched. The web screen is geometry-first by
+      design: every box has explicit pixel dimensions and every text run sits on a `lineHeight` far
+      larger than its `fontSize`, which is what makes the "must NOT be covered" probes possible.
+
+      **Tests — two gates, each PROVEN able to fail.**
+      `test/web/react-native-web.spec.ts` (7 tests, new) bundles the REAL production graph together
+      with REAL `react-native-web` via esbuild (`helpers/rnw-entry.ts`), respecting the G.14 trap:
+      no `.tsx` imported by the spec, elements built with `React.createElement` inside
+      `page.evaluate`. RNW ships no TypeScript types (verified: no `types`/`typings` field, no
+      `dist/index.d.ts`), so `helpers/react-native-web.d.ts` declares exactly the surface the
+      harness re-exports rather than adding the stale DefinitelyTyped package.
+      `test/web/expo-web-export.spec.ts` (4 tests, new) packs the library with a real `npm pack`,
+      materializes those bytes into `examples/expo/node_modules/autoskeleton`, runs a real
+      `expo export --platform web`, serves it from a port-0 static server and drives it in
+      Chromium. `expo export` over `expo start --web` deliberately: it is the shipping artifact, it
+      is a finished file tree rather than a lazily-bundled dev server holding an HMR socket open
+      (the same reasoning `test/ssr/dashboard.spec.ts` already applied when it chose
+      `next build && next start` over `next dev`), and it can be asserted on as TEXT before a
+      browser is involved. The tarball trap is sidestepped rather than fought: `npm install` is
+      never invoked, because `examples/expo/package-lock.json` pins the tarball integrity hash and
+      would either reinstall stale cached bytes under a fresh mtime or churn a tracked file on
+      every run — extracting the just-packed tarball directly removes npm's cache from the loop.
+
+      **The proof bar: Chromium's own clip-path hit region, not our arithmetic.** `.askl-overlay`
+      ships `pointer-events: none`; both gates re-enable it for the duration of a probe, which
+      turns `document.elementFromPoint` into a read of the browser's rasterized clip region
+      (Chromium applies `clip-path` to hit testing as well as painting — verified by probe before
+      being relied on). The discriminating assertions are the NEGATIVE ones: the leading gap above
+      and below a glyph run, and the empty tail right of a short line, must stay UNCOVERED, with
+      anti-vacuity assertions that those gaps genuinely exist in that render (`titleLeading > 10`,
+      `titleTail > 40`). A 32 px radius on a 64x64 avatar is a circle, so its square corner must be
+      uncovered too.
+
+      **RED, twice, both real.** (1) Before the `opacity` fix, `react-native-web.spec.ts` ran
+      **2 failed / 5 passed** — `expect(shapes.length).toBe(1)` received `2` for the loaded
+      `<Image>`, and `2` for the `opacity: 0` sibling case; the other 5 passed unmodified, which is
+      the evidence that the sensor was ALREADY correct on RNW and this was one localised defect.
+      (2) Plant-and-revert for the geometry gates: `textLeafShapes` changed to shape the element's
+      own border box instead of the per-line glyph rects — a defect that still paints a perfectly
+      plausible-looking skeleton. `react-native-web.spec.ts`: `expect(textShapes.length)` expected
+      5 line boxes, received 1, and `the leading gap above the glyphs must stay uncovered` expected
+      false, received true. `expo-web-export.spec.ts`: `leading above the title stays uncovered`
+      expected false, received true. A separate plant (`isTextLeaf` returning false) took the Expo
+      gate red on `title glyph run covered`. All plants reverted, all gates re-run green.
+
+      **NOT DONE, deliberately.** No web implementation of the list API (see above — a budget
+      decision, escalated with numbers rather than taken). No `browser` condition for
+      `exports['./uniwind']`: a web `ThemedAutoSkeleton` would need uniwind's own web pipeline
+      wired through Metro's web build, which is a separate piece of work with its own unknowns, and
+      the current failure is at least LOUD. The mixed-content text limitation
+      (`<Text>Outer <Text>inner</Text></Text>` shapes only `inner`) is documented, not fixed: it is
+      pre-existing and platform-agnostic (identical for `<p>Hello <b>x</b></p>`) and fixing it means
+      redesigning `isTextLeaf`, which `dom-sensor.ts`'s own header already flags as real surgery.
+      `visibility: hidden` leaves are still shaped — same class of defect as `opacity: 0`, not hit
+      by RNW, left rather than widened without a driving case.
+
+      **Full sweep, all run for real this session.** `npm run typecheck` clean; `npx vitest run`
+      **484/484** (was 483, +1 packaging test); `npx playwright test` **87/87** (76 unchanged, +7
+      RNW, +4 Expo Web); NFR-6 **8862 B / 9216 B** (was 8850; +12 B, 354 B headroom, budget NOT
+      raised); `npm run bench` **8/8**; `examples/expo` `tsc --noEmit` clean. Native NOT re-measured
+      and structurally cannot move: the production diff is one file, `src/web/dom-sensor.ts`,
+      reachable only from `src/index.web.ts`; `src/index.native.ts` imports exclusively
+      `./native/**` and `./core/**`. Android unit 108/108, iOS unit 76/76, Android on-device 14/14,
+      iOS PaintGate-UITests 7/7 stand from G.15/G.16.
+      **Tests**: the two new gates above, plus the `entries.test.ts` Expo-asymmetry gate.
+      **Observability**: none added. **Performance**: one string comparison on a code path that had
+      already computed the style; NFR-6 +12 B, measured. Deps: G.4 (per-condition `types` nesting),
+      the 6a4faa1 `exports` ordering fix, task 2.1 (`dom-sensor.ts`), task 2.3
+      (`web/AutoSkeleton.tsx`), G.16 (the `aria-busy` behavior the export gate asserts).
+      Complexity: L. Surface: web + `examples/expo` only. Example app: Expo (web target).
 
 ## Phase 8: SSR — build-time snapshot capture CLI + `@media`-bucketed CSS bundle
 
@@ -2966,6 +3122,105 @@ warning when default exceeds 30% of a screen's shapes." That claim was never imp
       indirectly. **Observability**: N/A, final gate. **Performance**: N/A. Deps: 9.1, 9.2, 9.3,
       9.4. Complexity: S. Example app: all four (bare-rn/expo/vite/next unaffected by this task's
       changes; the throwaway sandbox install is the actual final cross-check).
+
+- [x] **G.18** (2026-08-29, branch `feat/expo-web-support`, stacked on `5748351`) **The iOS
+      tier-1 shimmer slid the whole SKELETON across the screen instead of sweeping a highlight
+      through it, and every existing gate was structurally blind to it.**
+
+      **The defect, confirmed with quantitative evidence rather than taken on report.** `mount`
+      attached the mask to the very layer `applyShimmer` animated:
+      `gradientLayer.mask = maskLayer` plus a `CABasicAnimation` on
+      `transform.translation.x` running `-width … +width` on that same `gradientLayer`. A
+      `CALayer`'s `mask` is positioned in THAT layer's own coordinate space, so transforming the
+      masked layer transforms its mask with it. The new RED unit test printed the displacement
+      exactly: with a shape at `x = 20 … 140`, freezing the sweep at translation `-300` put the
+      covered region at `-280 … -160` instead of `20 … 140` — a shift equal to the sweep
+      translation, at every one of 16 sampled phases. The second half of the same defect is that
+      the gradient was only `width` wide, so even a stationary mask would have had nothing
+      painted under it at the extremes: RED also reported "nothing opaque is painted over
+      (80, 40)" at translations `-300 … -187.5` and `112.5 … 262.5`.
+
+      **PRE-EXISTING, not a regression — verified.** `git log -S "gradientLayer.mask = maskLayer"`
+      points at `d6b6cc6` (task 3.2, Phase 3). The `syncGradientGeometry()` work only re-applied
+      the animation on a width change; it never touched which layer carried the mask.
+
+      **Android never had it, and the fix makes iOS match Android rather than invent a third
+      behaviour.** `AutoskeletonShimmerOverlayView.onDraw` does a FIXED `canvas.clipPath(maskPath)`
+      over a full-bounds `drawRect` and translates only the SHADER
+      (`Matrix.setTranslate` + `setLocalMatrix`) — the drawing surface never moves. Android is
+      also immune to the coverage half for a reason iOS cannot borrow directly: its
+      `LinearGradient` uses `Shader.TileMode.CLAMP`, whose edge colour IS `baseColor`, so the
+      paint extends opaquely forever in both directions. `CAGradientLayer` paints nothing outside
+      its own bounds, so iOS reproduces that clamp with an opaque base fill.
+
+      **The layer structure now** (`ios/AutoskeletonRendererTier1.swift`):
+      `surface.layer` → `containerLayer` (frame = `surface.bounds`, owns `mask = maskLayer` AND
+      `backgroundColor = theme.baseColor`, never animated) → `gradientLayer`
+      (frame = `(-width, 0, 2*width, height)`, the ONLY layer the sweep touches). The gradient's
+      rest span (`-width … +width`) and the sweep's range (`-width … +width`) are the same two
+      numbers Android uses for its shader stops and its `translateX`, so both platforms put the
+      highlight in the same place at the same phase. `beginTime` is still derived from
+      `AutoskeletonShimmerClock.phaseOffsetMs` (ADR-8), so instances stay in phase and a geometry
+      resync does not restart anything. `syncGradientGeometry()` keeps its WIDTH-keyed behaviour
+      with `containerLayer` as the geometry key and `gradientFrame(for:)` re-laying out the band;
+      a height-only resize still resizes without restarting. NFR-5 holds: three layers allocated
+      at mount, nothing at all per frame. `setReducedMotion` pulses the GRADIENT's opacity only —
+      the container keeps the opaque base fill, so reduced motion is a static, FULLY COVERING
+      skeleton, which the previous single-layer structure could not guarantee.
+
+      **Also fixed, same class, deliberately in scope**: `maskLayer.path` and the resync's frame
+      assignments now run inside `CATransaction.setDisableActions(true)`. `CAShapeLayer.path` and
+      `CALayer.frame` are animatable, so a bare assignment got CoreAnimation's implicit 0.25 s
+      animation and the covered region MORPHED or SLID towards its new geometry instead of being
+      it — the same "the covered region must not move" invariant, at a smaller scale.
+      `CATransaction` is a thread-local stack, so this allocates nothing.
+
+      **WHY EVERY GATE MISSED IT, which is what the new gates are shaped around.** The on-device
+      gates sample a SINGLE frame — `pollUntilPixel` returns as soon as ONE sample satisfies its
+      predicate — and the colour check is a RAMP check built to tolerate the sweep. A skeleton
+      that slides still sits over the probe at some instant in every cycle, so a
+      poll-until-satisfied gate always finds its frame. `PaintGate-UITests` was 7/7 with this
+      defect live. The fix is therefore only half the work; the other half is sampling ACROSS the
+      cycle.
+
+      **Two new gates, both proven RED against the unfixed code before the fix existed.**
+      (1) `AutoskeletonRendererTier1Tests` gained
+      `testCoveredRegionDoesNotMoveAcrossTheWholeShimmerCycle` and
+      `testAPointOverContentStaysCoveredAndOpaqueAcrossTheWholeShimmerCycle`: they walk the real
+      mounted layer tree, find "the layer carrying the shimmer animation" and "the layer carrying
+      the mask" BY ROLE rather than by sublayer index, freeze the sweep at 16 evenly spaced
+      phases by writing the exact property the `CABasicAnimation` interpolates, and assert the
+      mask's bounding box in surface coordinates is invariant and that a probe point at a shape's
+      centre stays both inside the mask and under an opaque painter at every phase. RED output
+      above; GREEN after. (2) `PaintGateUITests` gained
+      `testSkeletonCoverageStaysStationaryAcrossAWholeShimmerCycle`: on the real Simulator it
+      settles the overlay the same way every other assertion does, then samples the centre pixel
+      of BOTH `paint-gate-image` and `paint-gate-rounded-card` continuously for 2.1 s (1.5 full
+      1400 ms periods, 15 samples in practice) and requires EVERY sample to be inside the shimmer
+      ramp and never the content colour, with FIXTURE FAILURE assertions on sample count and
+      elapsed span so it cannot pass by sampling once, plus an anti-vacuity assertion that the
+      sampled colours are not all identical (a frozen screen must not pass). RED against the
+      unfixed installed pod: *"At sample 2/15 of one shimmer cycle, the real content (#0000FF)
+      was DIRECTLY VISIBLE at paint-gate-image (96.0, 318.0)."*
+
+      **Tarball discipline.** Measured only after `npm run pack:tarball` +
+      `npm install autoskeleton@file:../../.tarball/autoskeleton-0.1.0.tgz` in `examples/bare-rn`,
+      with `diff -rq ios examples/bare-rn/node_modules/autoskeleton/ios` proving the installed
+      copy carried the change before any number was recorded. `examples/bare-rn/package-lock.json`
+      carries the new integrity hash.
+      **Tests**: iOS unit **80/80** (was 78, +2), iOS `PaintGate-UITests` **8/8** (was 7, +1),
+      both re-run from the tarball install; vitest 501/501, Playwright 111/111, typecheck clean,
+      NFR-6 7613/7696, Android unit 111/111, Android on-device 14/14 — all unchanged, as expected
+      for an `ios/**`-only change. **Observability**: N/A. **Performance**: one extra `CALayer`
+      per mounted skeleton, zero per-frame cost; NFR-5 unaffected. Deps: task 3.2 (introduced the
+      structure), ADR-8 (the phase origin the fix preserves), G.17 (branch tip). Complexity: M.
+      **NOT DONE, deliberately**: no change to Android, web or SSR — Android's semantics are the
+      reference this fix was made to match, and the web renderer sweeps a CSS gradient inside a
+      `clip-path`, which is structurally the fixed shape already. No screenshot-diff/golden gate
+      was added: the union of covered pixels is asserted geometrically in the unit gate and by
+      colour at two probe points on device, and a full-frame golden would be a
+      simulator-rendering-stability liability for no extra discrimination. `spec.md` §1.1 gained
+      the scenario this invariant was missing.
 
 ---
 

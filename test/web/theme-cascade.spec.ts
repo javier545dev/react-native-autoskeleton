@@ -15,6 +15,9 @@ import { loadHarness } from './helpers/page';
 import { compileTailwindCss } from './helpers/tailwind';
 
 const ENTRY = path.join(__dirname, 'helpers/css-renderer-entry.ts');
+/** The real `<AutoSkeleton>`/`SkeletonProvider` tree, for the component-level
+ *  case at the bottom of this file. */
+const COMPONENT_ENTRY = path.join(__dirname, 'helpers/component-entry.ts');
 
 /** Mounts the real CSS renderer with the library's DEFAULT theme — i.e. NO
  *  explicit `baseColor`/`highlightColor` override — which is the shape every
@@ -128,5 +131,77 @@ test.describe('Theming via Tailwind v4 (REQ-THEME-1, tasks.md 7.1)', () => {
     const darkColor = await baseOverlayColor(page);
     expect(darkColor).toBe('rgb(31, 41, 55)'); // #1f2937
     expect(darkColor).not.toBe(lightColor);
+  });
+});
+
+// The COMPONENT half of the mounted-theme fix. `css-renderer.spec.ts` proves
+// the handle's `setTheme` repaints; this proves `<AutoSkeleton>` actually calls
+// it when a provider theme changes, which is where the defect lived: `theme`
+// was already in the effect's dependency list, so the effect re-ran on every
+// theme change and then pushed only `update(snapshot)` and
+// `setAnimation(animation)` through. The new palette had nowhere to go.
+//
+// Without this case the renderer test passes with the call site removed — I
+// checked — so this is the one that pins the user-visible behaviour: toggle a
+// dark mode while a skeleton is on screen and the skeleton follows.
+test.describe('a SkeletonProvider theme change repaints skeletons already on screen', () => {
+  test('re-rendering the provider with a new palette updates the mounted overlay', async ({ page }) => {
+    await loadHarness(page, COMPONENT_ENTRY, `<div id="root"></div>`);
+
+    await page.evaluate(() => {
+      const { React, createRoot, AutoSkeleton, SkeletonProvider, MemoryShapeStore } =
+        window.AutoskeletonComponent;
+      const store = new MemoryShapeStore();
+      const root = createRoot(document.getElementById('root')!);
+      const w = window as unknown as { __render: (base: string, highlight: string) => void };
+      w.__render = (baseColor: string, highlightColor: string) => {
+        root.render(
+          React.createElement(
+            SkeletonProvider,
+            { store, theme: { baseColor, highlightColor } },
+            React.createElement(
+              AutoSkeleton,
+              { isLoading: true, skeletonKey: 'themed-screen' },
+              React.createElement('p', { style: { margin: 0, fontSize: 16 } }, 'Hello world'),
+            ),
+          ),
+        );
+      };
+      w.__render('#0f3d5c', '#1b6ea8');
+    });
+    await page.evaluate(
+      () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+    );
+
+    const ramp = async () =>
+      page.evaluate(() => {
+        const overlay = document.querySelector('.askl-overlay') as HTMLElement | null;
+        return overlay === null
+          ? null
+          : {
+              base: overlay.style.getPropertyValue('--skl-base'),
+              highlight: overlay.style.getPropertyValue('--skl-highlight'),
+            };
+      });
+
+    expect(await ramp(), 'the skeleton never mounted, so there is nothing to re-theme').toEqual({
+      base: '#0f3d5c',
+      highlight: '#1b6ea8',
+    });
+
+    // The dark-mode toggle, in the only form that matters: same mounted
+    // overlay, new provider theme.
+    await page.evaluate(() => {
+      (window as unknown as { __render: (b: string, h: string) => void }).__render('#5c1f0f', '#a8511b');
+    });
+    await page.evaluate(
+      () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+    );
+
+    expect(
+      await ramp(),
+      'the overlay kept its mount-time palette after the provider theme changed — the skeleton ' +
+        'on screen is still wearing the old colours',
+    ).toEqual({ base: '#5c1f0f', highlight: '#a8511b' });
   });
 });

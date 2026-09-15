@@ -14,6 +14,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
 
 /**
  * Task 4.2 (tasks.md Phase 4) / plan.md ADR-2: the public-API-only radius
@@ -49,6 +50,21 @@ class AutoskeletonRadiusResolverTest {
                 LengthPercentage(radiusPx, LengthPercentageType.POINT),
             )
         }
+        view.background?.setBounds(0, 0, view.width, view.height)
+    }
+
+    /** The R3 case that SURVIVES R1b. Four independent corner radii cannot be
+     *  carried by `ShapeInfo.r`, which is one scalar, so the ladder declines to
+     *  guess and keeps the `radius-unavailable` flag that says so. Note this
+     *  sets NO uniform `BORDER_RADIUS`, which is exactly what makes
+     *  `getBorderRadius(view, BORDER_RADIUS)` return null. */
+    private fun applyPerCornerBackground(view: FrameLayout, radiusPx: Float) {
+        BackgroundStyleApplicator.setBackgroundColor(view, Color.RED)
+        BackgroundStyleApplicator.setBorderRadius(
+            view,
+            BorderRadiusProp.BORDER_TOP_LEFT_RADIUS,
+            LengthPercentage(radiusPx, LengthPercentageType.POINT),
+        )
         view.background?.setBounds(0, 0, view.width, view.height)
     }
 
@@ -93,12 +109,82 @@ class AutoskeletonRadiusResolverTest {
         assertNull(resolution.degraded)
     }
 
+    // MARK: - R1b: the rounded case, recovered through the public style getter
+
+    /**
+     * A circular avatar is the most visible thing this ladder can get wrong, and
+     * until R1b existed it got it wrong on every Android device: `borderRadius:
+     * 28` on a 56dp image painted as a near-square block while iOS painted a
+     * circle, because R1's `Outline` reports `RADIUS_UNDEFINED` for anything
+     * rounded and R3 then substituted `defaultRadius`.
+     *
+     * `BackgroundStyleApplicator.getBorderRadius` is the symmetric READ of the
+     * exact public API `applyBackground` below uses to write it — the same class
+     * RN's own `ReactViewManager` uses in production. It is `@JvmStatic public`
+     * in both RN 0.77 (this package's declared `peerDependencies` floor) and RN
+     * 0.87, so this rung covers the whole supported range, and it names no
+     * internal class, which is what ADR-2 actually forbids.
+     */
+    @Test
+    fun r1bRecoversARoundedRadiusThroughThePublicStyleGetter() {
+        val view = freshView()
+        applyBackground(view, radiusPx = 28f)
+
+        val resolution = AutoskeletonPublicApiRadiusResolver(defaultRadius = 2f).resolve(view, AutoskeletonEmptyHintRegistry(), null)
+
+        assertEquals(28f, resolution.radius)
+        assertEquals(AutoskeletonRadiusSource.STYLE, resolution.source)
+        assertNull("a recovered radius is not a degradation", resolution.degraded)
+    }
+
+    /**
+     * The unit guard. Robolectric's default density is 1, so every other test in
+     * this file is blind to a missing dp -> px conversion — and this repo has
+     * already been bitten by exactly that once (`AutoskeletonModule`'s own
+     * `toSensorOptions` doc comment records it for `defaultRadius` and hints).
+     *
+     * `borderRadius: 28` is 28 DP: `ReactViewManager.setBorderRadius` stores the
+     * raw JS number with no `toPixelFromDIP`. The sensor measures in raw view
+     * PIXELS, so at density 3 a 28dp radius has to come back as 84px. The
+     * unit-blind first version returned 28 here, which on a real device painted a
+     * 56dp circular avatar with a ~10dp corner — visibly rounded, visibly not a
+     * circle.
+     */
+    @Test
+    @Config(qualifiers = "xxhdpi")
+    fun r1bScalesADpRadiusToPixelsAtDensity3() {
+        val view = freshView()
+        assertEquals(3f, view.resources.displayMetrics.density, 0.0001f)
+        applyBackground(view, radiusPx = 28f)
+
+        val resolution = AutoskeletonPublicApiRadiusResolver().resolve(view, AutoskeletonEmptyHintRegistry(), null)
+
+        assertEquals(84f, resolution.radius)
+        assertEquals(AutoskeletonRadiusSource.STYLE, resolution.source)
+    }
+
+    /** R0 still outranks it: an explicit hint is authoritative over anything read
+     *  back off the view. */
+    @Test
+    fun r0HintStillBeatsTheStyleGetter() {
+        val view = freshView()
+        applyBackground(view, radiusPx = 28f)
+        val hints = object : AutoskeletonHintRegistry by AutoskeletonEmptyHintRegistry() {
+            override fun radius(nodeId: String) = if (nodeId == "n1") 4f else null
+        }
+
+        val resolution = AutoskeletonPublicApiRadiusResolver(defaultRadius = 2f).resolve(view, hints, "n1")
+
+        assertEquals(4f, resolution.radius)
+        assertEquals(AutoskeletonRadiusSource.HINT, resolution.source)
+    }
+
     // MARK: - R1: rounded background -> RADIUS_UNDEFINED characterization -> falls to R3
 
     @Test
-    fun r1FallsThroughToR3ForRoundedBackground() {
+    fun perCornerRadiiStillFallThroughToR3() {
         val view = freshView()
-        applyBackground(view, radiusPx = 8f)
+        applyPerCornerBackground(view, radiusPx = 8f)
         val resolver = AutoskeletonPublicApiRadiusResolver(defaultRadius = 2f)
         val resolution = resolver.resolve(view, AutoskeletonEmptyHintRegistry(), null)
         assertEquals(2f, resolution.radius)
@@ -118,18 +204,21 @@ class AutoskeletonRadiusResolverTest {
         val noBg = freshView()
         val squareBg = freshView().also { applyBackground(it) }
         val roundedBg = freshView().also { applyBackground(it, radiusPx = 8f) }
+        val perCornerBg = freshView().also { applyPerCornerBackground(it, radiusPx = 8f) }
         val hintedView = freshView().also { applyBackground(it, radiusPx = 8f) }
 
         val resolutions = listOf(
             resolver.resolve(noBg, hints, null),
             resolver.resolve(squareBg, hints, null),
             resolver.resolve(roundedBg, hints, null),
+            resolver.resolve(perCornerBg, hints, null),
             resolver.resolve(hintedView, hints, "hinted"),
         )
         val histogram = resolutions.groupingBy { it.source }.eachCount()
 
         assertEquals(1, histogram[AutoskeletonRadiusSource.MEASURED])
         assertEquals(1, histogram[AutoskeletonRadiusSource.OUTLINE])
+        assertEquals(1, histogram[AutoskeletonRadiusSource.STYLE])
         assertEquals(1, histogram[AutoskeletonRadiusSource.DEFAULT])
         assertEquals(1, histogram[AutoskeletonRadiusSource.HINT])
         assertTrue(histogram[AutoskeletonRadiusSource.RASTER_PROBE] == null)
@@ -151,12 +240,13 @@ class AutoskeletonRadiusResolverTest {
         )
         val result = sensor.measure(root, options)!!
         assertEquals(1, result.shapes.size)
-        // Rounded background (cornerRadius: 8 in the fixture) -> R1 undefined -> R3
-        // default (0f here, since no SkeletonProvider.defaultRadius override was
-        // configured) with radius-unavailable — the honest degraded answer, not a
-        // silently wrong "8".
-        assertEquals(0f, result.shapes[0].r)
-        assertEquals(AutoskeletonRadiusSource.DEFAULT, result.shapes[0].radiusSource)
-        assertTrue(result.degraded.contains(AutoskeletonDegradationFlag.RADIUS_UNAVAILABLE))
+        // Rounded background (cornerRadius: 8 in the fixture). R1's outline is
+        // undefined for it, but R1b reads the radius straight back off the style
+        // it was written with — so the shape now carries the REAL 8, not a
+        // `defaultRadius` substitute, and nothing is degraded. This assertion is
+        // the end-to-end proof that a circular avatar paints as a circle.
+        assertEquals(8f, result.shapes[0].r)
+        assertEquals(AutoskeletonRadiusSource.STYLE, result.shapes[0].radiusSource)
+        assertTrue(result.degraded.isEmpty())
     }
 }

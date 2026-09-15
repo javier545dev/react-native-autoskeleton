@@ -8,7 +8,9 @@
     "expo-image": "^57.0.3",
     "expo-status-bar": "~57.0.1",
     "react": "19.2.3",
+    "react-dom": "19.2.3",
     "react-native": "0.86.3",
+    "react-native-web": "~0.21.0",
     "tailwindcss": "^4.3.3",
     "uniwind": "^1.11.0"
   },
@@ -21,8 +23,11 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
+    "export:web": "expo export --platform web",
+    "gate:uniwind": "node scripts/uniwind-paint-gate.mjs",
     "boot-smoke": "expo config --json >/dev/null && echo 'expo: app config resolves with autoskeleton in the dependency tree'",
-    "typecheck:docs-examples": "tsc --noEmit -p tsconfig.docs-examples.json"
+    "typecheck:docs-examples": "tsc --noEmit -p tsconfig.docs-examples.json",
+    "postinstall": "node ../../scripts/unpin-local-tarball.mjs"
   },
   "private": true
 }

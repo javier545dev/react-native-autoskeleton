@@ -18,8 +18,10 @@ import { useContext } from 'react';
 import { I18nManager, PixelRatio, Platform, View, useWindowDimensions } from 'react-native';
 import { bucketWidth, composeCacheKey, quantizeFontScale } from '../../core/cache-key';
 import { buildSyntheticRowKeys } from '../../core/list';
+import { effectiveAnimation } from '../../core/animation';
 import type { AnimationKind } from '../../core/types';
 import { SkeletonContext } from '../AutoSkeleton';
+import { useReducedMotion } from '../reducedMotion';
 import { SyntheticRow } from './SyntheticRow';
 
 export interface SkeletonListFooterProps {
@@ -27,6 +29,13 @@ export interface SkeletonListFooterProps {
   readonly estimatedCount: number;
   readonly skeletonKey?: string;
   readonly animation?: AnimationKind;
+  /** Overrides the PLATFORM reduce-motion preference, which is read
+   *  automatically when this is omitted. It used to default to `false`
+   *  outright, so an OS-level reduce-motion user got the full travelling
+   *  shimmer in every list skeleton unless the consumer discovered this prop
+   *  and wired it by hand — an accessibility defect shipped through a silent
+   *  default. Kept as an explicit override (a preview or storybook may want
+   *  motion regardless), no longer as the only source. */
   readonly reducedMotion?: boolean;
   readonly rowSpacing?: number;
 }
@@ -52,8 +61,9 @@ export function SkeletonListFooter(props: SkeletonListFooterProps): React.JSX.El
   const snapshot = ctx.store.get(cacheKey) ?? null;
 
   const rowKeys = buildSyntheticRowKeys(props.estimatedCount, props.itemType);
-  const animation = props.animation ?? 'shimmer';
-  const reducedMotion = props.reducedMotion ?? false;
+  const platformReducedMotion = useReducedMotion();
+  const reducedMotion = props.reducedMotion ?? platformReducedMotion;
+  const animation = effectiveAnimation(props.animation ?? 'shimmer', reducedMotion);
 
   return (
     <View>
@@ -64,6 +74,9 @@ export function SkeletonListFooter(props: SkeletonListFooterProps): React.JSX.El
             cacheKey={cacheKey}
             animation={animation}
             reducedMotion={reducedMotion}
+            // The same local `composeCacheKey` above received, so the sweep
+            // can never travel against the geometry cached under that key.
+            direction={direction}
             baseColor={ctx.theme.baseColor}
             highlightColor={ctx.theme.highlightColor}
             defaultRadius={ctx.theme.defaultRadius}

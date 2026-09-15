@@ -66,6 +66,7 @@ class PaintGateListInstrumentedTest {
 
         private const val LABEL_SCREEN_TOGGLE = "paint-gate-screen-toggle"
         private const val LABEL_TRAVERSAL_COUNTER = "paint-gate-list-traversal-counter"
+        private const val LABEL_TEMPLATE_WIDTH = "paint-gate-list-template-width"
         private const val REAL_CARD_PREFIX = "paint-gate-list-real-item-"
         private const val SKELETON_CARD_PREFIX = "paint-gate-list-skeleton-item-"
 
@@ -193,6 +194,16 @@ class PaintGateListInstrumentedTest {
     private fun visibleRealCards(): List<UiObject2> = device.findObjects(By.descStartsWith(REAL_CARD_PREFIX))
 
     private fun visibleSkeletonCards(): List<UiObject2> = device.findObjects(By.descStartsWith(SKELETON_CARD_PREFIX))
+
+    /** The value rides in the readout's accessibility DESCRIPTION, not its
+     *  rendered text, so the iOS gate can read the identical encoding — an
+     *  explicit `accessibilityLabel` replaces the text content in the tree
+     *  XCUITest queries. See `TemplateWidthReadout` in `App.tsx`. */
+    private fun readTemplateWidthDescription(): String {
+        val node = device.findObject(By.descStartsWith("$LABEL_TEMPLATE_WIDTH:"))
+        assertTrue("FIXTURE FAILURE: could not locate the template-width readout node", node != null)
+        return node!!.contentDescription ?: ""
+    }
 
     private fun readTraversalCounterText(): String {
         val node = device.findObject(By.desc(LABEL_TRAVERSAL_COUNTER))
@@ -333,6 +344,69 @@ class PaintGateListInstrumentedTest {
     }
 
     /**
+     * REAL, on-device-found defect (2026-08-30) that this gate was previously
+     * blind to by construction.
+     *
+     * `TemplateMeasurementHost` mounts the template in a
+     * `position: 'absolute'` container at `left`/`top: -10000` with NO
+     * horizontal size constraint. A Yoga absolute box carrying only a leading
+     * position resolves its width from its own CONTENT, so the template lays
+     * out at its INTRINSIC width and every width-inheriting child (`flex: 1`,
+     * `width: '100%'`, `alignSelf: 'stretch'`) collapses to zero. The cached
+     * snapshot is then the wrong width for every row drawn from it — measured
+     * while writing `examples/bare-rn/demos/ListDemo.tsx`: a 92.19 x 88
+     * snapshot where the real row is 411.43 x 88, painting a lone avatar
+     * square with nothing beside it.
+     *
+     * Why nothing already in this file could see it: every shape in
+     * `PAINT_GATE_LIST_FIXTURE` carried an explicit pixel width, so the
+     * fixture avoided the defect by construction. `ListCardContent`'s text bar
+     * is now `flex: 1` (see its comment in `App.tsx`), and this test compares
+     * the header itemType's MEASURED snapshot width against the width of the
+     * very container its `SkeletonList` is mounted in — a direct parent/child
+     * pair, so agreement is not an approximation of the right answer, it is
+     * the right answer.
+     */
+    @Test
+    fun theOffScreenTemplateIsMeasuredAtItsContainersWidthNotItsIntrinsicWidth() {
+        val scenario = launchAndOpenListScreen()
+        Thread.sleep(1_500)
+
+        val readout = readTemplateWidthDescription()
+        val match = Regex("$LABEL_TEMPLATE_WIDTH:(-?\\d+)/(-?\\d+)").find(readout)
+        assertTrue(
+            "FIXTURE FAILURE: the template-width readout read '$readout', which does not match " +
+                "'$LABEL_TEMPLATE_WIDTH:<measured>/<container>'",
+            match != null,
+        )
+        val measured = match!!.groupValues[1].toInt()
+        val container = match.groupValues[2].toInt()
+
+        assertTrue(
+            "FIXTURE FAILURE: the SkeletonList's container reported a width of $container — the " +
+                "screen never laid out, so there is no width to compare a template against.",
+            container > 0,
+        )
+        assertTrue(
+            "The header itemType never resolved to a measured snapshot at all (readout: " +
+                "'$readout'). Expected a real cached measurement within 1500ms.",
+            measured > 0,
+        )
+        // One density-independent pixel of rounding either way; anything wider
+        // than that is the intrinsic-width collapse, not float noise.
+        assertTrue(
+            "The off-screen template measured ${measured}dp wide, but the container its " +
+                "SkeletonList is mounted in is ${container}dp wide. The template is being laid " +
+                "out at its INTRINSIC width, so every width-inheriting child in it collapsed, and " +
+                "every skeleton row drawn from this snapshot is the wrong width. The list knows " +
+                "its own width; the template must inherit it, rather than the consumer threading " +
+                "an explicit width through renderTemplate to compensate.",
+            Math.abs(measured - container) <= 1,
+        )
+        scenario.close()
+    }
+
+    /**
      * RISK-3's explicit assertion: after repeated scroll-driven recycling
      * (FlashList reusing native view instances across DIFFERENT list
      * items), every currently-visible "real" row shows real content
@@ -374,7 +448,20 @@ class PaintGateListInstrumentedTest {
         }
 
         val skeletonCards = visibleSkeletonCards()
-        assertTrue("FIXTURE FAILURE: no skeleton (loading) cards visible after recycling", skeletonCards.isNotEmpty())
+        // The message carries what was actually on screen, because this is the
+        // one assertion in this file that has failed on CI and passed on every
+        // local emulator — including one deliberately scrolled to the bottom
+        // first to imitate fling drift, which did NOT reproduce it. Without
+        // knowing what the runner saw instead, any fix is a guess, and a guess
+        // here costs the 1h40m that job takes to answer.
+        assertTrue(
+            "FIXTURE FAILURE: no skeleton (loading) cards visible after recycling. " +
+                "Real cards on screen: ${realCards.size} " +
+                "(${realCards.mapNotNull { it.contentDescription }.take(4)}). " +
+                "Every node carrying a description: " +
+                "${device.findObjects(By.descStartsWith("")).mapNotNull { it.contentDescription }.take(12)}",
+            skeletonCards.isNotEmpty(),
+        )
         for (card in skeletonCards) {
             val pixel = topQuarterPixel(bitmap, card.visibleBounds)
             assertFalse(

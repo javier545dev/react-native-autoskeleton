@@ -11,7 +11,7 @@
 import { Suspense } from 'react';
 import { AutoSkeletonSSR } from 'autoskeleton/ssr';
 import { manifest } from '../../generated/autoskeleton-ssr';
-import { DashboardContent } from './DashboardContent';
+import { DashboardContent, resolveFetchMs } from './DashboardContent';
 
 // Forces per-request dynamic rendering: without this, Next.js resolves the
 // Suspense boundary AT BUILD TIME and serves fully-static HTML with the
@@ -20,10 +20,18 @@ import { DashboardContent } from './DashboardContent';
 // no fallback to inspect, no streaming, nothing to hydrate).
 export const dynamic = 'force-dynamic';
 
-export default function DashboardPage() {
+// `?delay=<ms>` holds the server-rendered skeleton on screen so it can actually
+// be looked at. A client button could not do this: the Suspense fallback is
+// resolved on the server, before the browser has any JavaScript at all.
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const delayMs = resolveFetchMs((await searchParams).delay);
   return (
     <Suspense fallback={<AutoSkeletonSSR skeletonKey="dashboard" manifest={manifest} direction="ltr" />}>
-      <DashboardContent />
+      <DashboardContent delayMs={delayMs} />
     </Suspense>
   );
 }

@@ -12,10 +12,10 @@ import UIKit
 // placeholder — which is exactly what `PaintGateUITests` proved on-device
 // (see the apply-progress note for the captured-screenshot evidence).
 //
-// This is a thin host, kept deliberately dumb: it reads shape geometry from
-// `AutoskeletonNativeShapeCache` by `cacheKey` (ADR-9 — native holds shape
-// DATA, JS holds POLICY; the native `getShapes()` Turbo Module call already
-// wrote this cache entry before `cacheKey` is ever set as a prop) and hosts
+// This is a thin host, kept deliberately dumb: it paints the wire array handed
+// to it through the `shapes` prop (ADR-9 originally had it read that geometry
+// from a native cache keyed by `cacheKey`; that cache held a second copy of a
+// buffer JS already had, so it is gone) and hosts
 // the EXISTING, already-tested `AutoskeletonRendererTier1` — no new drawing
 // logic, only the wiring `AutoskeletonRendererTier1Tests` already proves
 // correct in isolation.
@@ -71,16 +71,35 @@ private let sharedShimmerClock = AutoskeletonShimmerClock()
 @objc(AutoskeletonOverlayViewHost)
 public final class AutoskeletonOverlayViewHost: NSObject {
     private let renderer: AutoskeletonRendererTier1
-    private let shapeCache: AutoskeletonNativeShapeCache
     private let clock: AutoskeletonShimmerClock
 
     private var handle: AutoskeletonRendererHandle?
     private var mountedCacheKey: String?
-    private var mountedReducedMotionEffective: Bool?
+    private var mountedAnimation: String?
+    private var mountedDirection: String?
+    /// The palette the live handle is currently painting with. Tracked for the
+    /// same reason `mountedAnimation`/`mountedDirection` are: `updateProps:`
+    /// fires for ANY prop delivery, including inherited `ViewProps` like
+    /// opacity, so the same-key branch must be able to tell a real palette
+    /// change from a redundant redelivery and forward only the former.
+    private var mountedTheme: AutoskeletonSkeletonTheme?
+
+    /// The writing direction most recently delivered by
+    /// `AutoskeletonOverlayView.mm`, defaulting to `"ltr"` — which is what
+    /// every overlay swept before this property existed, so a host that is
+    /// never told is byte-identical to the old behaviour.
+    ///
+    /// It is a separate `@objc` setter rather than another `mountOrUpdate`
+    /// parameter on purpose: `mountOrUpdate`'s selector is already the
+    /// ObjC-visible contract `AutoskeletonOverlayView.mm` calls, and widening
+    /// it would break every existing Swift call site in
+    /// `AutoskeletonOverlayViewHostTests` for a value none of them care about.
+    /// It also mirrors Android, where `writingDirection` arrives through its
+    /// own prop setter on `AutoskeletonOverlayView.kt`.
+    private var direction = AutoskeletonOverlayViewHost.directionLtr
 
     @objc override public init() {
         renderer = AutoskeletonRendererTier1()
-        shapeCache = AutoskeletonNativeShapeCache.shared
         clock = sharedShimmerClock
         super.init()
     }
@@ -90,11 +109,9 @@ public final class AutoskeletonOverlayViewHost: NSObject {
     /// Swift-internal (default access) and never needs `@objc`/`public`.
     init(
         renderer: AutoskeletonRendererTier1,
-        shapeCache: AutoskeletonNativeShapeCache,
         clock: AutoskeletonShimmerClock
     ) {
         self.renderer = renderer
-        self.shapeCache = shapeCache
         self.clock = clock
         super.init()
     }
@@ -121,6 +138,7 @@ public final class AutoskeletonOverlayViewHost: NSObject {
     /// the key was already set).
     @objc public func mountOrUpdate(
         cacheKey: String,
+        shapes shapeWire: [NSNumber],
         baseColor: String,
         highlightColor: String,
         defaultRadius: Double,
@@ -131,17 +149,36 @@ public final class AutoskeletonOverlayViewHost: NSObject {
         surface: UIView
     ) {
         guard surface.bounds.width > 0, surface.bounds.height > 0 else { return }
-        guard let wire = shapeCache.get(cacheKey) else { return }
-        let shapes = Self.decodeWireShapes(wire)
+        // The wire arrives as a prop rather than through
+        // `AutoskeletonNativeShapeCache[cacheKey]`, which ADR-9 specified. JS
+        // already holds this buffer — `native/sensor.ts` decodes the very same
+        // `getShapes` payload to populate the JS store — so the native cache
+        // was a second copy of data the caller already had, keyed by a string
+        // and evicted by nothing: `evictNativeShapes` had no call site
+        // anywhere in `src/`.
+        //
+        // `cacheKey` stays, and is now only an IDENTITY: it decides remount
+        // vs. in-place update below, which is what keeps a fresher snapshot
+        // for the same key from restarting the shimmer phase. Empty is the
+        // same no-op a cache miss used to be.
+        guard !shapeWire.isEmpty else { return }
+        let shapes = Self.decodeWireShapes(shapeWire.map { $0.doubleValue })
 
-        let reducedMotionEffective = reducedMotion || animation == "none"
+        let resolvedAnimation = Self.effectiveAnimation(animation, reducedMotion: reducedMotion)
+
+        let theme = AutoskeletonSkeletonTheme(
+            baseColor: Self.parseColor(baseColor, default: .lightGray).cgColor,
+            highlightColor: Self.parseColor(highlightColor, default: .white).cgColor,
+            defaultRadius: CGFloat(defaultRadius),
+            speedMs: speedMs
+        )
 
         if let existingHandle = handle, mountedCacheKey == cacheKey {
             // Geometry-only, mirroring `AutoskeletonRendererTier1.Handle.update`'s
             // own "must not restart the shimmer phase" contract
             // (`AutoskeletonRendererTier1Tests.testUpdateDoesNotRestartTheShimmerAnimation`).
-            // `setReducedMotion` REMOVES and re-applies the animation
-            // (`AutoskeletonRendererTier1.swift`'s `Handle.setReducedMotion`),
+            // `setAnimation` REMOVES and re-applies the animation
+            // (`AutoskeletonRendererTier1.swift`'s `Handle.applyCurrentAnimation`),
             // recomputing `beginTime` from `CACurrentMediaTime()` at the
             // moment it runs — calling it unconditionally on every same-key
             // update (e.g. a `refine()` shape-only refresh) would silently
@@ -149,36 +186,68 @@ public final class AutoskeletonOverlayViewHost: NSObject {
             // guarantee `update(shapes:)` exists to preserve. Only forward
             // the motion state when it actually changed since the last
             // mount/update — Android has no equivalent redundant-call risk
-            // here because its `reducedMotion`/`animation` prop setters are
+            // here because its `animation`/`reducedMotion` prop setters are
             // separate call sites from `mountOrUpdate()`; this guard is
             // this file's own necessary substitute for that decoupling,
             // since Fabric delivers every prop together in one
             // `updateProps:oldProps:` call.
             existingHandle.update(shapes: shapes)
-            if mountedReducedMotionEffective != reducedMotionEffective {
-                existingHandle.setReducedMotion(reducedMotionEffective)
-                mountedReducedMotionEffective = reducedMotionEffective
+            // Same "only when it actually changed" discipline as the animation
+            // above, and for the identical reason: `Handle.setDirection`
+            // re-applies the `CABasicAnimation`, which recomputes `beginTime`.
+            // In practice this branch never fires — `direction` is part of the
+            // composite cache key, so a direction change arrives as a NEW key
+            // and takes the remount path below — but the guard is what makes
+            // that a property of this code rather than of the key format.
+            if mountedDirection != direction {
+                existingHandle.setDirection(direction)
+                mountedDirection = direction
+            }
+            if mountedAnimation != resolvedAnimation {
+                existingHandle.setAnimation(resolvedAnimation)
+                mountedAnimation = resolvedAnimation
+            }
+            // The palette is the one prop group a cache key can never carry:
+            // geometry does not depend on colour, so `composeCacheKey` omits it
+            // and a dark-mode toggle arrives here, on the same key, rather than
+            // through the remount path below. `setTheme` is a no-op when the
+            // colours match, so a redundant `updateProps:` costs a comparison.
+            if mountedTheme?.baseColor != theme.baseColor
+                || mountedTheme?.highlightColor != theme.highlightColor {
+                existingHandle.setTheme(theme)
+                mountedTheme = theme
             }
             return
         }
 
         handle?.destroy()
-        let theme = AutoskeletonSkeletonTheme(
-            baseColor: Self.parseColor(baseColor, default: .lightGray).cgColor,
-            highlightColor: Self.parseColor(highlightColor, default: .white).cgColor,
-            defaultRadius: CGFloat(defaultRadius),
-            speedMs: speedMs
-        )
         clock.setPeriod(speedMs)
         handle = renderer.mount(
             on: surface,
             shapes: shapes,
             theme: theme,
             clock: clock,
-            reducedMotion: reducedMotionEffective
+            animation: resolvedAnimation,
+            direction: direction
         )
         mountedCacheKey = cacheKey
-        mountedReducedMotionEffective = reducedMotionEffective
+        mountedAnimation = resolvedAnimation
+        mountedDirection = direction
+        mountedTheme = theme
+    }
+
+    /// The writing direction the snapshot behind `cacheKey` was measured for,
+    /// forwarded verbatim from the `writingDirection` prop — which carries the
+    /// exact value `<AutoSkeleton>` put into that cache key.
+    ///
+    /// Fabric delivers every prop in one `updateProps:oldProps:` call, and
+    /// `AutoskeletonOverlayView.mm` calls this immediately BEFORE
+    /// `mountOrUpdate(...)`, so a mount always sees the direction belonging to
+    /// the key it is about to mount. `layoutSubviews`' later `mountOrUpdate`
+    /// call needs no companion call: the value is stored here, not passed
+    /// through.
+    @objc public func setDirection(_ direction: String) {
+        self.direction = Self.normalizedDirection(direction)
     }
 
     /// Removes the mounted overlay, if any. Called from
@@ -188,7 +257,62 @@ public final class AutoskeletonOverlayViewHost: NSObject {
         handle?.destroy()
         handle = nil
         mountedCacheKey = nil
-        mountedReducedMotionEffective = nil
+        mountedAnimation = nil
+        mountedTheme = nil
+        mountedDirection = nil
+    }
+
+    // MARK: - the shared `animation` vocabulary
+
+    static let animationShimmer = "shimmer"
+    static let animationPulse = "pulse"
+    static let animationNone = "none"
+
+    // MARK: - the shared `writingDirection` vocabulary
+
+    /// Mirrors `Direction` in `src/core/types.ts` — the same two strings the
+    /// composite cache key carries in its `direction` segment.
+    static let directionLtr = "ltr"
+    static let directionRtl = "rtl"
+
+    /// Anything that is not exactly `"rtl"` is `"ltr"`.
+    ///
+    /// Same fallback shape, and same reasoning, as `effectiveAnimation`'s
+    /// "an unrecognised kind falls back to `shimmer`": a prop typo must
+    /// degrade to the overwhelmingly common case and to the behaviour that
+    /// predates the prop, never to the exotic one. `WithDefault<..., 'ltr'>`
+    /// in the codegen spec already makes an OMITTED prop `"ltr"`; this covers
+    /// the value actually being wrong.
+    static func normalizedDirection(_ direction: String) -> String {
+        direction == directionRtl ? directionRtl : directionLtr
+    }
+
+    /// The pulse's trough. Mirrors `PULSE_MIN_OPACITY` in `src/core/animation.ts`.
+    static let pulseMinOpacity = 0.6
+
+    /// The Swift mirror of `src/core/animation.ts`'s `effectiveAnimation`,
+    /// pinned against the same table by `AutoskeletonAnimationKindTests` and by
+    /// the Kotlin mirror's `AutoskeletonAnimationKindTest`. Swift cannot import
+    /// the TypeScript one, so the table is the contract and all three sides are
+    /// tested against it.
+    ///
+    /// It replaces `reducedMotion || animation == "none"`, which was wrong in
+    /// both directions at once: `"pulse"` was absent from the predicate, so an
+    /// explicit pulse played the full travelling shimmer; and `"none"` was
+    /// present, so the value meaning "do not animate" was routed into the
+    /// reduced-motion PULSE.
+    ///
+    /// Reduce-motion only ever REMOVES motion. An unrecognised kind falls back
+    /// to `"shimmer"` rather than to `"none"`: a prop typo must not silently
+    /// disable a skeleton's animation with no diagnostic.
+    static func effectiveAnimation(_ animation: String, reducedMotion: Bool) -> String {
+        let requested: String
+        switch animation {
+        case animationPulse: requested = animationPulse
+        case animationNone: requested = animationNone
+        default: requested = animationShimmer
+        }
+        return (!reducedMotion || requested == animationNone) ? requested : animationPulse
     }
 
     /// Pure: `[VERSION, x,y,w,h,r] x N`, already density-independent POINTS

@@ -8,9 +8,10 @@ import XCTest
 /// the iOS `RCTViewComponentView` overlay subclass (`AutoskeletonOverlayView.mm`,
 /// deliberately kept as thin ObjC++ glue with nothing else to unit test — the
 /// same split `AutoskeletonModuleBridge`/`Autoskeleton.mm` already
-/// established for the Turbo Module side). It reads shape geometry from
-/// `AutoskeletonNativeShapeCache` by `cacheKey` (ADR-9: native holds shape
-/// DATA, JS holds POLICY) — never from props — and hosts
+/// established for the Turbo Module side). It paints the wire array handed to
+/// it through the `shapes` prop (ADR-9 originally had it read that geometry
+/// from a native cache keyed by `cacheKey`; that cache held a second copy of a
+/// buffer JS already had, so it is gone) and hosts
 /// `AutoskeletonRendererTier1` (task 3.2), the SAME renderer already covered
 /// by `AutoskeletonRendererTier1Tests`. This proves the WIRING reaches that
 /// renderer's `mount()`/`update()`; pixel-level proof is the real-device
@@ -24,8 +25,10 @@ import XCTest
 /// is the test that would catch an accidental copy of Android's `* density`
 /// step.
 final class AutoskeletonOverlayViewHostTests: XCTestCase {
-    private func freshCache() -> AutoskeletonNativeShapeCache {
-        AutoskeletonNativeShapeCache()
+    /// The host takes `[NSNumber]` because that is what its `@objc` signature
+    /// can accept from the Fabric component's `std::vector<double>` prop.
+    private func nsWire(_ wire: [Double]) -> [NSNumber] {
+        wire.map { NSNumber(value: $0) }
     }
 
     private func wireFor(_ shapes: [[Double]]) -> [Double] {
@@ -38,10 +41,9 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
         UIView(frame: CGRect(x: 0, y: 0, width: 300, height: 200))
     }
 
-    private func makeHost(cache: AutoskeletonNativeShapeCache) -> AutoskeletonOverlayViewHost {
+    private func makeHost() -> AutoskeletonOverlayViewHost {
         AutoskeletonOverlayViewHost(
             renderer: AutoskeletonRendererTier1(),
-            shapeCache: cache,
             clock: AutoskeletonShimmerClock(ticking: AutoskeletonNoOpTicking())
         )
     }
@@ -83,28 +85,43 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
 
     // MARK: - mountOrUpdate
 
+    /// G.18 restructured the renderer's mounted tree: `surface.layer`'s single
+    /// sublayer is now the STATIONARY container that owns the mask and the
+    /// opaque base fill, and the `CAGradientLayer` the sweep animates is that
+    /// container's sublayer. These host tests care about the shimmer animation,
+    /// so they look the gradient up by role rather than by position.
+    private func shimmerGradient(in surface: UIView) -> CAGradientLayer {
+        let container = try! XCTUnwrap(surface.layer.sublayers?.first, "the renderer must mount exactly one root layer")
+        let gradients = (container.sublayers ?? []).compactMap { $0 as? CAGradientLayer }
+        XCTAssertEqual(gradients.count, 1, "exactly one gradient band must be mounted")
+        return try! XCTUnwrap(gradients.first)
+    }
+
     func testMountsTheTier1RendererOnceCacheKeyIsSetAndTheSurfaceIsSized() {
-        let cache = freshCache()
-        cache.set("k1", wireFor([[0, 0, 50, 50, 4]]))
-        let host = makeHost(cache: cache)
+        let host = makeHost()
         let surface = sizedSurface()
 
         host.mountOrUpdate(
-            cacheKey: "k1", baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
+            cacheKey: "k1", shapes: nsWire(wireFor([[0, 0, 50, 50, 4]])), baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 1400, animation: "shimmer",
             reducedMotion: false, debugOverlay: false, surface: surface
         )
 
         XCTAssertEqual(surface.layer.sublayers?.count, 1)
-        XCTAssertTrue(surface.layer.sublayers?.first is CAGradientLayer)
+        // G.18: the root sublayer is the stationary masked container, and the
+        // animated gradient band lives inside it — never the other way round.
+        let container = try! XCTUnwrap(surface.layer.sublayers?.first)
+        XCTAssertFalse(container is CAGradientLayer, "the mask's owner must not be the layer the sweep animates")
+        XCTAssertNotNil(container.mask, "the container must own the mask")
+        XCTAssertTrue(shimmerGradient(in: surface).superlayer === container)
     }
 
-    func testNeverMountsWhenTheCacheHasNoEntryForTheGivenKey() {
-        let host = makeHost(cache: freshCache())
+    func testNeverMountsWhenNoGeometryWasHandedToIt() {
+        let host = makeHost()
         let surface = sizedSurface()
 
         host.mountOrUpdate(
-            cacheKey: "missing-key", baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
+            cacheKey: "missing-key", shapes: [], baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 1400, animation: "shimmer",
             reducedMotion: false, debugOverlay: false, surface: surface
         )
@@ -113,13 +130,11 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
     }
 
     func testNeverMountsWhenTheSurfaceHasNoSizeYet() {
-        let cache = freshCache()
-        cache.set("k1", wireFor([[0, 0, 50, 50, 4]]))
-        let host = makeHost(cache: cache)
+        let host = makeHost()
         let unsizedSurface = UIView(frame: .zero)
 
         host.mountOrUpdate(
-            cacheKey: "k1", baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
+            cacheKey: "k1", shapes: nsWire(wireFor([[0, 0, 50, 50, 4]])), baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 1400, animation: "shimmer",
             reducedMotion: false, debugOverlay: false, surface: unsizedSurface
         )
@@ -128,17 +143,15 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
     }
 
     func testUpdatesShapesInPlaceWithoutRemountingWhenTheSameCacheKeyIsReSet() {
-        let cache = freshCache()
-        cache.set("k1", wireFor([[0, 0, 50, 50, 4]]))
-        let host = makeHost(cache: cache)
+        let host = makeHost()
         let surface = sizedSurface()
 
         host.mountOrUpdate(
-            cacheKey: "k1", baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
+            cacheKey: "k1", shapes: nsWire(wireFor([[0, 0, 50, 50, 4]])), baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 1400, animation: "shimmer",
             reducedMotion: false, debugOverlay: false, surface: surface
         )
-        let gradientLayer = try! XCTUnwrap(surface.layer.sublayers?.first as? CAGradientLayer)
+        let gradientLayer = shimmerGradient(in: surface)
         let beginTimeBefore = try! XCTUnwrap(
             gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey)
         ).beginTime
@@ -146,15 +159,14 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
         // Re-setting the SAME cacheKey with fresh data (e.g. a refine() landing
         // a second, more accurate snapshot) must update in place, never restart
         // the shimmer phase by remounting.
-        cache.set("k1", wireFor([[0, 0, 80, 80, 8]]))
         host.mountOrUpdate(
-            cacheKey: "k1", baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
+            cacheKey: "k1", shapes: nsWire(wireFor([[0, 0, 80, 80, 8]])), baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 1400, animation: "shimmer",
             reducedMotion: false, debugOverlay: false, surface: surface
         )
 
         XCTAssertEqual(surface.layer.sublayers?.count, 1)
-        XCTAssertTrue(surface.layer.sublayers?.first === gradientLayer)
+        XCTAssertTrue(shimmerGradient(in: surface) === gradientLayer)
         let beginTimeAfter = try! XCTUnwrap(
             gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey)
         ).beginTime
@@ -162,13 +174,11 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
     }
 
     func testDestroyRemovesTheMountedOverlayLayer() {
-        let cache = freshCache()
-        cache.set("k1", wireFor([[0, 0, 50, 50, 4]]))
-        let host = makeHost(cache: cache)
+        let host = makeHost()
         let surface = sizedSurface()
 
         host.mountOrUpdate(
-            cacheKey: "k1", baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
+            cacheKey: "k1", shapes: nsWire(wireFor([[0, 0, 50, 50, 4]])), baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 1400, animation: "shimmer",
             reducedMotion: false, debugOverlay: false, surface: surface
         )
@@ -183,14 +193,12 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
     }
 
     func testParsesHexColorPropsAndFallsBackSafelyOnAnInvalidColorWithoutCrashing() {
-        let cache = freshCache()
-        cache.set("k1", wireFor([[0, 0, 50, 50, 4]]))
-        let host = makeHost(cache: cache)
+        let host = makeHost()
         let surface = sizedSurface()
 
         // Must not crash even with an invalid color string (defensive default).
         host.mountOrUpdate(
-            cacheKey: "k1", baseColor: "not-a-color", highlightColor: "#f5f5f5",
+            cacheKey: "k1", shapes: nsWire(wireFor([[0, 0, 50, 50, 4]])), baseColor: "not-a-color", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 1400, animation: "shimmer",
             reducedMotion: false, debugOverlay: false, surface: surface
         )
@@ -199,52 +207,67 @@ final class AutoskeletonOverlayViewHostTests: XCTestCase {
     }
 
     func testReducedMotionForwardsToThePulseAnimationInsteadOfShimmer() {
-        let cache = freshCache()
-        cache.set("k1", wireFor([[0, 0, 50, 50, 4]]))
-        let host = makeHost(cache: cache)
+        let host = makeHost()
         let surface = sizedSurface()
 
         host.mountOrUpdate(
-            cacheKey: "k1", baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
+            cacheKey: "k1", shapes: nsWire(wireFor([[0, 0, 50, 50, 4]])), baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 1400, animation: "shimmer",
             reducedMotion: true, debugOverlay: false, surface: surface
         )
 
-        let gradientLayer = try! XCTUnwrap(surface.layer.sublayers?.first as? CAGradientLayer)
+        let gradientLayer = shimmerGradient(in: surface)
         XCTAssertNil(gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey))
         XCTAssertNotNil(gradientLayer.animation(forKey: "autoskeleton.pulse"))
     }
 
-    func testAnimationNoneDegradesToPulseJustLikeReducedMotion() {
-        let cache = freshCache()
-        cache.set("k1", wireFor([[0, 0, 50, 50, 4]]))
-        let host = makeHost(cache: cache)
+    // WAS `testAnimationNoneDegradesToPulseJustLikeReducedMotion`, asserting
+    // `XCTAssertNotNil(gradientLayer.animation(forKey: "autoskeleton.pulse"))`
+    // for `animation: "none"`. It passed because the code did the wrong thing:
+    // `reducedMotion || animation == "none"` routed the one value meaning "do
+    // not animate" straight into the reduced-motion pulse. A test can only
+    // pin behaviour it can also reject, and this one could not.
+    func testAnimationNoneRunsNoAnimationAtAll() {
+        let host = makeHost()
         let surface = sizedSurface()
 
         host.mountOrUpdate(
-            cacheKey: "k1", baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
+            cacheKey: "k1", shapes: nsWire(wireFor([[0, 0, 50, 50, 4]])), baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 1400, animation: "none",
             reducedMotion: false, debugOverlay: false, surface: surface
         )
 
-        let gradientLayer = try! XCTUnwrap(surface.layer.sublayers?.first as? CAGradientLayer)
+        let gradientLayer = shimmerGradient(in: surface)
+        XCTAssertNil(gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey))
+        XCTAssertNil(gradientLayer.animation(forKey: "autoskeleton.pulse"))
+    }
+
+    func testAnExplicitPulseIsAPulseEvenWithThePreferenceOff() {
+        let host = makeHost()
+        let surface = sizedSurface()
+
+        host.mountOrUpdate(
+            cacheKey: "k1", shapes: nsWire(wireFor([[0, 0, 50, 50, 4]])), baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
+            defaultRadius: 4, speedMs: 1400, animation: "pulse",
+            reducedMotion: false, debugOverlay: false, surface: surface
+        )
+
+        let gradientLayer = shimmerGradient(in: surface)
         XCTAssertNil(gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey))
         XCTAssertNotNil(gradientLayer.animation(forKey: "autoskeleton.pulse"))
     }
 
     func testSpeedMsFlowsThroughToTheSharedClockPeriodAndTheShimmerDuration() {
-        let cache = freshCache()
-        cache.set("k1", wireFor([[0, 0, 50, 50, 4]]))
-        let host = makeHost(cache: cache)
+        let host = makeHost()
         let surface = sizedSurface()
 
         host.mountOrUpdate(
-            cacheKey: "k1", baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
+            cacheKey: "k1", shapes: nsWire(wireFor([[0, 0, 50, 50, 4]])), baseColor: "#e2e2e2", highlightColor: "#f5f5f5",
             defaultRadius: 4, speedMs: 999, animation: "shimmer",
             reducedMotion: false, debugOverlay: false, surface: surface
         )
 
-        let gradientLayer = try! XCTUnwrap(surface.layer.sublayers?.first as? CAGradientLayer)
+        let gradientLayer = shimmerGradient(in: surface)
         let shimmer = try! XCTUnwrap(
             gradientLayer.animation(forKey: AutoskeletonRendererTier1.Handle.shimmerAnimationKey) as? CABasicAnimation
         )

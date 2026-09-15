@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">React Native AutoSkeleton logo</title>
+  <desc id="desc">A colorful interface transforms through a diagonal scan line into a gray skeleton interface.</desc>
+
+  <defs>
+    <linearGradient id="surfaceGradient" x1="160" y1="144" x2="850" y2="890" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#071d42"/>
+      <stop offset="0.52" stop-color="#041431"/>
+      <stop offset="1" stop-color="#020d25"/>
+    </linearGradient>
+    <radialGradient id="surfaceGlow" cx="0" cy="0" r="1" gradientTransform="translate(724 265) rotate(127) scale(418 338)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#104c9c" stop-opacity=".34"/>
+      <stop offset="1" stop-color="#061735" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="cardGradient" x1="250" y1="225" x2="790" y2="760" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#edf3fb"/>
+    </linearGradient>
+    <linearGradient id="cyanBlue" x1="250" y1="286" x2="484" y2="443" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#09d8dc"/>
+      <stop offset=".52" stop-color="#04b8f2"/>
+      <stop offset="1" stop-color="#2856f6"/>
+    </linearGradient>
+    <linearGradient id="blueViolet" x1="290" y1="493" x2="557" y2="606" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7135ff"/>
+      <stop offset=".54" stop-color="#5156f7"/>
+      <stop offset="1" stop-color="#7f8cff"/>
+    </linearGradient>
+    <linearGradient id="cyanBar" x1="480" y1="285" x2="696" y2="350" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#04b5f5"/>
+      <stop offset="1" stop-color="#08d2d8"/>
+    </linearGradient>
+    <linearGradient id="blueBar" x1="480" y1="357" x2="633" y2="403" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1473f4"/>
+      <stop offset="1" stop-color="#185cf0"/>
+    </linearGradient>
+    <linearGradient id="bottomColor" x1="252" y1="684" x2="551" y2="842" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#08d4de"/>
+      <stop offset=".5" stop-color="#06b7f2"/>
+      <stop offset="1" stop-color="#4a36f5"/>
+    </linearGradient>
+    <linearGradient id="skeletonGray" x1="607" y1="275" x2="820" y2="835" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#b5c0d1"/>
+      <stop offset="1" stop-color="#9aa8bc"/>
+    </linearGradient>
+    <linearGradient id="scanGradient" x1="735" y1="135" x2="348" y2="900" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#19f5ff"/>
+      <stop offset=".46" stop-color="#1be8ff"/>
+      <stop offset=".71" stop-color="#3469ff"/>
+      <stop offset="1" stop-color="#8e2dff"/>
+    </linearGradient>
+    <linearGradient id="scanAura" x1="748" y1="132" x2="336" y2="905" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#19efff" stop-opacity="0"/>
+      <stop offset=".18" stop-color="#19efff" stop-opacity=".28"/>
+      <stop offset=".52" stop-color="#20caff" stop-opacity=".3"/>
+      <stop offset=".82" stop-color="#7339ff" stop-opacity=".36"/>
+      <stop offset="1" stop-color="#9330ff" stop-opacity="0"/>
+    </linearGradient>
+    <pattern id="skeletonStripe" width="74" height="74" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="37" height="74" fill="#a5b1c3"/>
+      <rect x="37" width="37" height="74" fill="#d0d8e5"/>
+    </pattern>
+    <clipPath id="surfaceClip">
+      <rect x="112" y="112" width="800" height="800" rx="180"/>
+    </clipPath>
+    <clipPath id="realSide">
+      <path d="M112 112H750L345 912H112Z"/>
+    </clipPath>
+    <clipPath id="skeletonSide">
+      <path d="M750 112H912V912H345Z"/>
+    </clipPath>
+    <clipPath id="topImageClip">
+      <rect x="220" y="254" width="215" height="173" rx="35"/>
+    </clipPath>
+    <clipPath id="topSkeletonImageClip">
+      <rect x="662" y="258" width="160" height="165" rx="32"/>
+    </clipPath>
+    <filter id="cardShadow" x="-20%" y="-30%" width="140%" height="170%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#000b20" flood-opacity=".25"/>
+    </filter>
+    <filter id="scanGlow" x="-100%" y="-10%" width="300%" height="120%">
+      <feGaussianBlur stdDeviation="12"/>
+    </filter>
+    <filter id="lineGlow" x="-200%" y="-20%" width="500%" height="140%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <g id="outer-surface" clip-path="url(#surfaceClip)">
+    <rect x="112" y="112" width="800" height="800" rx="180" fill="url(#surfaceGradient)"/>
+    <rect x="112" y="112" width="800" height="800" rx="180" fill="url(#surfaceGlow)"/>
+
+    <g id="ui-cards" fill="url(#cardGradient)" filter="url(#cardShadow)">
+      <rect x="188" y="218" width="648" height="240" rx="68"/>
+      <rect x="188" y="482" width="648" height="152" rx="52"/>
+      <rect x="188" y="658" width="648" height="184" rx="56"/>
+    </g>
+
+    <g id="real-interface" clip-path="url(#realSide)">
+      <g id="real-media-card">
+        <rect x="220" y="254" width="215" height="173" rx="35" fill="url(#cyanBlue)"/>
+        <g clip-path="url(#topImageClip)">
+          <circle cx="374" cy="301" r="22" fill="#fff" fill-opacity=".93"/>
+          <path d="M208 420 282 337a19 19 0 0 1 29 0l85 98H208Z" fill="#10e1dd"/>
+          <path d="m336 426 61-72a17 17 0 0 1 26 0l47 55v34H336Z" fill="#294ef4"/>
+        </g>
+        <rect x="462" y="267" width="214" height="47" rx="24" fill="url(#cyanBar)"/>
+        <rect x="462" y="337" width="150" height="43" rx="22" fill="url(#blueBar)"/>
+      </g>
+
+      <g id="real-profile-row">
+        <circle cx="270" cy="558" r="53" fill="url(#blueViolet)"/>
+        <rect x="354" y="514" width="182" height="41" rx="21" fill="url(#blueViolet)"/>
+        <rect x="354" y="572" width="132" height="34" rx="17" fill="#8c80f5" fill-opacity=".58"/>
+      </g>
+
+      <g id="real-content-block">
+        <rect x="220" y="688" width="290" height="126" rx="31" fill="url(#bottomColor)"/>
+        <path d="M381 688h129v126H273Z" fill="#275df5" fill-opacity=".7"/>
+      </g>
+    </g>
+
+    <g id="skeleton-interface" clip-path="url(#skeletonSide)" fill="url(#skeletonGray)">
+      <g id="skeleton-media-card">
+        <rect x="662" y="258" width="160" height="165" rx="32"/>
+        <g clip-path="url(#topSkeletonImageClip)" fill="#dbe2ec">
+          <circle cx="739" cy="310" r="21"/>
+          <path d="m648 425 72-74a17 17 0 0 1 25 0l25 27 38-40a17 17 0 0 1 25 0l43 47v58H648Z"/>
+        </g>
+      </g>
+
+      <g id="skeleton-profile-row">
+        <rect x="579" y="515" width="158" height="39" rx="20"/>
+        <rect x="566" y="572" width="171" height="36" rx="18"/>
+        <circle cx="792" cy="558" r="43"/>
+      </g>
+
+      <rect id="skeleton-content-block" x="516" y="688" width="306" height="126" rx="31" fill="url(#skeletonStripe)"/>
+    </g>
+
+    <g id="transformation-seam">
+      <path d="M751 119 344 911" stroke="url(#scanAura)" stroke-width="44" stroke-linecap="round" filter="url(#scanGlow)" opacity=".8"/>
+      <path d="M751 119 344 911" stroke="url(#scanGradient)" stroke-width="4" stroke-linecap="round" filter="url(#lineGlow)"/>
+      <path d="M750 119 343 911" stroke="#d9ffff" stroke-width="1.25" stroke-linecap="round" opacity=".9"/>
+    </g>
+  </g>
+</svg>

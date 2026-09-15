@@ -124,6 +124,7 @@ describe('Renderer<TSurface> — compile assertion', () => {
     const handle: RendererHandle = {
       update: () => {},
       setAnimation: () => {},
+      setTheme: () => {},
       destroy: () => {},
     };
     const renderer: Renderer<{ id: string }> = {

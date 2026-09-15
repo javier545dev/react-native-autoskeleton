@@ -64,3 +64,51 @@ describe('TemplateMeasurementHost styling — Android alpha<=0.01 sensor-exclusi
     expect(element).toBeNull();
   });
 });
+
+// SECOND real, on-device-found defect in the SAME two style properties
+// (2026-08-30). Moving the template off-screen fixed the alpha exclusion but
+// left the container with `left`/`top` and NO horizontal size constraint. An
+// absolutely-positioned Yoga box with only a leading position resolves its
+// width from its own CONTENT — the intrinsic width — so every `flex: 1` /
+// `width: '100%'` child inside the template collapses to zero and either
+// vanishes from the snapshot (`frame.w <= 0` is dropped by both native
+// sensors) or is measured at a width the real row will never have.
+//
+// Measured on device while writing `examples/bare-rn/demos/ListDemo.tsx`: a
+// row whose text column used `flex: 1` produced a 92.19 x 88 snapshot instead
+// of 411.43 x 88, and every skeleton row painted as a lone avatar square.
+//
+// The width the template needs is not the consumer's to supply — the host's
+// own parent IS the list, and it already has the real content width. Setting
+// BOTH `left` and `right` makes Yoga resolve the absolute box's width from
+// that parent (`width = parentWidth - left - right`), so `left + right === 0`
+// yields exactly the parent's content width while `left` keeps the box
+// off-screen. That is the invariant this test locks: a horizontal constraint
+// that comes from the PARENT, never from the template's own content.
+describe('TemplateMeasurementHost sizing — intrinsic-width collapse regression guard', () => {
+  it('constrains its width from the parent container instead of its own content', async () => {
+    const { TemplateMeasurementHost } = await import('../../src/native/list/TemplateMeasurementHost');
+    const element = TemplateMeasurementHost({
+      node: 'template-content' as unknown as React.ReactNode,
+      templateRef: { current: null },
+      onLayout: () => undefined,
+    }) as unknown as { props: { style: { left?: number; right?: number; width?: number } } };
+
+    const { style } = element.props;
+    expect(
+      style.right,
+      'an absolute box with `left` but no `right` (and no explicit `width`) is laid out at its ' +
+        'INTRINSIC width, which collapses every `flex: 1` / `width: "100%"` child in the template',
+    ).toBeDefined();
+    expect(
+      (style.left ?? 0) + (style.right ?? 0),
+      '`left + right` must be exactly 0 so Yoga resolves the box to the parent\'s full content ' +
+        'width (parentWidth - left - right) — any other sum measures the template at a width the ' +
+        'real row will never have',
+    ).toBe(0);
+    expect(
+      style.width,
+      'an explicit `width` would re-introduce a fixed size the parent does not control',
+    ).toBeUndefined();
+  });
+});

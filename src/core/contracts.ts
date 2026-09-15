@@ -125,6 +125,17 @@ export interface RendererHandle {
    *  allocate per frame */
   update(next: ShapeSnapshot): void;
   setAnimation(kind: AnimationKind): void;
+  /** Repaint the ramp for a new theme WITHOUT remounting, and — like
+   *  `update`/`setAnimation` — without restarting the shimmer phase.
+   *
+   *  Required, not optional, and that is the point. A mounted overlay used to
+   *  have no theme channel at all, so a `SkeletonProvider` theme change (a
+   *  dark-mode toggle, most often) left every skeleton already on screen in
+   *  the old palette until it happened to unmount. Both native renderers grew
+   *  a `setTheme` for exactly that symptom; the web handle was left without
+   *  one, and nothing failed to say so — an optional method here would let the
+   *  next renderer make the same omission just as quietly. */
+  setTheme(next: SkeletonTheme): void;
   destroy(): void;
 }
 

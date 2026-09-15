@@ -4,20 +4,24 @@
 // the 30/60-shape reference screens, and the NFR-6 consumer-bundle gzip
 // size. Both run against REAL artifacts: a real headless Chromium page
 // running the real production `createDomSensor()` (same harness pattern as
-// `test/web/dom-sensor.spec.ts`), and a real Vite library-mode build of the
-// real `lib/module/index.web.js` builder-bob output (same approach as
-// `test/packaging/web-bundle.test.ts`) — never a reimplementation or a
+// `test/web/dom-sensor.spec.ts`), and — for NFR-6 — literally the SAME
+// measurement function the failing gate uses, imported from
+// `test/packaging/helpers/web-bundle.ts`. Never a reimplementation or a
 // synthetic stand-in number.
+//
+// It used to be a reimplementation, and that is exactly how it drifted: this
+// file kept a Vite LIBRARY build after `test/packaging/web-bundle.test.ts`
+// corrected its own measurement to an app build (4dae7c0), so one NFR was
+// reported two ways — 9418 B here against a stale 9216 B budget, 7712 B
+// against 7933 B there. Same requirement, 1706 bytes apart, both green.
 //
 // This module is intentionally NOT run by the fast default `npm test` suite
 // (it launches a browser and runs a Vite build) — see `vitest.bench.config.ts`.
 
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { gzipSync } from 'node:zlib';
 import { chromium } from '@playwright/test';
 import { bundleEntry } from '../../test/web/helpers/bundle';
+import { measureWebEntryAsConsumerApp } from '../../test/packaging/helpers/web-bundle';
 import { buildReferenceScreenHtml } from '../web/reference-screen';
 import { ensureLibBuilt } from './lib-build';
 import { percentile } from './percentiles';
@@ -97,11 +101,11 @@ export interface WebEntryGzipResult {
   readonly gzipBytes: number;
 }
 
-/** Same measurement approach as `test/packaging/web-bundle.test.ts`'s NFR-6
- *  gate: a real Vite library-mode build of `lib/module/index.web.js` with
- *  `react`/`react-dom` external, minified, gzip-measured. Kept as its own
- *  small re-measurement here (rather than importing that test file) so the
- *  benchmark suite has no dependency on Vitest's test lifecycle.
+/** The NFR-6 consumer-bundle gzip size, measured by the SAME function the
+ *  failing gate in `test/packaging/web-bundle.test.ts` uses. Not "the same
+ *  approach as" — the same code. The previous copy of this measurement is why
+ *  `budgets.json`'s own warning that the two "must be changed together or they
+ *  will silently diverge" came true.
  *
  *  tasks.md G.13: under `npm run bench` the `ensureLibBuilt()` below is a
  *  deliberate NO-OP — `benchmarks/global-setup.ts` already built `lib/` once,
@@ -109,34 +113,10 @@ export interface WebEntryGzipResult {
  *  `npm run bench:run`, which runs outside Vitest and has no globalSetup. */
 export async function measureWebEntryGzip(): Promise<WebEntryGzipResult> {
   ensureLibBuilt();
-  const entry = path.join(REPO_ROOT, 'lib/module/index.web.js');
-  if (!existsSync(entry)) {
-    throw new Error(`Expected ${entry} after 'bob build' — builder-bob output is missing.`);
-  }
-
-  const outDir = mkdtempSync(path.join(tmpdir(), 'autoskeleton-bench-web-bundle-'));
+  const bundle = await measureWebEntryAsConsumerApp();
   try {
-    const { build } = await import('vite');
-    await build({
-      root: REPO_ROOT,
-      logLevel: 'silent',
-      define: { 'process.env.NODE_ENV': JSON.stringify('production') },
-      build: {
-        outDir,
-        emptyOutDir: true,
-        minify: 'esbuild',
-        sourcemap: false,
-        lib: { entry, formats: ['es'], fileName: () => 'autoskeleton.web.js' },
-        rollupOptions: {
-          external: ['react', 'react/jsx-runtime', 'react-dom', 'react-dom/client'],
-        },
-      },
-    });
-    const bundlePath = path.join(outDir, 'autoskeleton.web.js');
-    const source = readFileSync(bundlePath);
-    const gzipped = gzipSync(source, { level: 9 });
-    return { rawBytes: source.length, gzipBytes: gzipped.length };
+    return { rawBytes: bundle.rawBytes, gzipBytes: bundle.gzipBytes };
   } finally {
-    rmSync(outDir, { recursive: true, force: true });
+    bundle.cleanup();
   }
 }

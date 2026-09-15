@@ -169,3 +169,64 @@ describe('HandoffController — subscribe', () => {
     expect(listener).toHaveBeenCalledTimes(1); // the final settle notification was unsubscribed
   });
 });
+
+// Adversarial-review defect (2026-08-29): `beginFade` had NO idempotency
+// guard of its own. `notifyPainted()`'s guard (`phase !== 'placeholder' ||
+// painted`) does not close the window, because `phase` stays `'placeholder'`
+// for the WHOLE `handoffFadeMs` cross-fade — so a fade that has ALREADY
+// begun for one reason could be re-begun for another, leaving the live
+// `handoffReason` getter reporting one outcome while `settled` (and the
+// `onMetrics` payload derived from it) resolved with a different one, plus a
+// second orphaned fade timer that rewrites `handoffMs` and re-notifies every
+// subscriber after teardown.
+//
+// `web/AutoSkeleton.tsx`'s `usePaintDetectionHeuristic` fixed exactly ONE
+// sub-case of this (`expectsSuccessor: false`) at its own CALL SITE, and its
+// comment names the divergence explicitly. These two tests cover the class at
+// the SOURCE: every route into `beginFade`, from any caller, on any platform.
+describe('HandoffController — beginFade is idempotent for the whole cycle', () => {
+  it('ignores notifyPainted() after the timeout already began the fade', async () => {
+    const controller = createHandoffController({ expectsSuccessor: true });
+    const seen: (string | undefined)[] = [];
+    controller.subscribe((_phase, reason) => seen.push(reason));
+
+    controller.requestHandoff();
+    vi.advanceTimersByTime(HANDOFF_TIMEOUT_MS); // timeout fires -> beginFade('timeout')
+    expect(controller.handoffReason).toBe('timeout');
+
+    // The successor paints 10ms into the cross-fade — real, and the exact
+    // race `notifyPainted()`'s own guard cannot see, since `phase` is still
+    // 'placeholder' until the fade timer lands.
+    vi.advanceTimersByTime(10);
+    controller.notifyPainted();
+    expect(controller.handoffReason).toBe('timeout');
+
+    vi.advanceTimersByTime(HANDOFF_FADE_MS);
+    const reason = await controller.settled;
+    // The live getter and the settled value must never disagree.
+    expect(reason).toBe('timeout');
+    expect(controller.handoffReason).toBe(reason);
+    expect(controller.handoffMs).toBe(HANDOFF_TIMEOUT_MS + HANDOFF_FADE_MS);
+
+    // No orphaned second fade timer: draining every remaining timer must not
+    // re-notify subscribers or rewrite handoffMs after teardown.
+    const notificationsAtSettlement = seen.length;
+    vi.advanceTimersByTime(HANDOFF_FADE_MS * 4);
+    expect(seen.length).toBe(notificationsAtSettlement);
+    expect(controller.handoffMs).toBe(HANDOFF_TIMEOUT_MS + HANDOFF_FADE_MS);
+  });
+
+  it('ignores notifyPainted() during the no-successor fade (the sibling web guarded only at its call site)', async () => {
+    const controller = createHandoffController(); // expectsSuccessor: false
+    controller.requestHandoff(); // -> beginFade('no-successor') synchronously
+    vi.advanceTimersByTime(10);
+    controller.notifyPainted(); // mid-fade, phase is still 'placeholder'
+    expect(controller.handoffReason).toBe('no-successor');
+
+    vi.advanceTimersByTime(HANDOFF_FADE_MS);
+    const reason = await controller.settled;
+    expect(reason).toBe('no-successor');
+    expect(controller.handoffReason).toBe(reason);
+    expect(controller.handoffMs).toBe(HANDOFF_FADE_MS);
+  });
+});

@@ -1,5 +1,6 @@
 package com.autoskeleton
 
+import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.uimanager.SimpleViewManager
 import com.facebook.react.uimanager.ThemedReactContext
 import com.facebook.react.uimanager.ViewManagerDelegate
@@ -31,6 +32,32 @@ class AutoskeletonOverlayViewManager :
     override fun createViewInstance(context: ThemedReactContext): AutoskeletonOverlayView =
         AutoskeletonOverlayView(context)
 
+    /** React Native calls this once every prop in an update batch has been
+     *  delivered. A palette change arrives as separate `baseColor` and
+     *  `highlightColor` calls, and both colours are baked into a single
+     *  `LinearGradient`, so applying them here — rather than from each setter —
+     *  rebuilds that gradient once per update instead of once per prop, and
+     *  guarantees the overlay never paints a half-applied palette. */
+    override fun onAfterUpdateTransaction(view: AutoskeletonOverlayView) {
+        super.onAfterUpdateTransaction(view)
+        view.flushPendingTheme()
+    }
+
+    /** Fabric's recycling hook: the view returned here goes onto a pool and is
+     *  handed to the next `<AutoSkeleton>` that mounts. `BaseViewManager`'s
+     *  implementation resets only base view state, so without this every
+     *  autoskeleton prop — including a `cacheKey` naming another component's
+     *  geometry — would survive into the next tenant. iOS resets in
+     *  `AutoskeletonOverlayView.mm`'s `prepareForRecycle`; this is its twin. */
+    override fun prepareToRecycleView(
+        reactContext: ThemedReactContext,
+        view: AutoskeletonOverlayView,
+    ): AutoskeletonOverlayView? {
+        val recyclable = super.prepareToRecycleView(reactContext, view)
+        view.resetForRecycle()
+        return recyclable
+    }
+
     override fun onDropViewInstance(view: AutoskeletonOverlayView) {
         view.destroy()
         super.onDropViewInstance(view)
@@ -38,6 +65,12 @@ class AutoskeletonOverlayViewManager :
 
     override fun setCacheKey(view: AutoskeletonOverlayView, value: String?) {
         view.cacheKey = value
+    }
+
+    override fun setShapes(view: AutoskeletonOverlayView, value: ReadableArray?) {
+        view.wireShapes = value?.let { array ->
+            DoubleArray(array.size()) { array.getDouble(it) }
+        }
     }
 
     override fun setBaseColor(view: AutoskeletonOverlayView, value: String?) {
@@ -62,6 +95,14 @@ class AutoskeletonOverlayViewManager :
 
     override fun setReducedMotion(view: AutoskeletonOverlayView, value: Boolean) {
         view.reducedMotion = value
+    }
+
+    override fun setWritingDirection(view: AutoskeletonOverlayView, value: String?) {
+        // Null is the "prop absent" case Fabric hands a nullable string prop;
+        // `WithDefault<..., 'ltr'>` in the codegen spec means an omitted prop
+        // is LTR, which is exactly the sweep every consumer had before this
+        // prop existed.
+        view.writingDirection = value ?: AutoskeletonOverlayView.DIRECTION_LTR
     }
 
     override fun setDebugOverlay(view: AutoskeletonOverlayView, value: Boolean) {

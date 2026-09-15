@@ -2,6 +2,10 @@ package com.autoskeleton
 
 import android.graphics.Outline
 import android.view.View
+import com.facebook.react.uimanager.BackgroundStyleApplicator
+import com.facebook.react.uimanager.LengthPercentageType
+import com.facebook.react.uimanager.style.BorderRadiusProp
+import kotlin.math.min
 
 // Task 4.2 (tasks.md Phase 4) / plan.md ADR-2: the public-API-only Android corner
 // radius degradation ladder, tried in order per shape, first hit wins:
@@ -10,10 +14,27 @@ import android.view.View
 //        public, authoritative.
 //   R1 — `drawable.getOutline(outline)` on a COPY of `view.background`; used when
 //        `outline.getRadius() >= 0`. Resolves the "verified square" case (and the
-//        no-background case, trivially) exactly; leaves the "rounded, unknown
-//        amount" case honestly unresolved, per the characterization documented on
-//        `AutoskeletonRadiusResolverTest` — this is current RN 0.87.1 behavior
-//        (brief §2), not a bug in this resolver.
+//        no-background case, trivially) exactly. It CANNOT resolve a rounded
+//        background: RN's real `CompositeBackgroundDrawable` reports
+//        `Outline.RADIUS_UNDEFINED` for anything with corners, verified against
+//        the production `BackgroundStyleApplicator` in
+//        `AutoskeletonRadiusResolverTest`.
+//   R1b — `BackgroundStyleApplicator.getBorderRadius(view, BORDER_RADIUS)`, the
+//        symmetric READ of the exact public API that WROTE the radius. This is
+//        what closes R1's gap. Until it existed, every rounded view on Android
+//        fell to R3 and painted with `defaultRadius` — so a circular avatar
+//        (`borderRadius: 28` on a 56dp image) rendered as a near-square block
+//        while iOS, which reads `layer.cornerRadius` directly, drew a circle.
+//        That was the single most visible defect the library could produce, on
+//        the platform with the most devices.
+//
+//        It is `@JvmStatic public` on a PUBLIC class in both RN 0.77 — this
+//        package's declared `peerDependencies` floor — and RN 0.87, so it holds
+//        across the whole supported range. ADR-2 forbids naming or downcasting
+//        to RN INTERNAL classes (`CompositeBackgroundDrawable`,
+//        `BackgroundDrawable`); `BackgroundStyleApplicator` is neither — it is
+//        the same public entry point RN's own `ReactViewManager` writes through,
+//        and the one this resolver's tests already use to build fixtures.
 //   R3 — `defaultRadius` fallback, with `radius-unavailable` raised. The library
 //        still ships a skeleton; it is just honest about not knowing the exact
 //        radius.
@@ -64,7 +85,59 @@ class AutoskeletonPublicApiRadiusResolver(
             }
 
             // R1
-            return resolveViaOutline(view)
+            resolveViaOutline(view)?.let { return it }
+
+            // R1b
+            return resolveViaBorderRadiusStyle(view)
+        }
+
+        /** Reads the radius back through the same public API that set it.
+         *
+         *  Reached only when R1 gave up, which is exactly the rounded case — so
+         *  this never displaces R1's exact answer for a square or unbacked view.
+         *
+         *  Only the UNIFORM `BORDER_RADIUS` is honoured. A view styled with four
+         *  different corner radii falls through to R3 deliberately: `ShapeInfo.r`
+         *  is a single scalar, so picking one corner would paint a shape the view
+         *  does not have, and quietly. Falling through keeps the
+         *  `radius-unavailable` flag that says so.
+         *
+         *  A PERCENT radius resolves against `min(width, height)`. CSS resolves
+         *  the horizontal and vertical radii against width and height
+         *  separately; one scalar cannot carry that, and the shorter side is the
+         *  conservative choice — the renderers already clamp to
+         *  `min(w, h) / 2`, so it can never over-round. */
+        private fun resolveViaBorderRadiusStyle(view: View): AutoskeletonRadiusResolution? {
+            val uniform = BackgroundStyleApplicator.getBorderRadius(view, BorderRadiusProp.BORDER_RADIUS)
+                ?: return null
+
+            // UNITS, and the two halves are NOT the same unit.
+            //
+            // A POINT radius is the raw JS number: `ReactViewManager.setBorderRadius`
+            // stores `LengthPercentage.setFromDynamic(rawBorderRadius)` with no
+            // `toPixelFromDIP` anywhere, so `borderRadius: 28` is 28 **dp**. Every
+            // other length this resolver returns is in raw view PIXELS, which is
+            // what `AutoskeletonSensor` measures in, so it has to be scaled — the
+            // same conversion `AutoskeletonGetShapesConfig.toSensorOptions` already
+            // applies to `defaultRadius` and every hint, and for the same reason.
+            //
+            // A PERCENT radius does not: `LengthPercentage.resolve` multiplies by
+            // the reference length we hand it, and we hand it `view.width/height`,
+            // which are already pixels. Scaling that too would square the density.
+            //
+            // Robolectric's default density is 1, so a test alone cannot tell these
+            // apart — `r1bScalesADpRadiusToPixelsAtDensity3` is the one that can,
+            // and it exists because the device caught this after the unit-blind
+            // version shipped a visibly under-rounded avatar.
+            val density = view.resources?.displayMetrics?.density?.takeIf { it > 0f } ?: 1f
+            val radius = when (uniform.type) {
+                LengthPercentageType.PERCENT -> uniform.resolve(min(view.width, view.height).toFloat())
+                LengthPercentageType.POINT -> uniform.resolve(0f) * density
+            }
+            if (!radius.isFinite() || radius <= 0f) {
+                return null
+            }
+            return AutoskeletonRadiusResolution(radius = radius, source = AutoskeletonRadiusSource.STYLE)
         }
 
         /** Returns a resolution when R1 can answer definitively (no background at

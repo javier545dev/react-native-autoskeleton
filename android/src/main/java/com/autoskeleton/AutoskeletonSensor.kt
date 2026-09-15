@@ -6,6 +6,9 @@ import android.content.res.Configuration
 import android.graphics.Rect
 import android.view.View
 import android.view.ViewGroup
+import android.widget.HorizontalScrollView
+import android.widget.ScrollView
+import com.facebook.react.uimanager.BackgroundStyleApplicator
 import com.facebook.react.views.image.ReactImageView
 import com.facebook.react.views.text.ReactTextView
 import com.facebook.react.views.textinput.ReactEditText
@@ -154,8 +157,16 @@ class AutoskeletonSensor(
 
     // MARK: - Traversal
 
-    private fun traverse(view: View, root: View, ctx: TraversalContext): List<AutoskeletonShapeInfo> {
+    private fun traverse(
+        view: View,
+        root: View,
+        ctx: TraversalContext,
+        depth: Int = 0,
+    ): List<AutoskeletonShapeInfo> {
         if (ctx.truncated) {
+            return emptyList()
+        }
+        if (ctx.overDepth(depth)) {
             return emptyList()
         }
         val id = nativeId(view)
@@ -167,7 +178,22 @@ class AutoskeletonSensor(
         }
         // A hidden/transparent view contributes no visible pixels, so it must not
         // contribute a skeleton shape either.
-        if (view.visibility != View.VISIBLE || view.alpha <= 0.01f) {
+        //
+        // `depth > 0` — the ROOT is exempt, deliberately. This skip exists to
+        // keep incidental platform subviews out of the traversal (a
+        // `ScrollView`'s indicators start hidden), and the root is not
+        // something the sensor stumbled upon: it is the exact tree JS asked it
+        // to measure. Refusing it because the caller made it transparent is the
+        // sensor declining the job it was given.
+        //
+        // Web already behaves this way. `dom-sensor.ts` checks opacity per LEAF
+        // and records that "an `opacity: 0` CONTAINER still has its descendants
+        // shaped", so this closes a platform divergence rather than creating
+        // one. It also makes "hide the wrapper while it is measured" a usable
+        // technique, which `AutoSkeleton.tsx` does NOT currently rely on (it
+        // covers the content instead), but which no longer silently produces
+        // an empty snapshot for anyone who tries.
+        if (depth > 0 && (view.visibility != View.VISIBLE || view.alpha <= 0.01f)) {
             return emptyList()
         }
         if (ctx.overBudget()) {
@@ -184,7 +210,7 @@ class AutoskeletonSensor(
                 if (ctx.truncated) {
                     break
                 }
-                collected.addAll(traverse(view.getChildAt(i), root, ctx))
+                collected.addAll(traverse(view.getChildAt(i), root, ctx, depth + 1))
             }
         }
         if (collected.isNotEmpty()) {
@@ -204,7 +230,11 @@ class AutoskeletonSensor(
         source: AutoskeletonShapeSource,
         ctx: TraversalContext,
     ): List<AutoskeletonShapeInfo> {
-        val frame = frameOf(view, root)
+        val frame = clipToScrollAncestors(view, root, frameOf(view, root))
+        // A frame clipped entirely away arrives here with zero area and is
+        // dropped by the guard that was already here for degenerate views —
+        // the same shape as the web sensor, where a fully clipped frame
+        // becomes zero-area and `pushShape` refuses it.
         if (frame.w <= 0f || frame.h <= 0f) {
             return emptyList()
         }
@@ -222,6 +252,14 @@ class AutoskeletonSensor(
                     h = frame.h,
                     lineHeight = ctx.options.defaultLineHeight,
                     lines = lineCount,
+                    // Read off the VIEW, not off any JS-side flag: every other
+                    // frame this sensor emits already comes from the laid-out
+                    // view, and the anchor has to agree with that same layout
+                    // or the line lands beside the glyphs instead of over them.
+                    // `I18nManager.isRTL` is deliberately not consulted here —
+                    // it drives the cache key, and the two can legitimately
+                    // disagree (see `AutoSkeleton.tsx`'s `direction` comment).
+                    isRightToLeft = view.layoutDirection == View.LAYOUT_DIRECTION_RTL,
                 ),
             )
             if (!ctx.reserveCapacity(lines.size)) {
@@ -247,6 +285,15 @@ class AutoskeletonSensor(
     }
 
     companion object {
+        /** Deliberately the same 300 as `MAX_TRAVERSAL_DEPTH` in
+         *  `src/web/dom-sensor.ts` and `AutoskeletonSensor.swift`: generous
+         *  headroom over any realistically deep real-world view tree (nested
+         *  comment threads and recursive components rarely exceed a few dozen
+         *  levels) while staying far below stack-overflow risk. A fixed
+         *  internal constant rather than an `AutoskeletonSensorOptions` field,
+         *  because it is a safety bound, not a per-consumer tunable. */
+        private const val MAX_TRAVERSAL_DEPTH = 300
+
         private const val TRAVERSAL_TRACE_SECTION = "AutoskeletonTraversal"
 
         /** Classifies the three RN leaf-component classes named in brief §4
@@ -262,13 +309,30 @@ class AutoskeletonSensor(
         }
 
         /** `true` when the view paints something of its own rather than being a
-         *  purely structural, invisible wrapper. Verified empirically (see
-         *  `SyntheticHierarchyBuilder`'s class doc): RN's own
-         *  `BackgroundStyleApplicator.setBackgroundColor` already collapses
-         *  `view.background` to `null` for a fully-transparent color, so a plain
-         *  null check is the correct, complete signal — no alpha-channel
-         *  inspection needed on top of it. */
-        private fun hasNonTransparentBackground(view: View): Boolean = view.background != null
+         *  purely structural, invisible wrapper.
+         *
+         *  Reads the background COLOUR back through the same public API that set
+         *  it, and tests its alpha — structurally identical to
+         *  `AutoskeletonSensor.swift`'s `hasNonTransparentBackground`, which reads
+         *  `view.backgroundColor`'s alpha. In a React Native app every background
+         *  arrives through these props, so this is the complete signal, and both
+         *  platforms now answer the same question in the same way.
+         *
+         *  THIS USED TO BE `view.background != null`, justified by RN's
+         *  `setBackgroundColor` collapsing the drawable to null for a fully
+         *  transparent colour. That is true, and it is incomplete:
+         *  `setBorderRadius`, `setBorderWidth` and the ripple feedback underlay
+         *  all route through `ensureCompositeBackgroundDrawable` too, and assign a
+         *  non-null drawable that paints NOTHING. A bare
+         *  `<View style={{ borderRadius: 12 }} />` spacer therefore counted as a
+         *  paintable container and drew a grey block on Android while iOS
+         *  correctly drew nothing — a visible, silent divergence.
+         *
+         *  `getBackgroundColor` is `@JvmStatic public` in RN 0.77 (this package's
+         *  declared `peerDependencies` floor) and RN 0.87 alike, and names no
+         *  internal class, which is what ADR-2 forbids. */
+        private fun hasNonTransparentBackground(view: View): Boolean =
+            (BackgroundStyleApplicator.getBackgroundColor(view) ?: 0) ushr 24 != 0
 
         /** Reads the view's `nativeID` back via the exact public tag
          *  `BaseViewManager.setNativeId` writes (`com.facebook.react.R.id.view_tag_native_id`)
@@ -284,6 +348,55 @@ class AutoskeletonSensor(
          *  exactly brief §4's "Android: recursion over ViewGroups accumulating
          *  offsets with `offsetDescendantRectToMyCoords` (subtracting scrollX/
          *  scrollY)". */
+        /** Intersects a leaf's frame with every scrolling ancestor's viewport.
+         *
+         *  `offsetDescendantRectToMyCoords` already subtracts each ancestor's
+         *  scrollX/scrollY, so a scrolled child arrives here at the right
+         *  POSITION — but at its full size, even when most of it is past the
+         *  fold. Without this the sensor measured content nobody can see, and
+         *  the cost was not only paint: those shapes are charged against
+         *  `maxShapes`, so a long list could spend its budget below the fold
+         *  and truncate the part actually on screen.
+         *
+         *  Only scrolling ancestors are clipped against, not every `ViewGroup`
+         *  with `clipChildren`. Clipping against every parent would be a much
+         *  larger behavioural change — a child that deliberately overflows its
+         *  parent is ordinary in React Native layouts — and this is the case
+         *  with a real symptom. `ReactScrollView` extends `ScrollView`, and its
+         *  horizontal counterpart extends `HorizontalScrollView`, so both are
+         *  covered by the platform types.
+         *
+         *  Mirrors `computeClipBox`/`applyClip` in `src/web/dom-sensor.ts`, and
+         *  the invariant is the same: this is the ONLY place a leaf frame is
+         *  produced, so every shape this sensor emits has passed through it. */
+        private fun clipToScrollAncestors(view: View, root: View, frame: Frame): Frame {
+            var clipped = frame
+            var parent = view.parent
+            while (parent is ViewGroup) {
+                if (parent is ScrollView || parent is HorizontalScrollView) {
+                    val viewport = frameOf(parent, root)
+                    val left = maxOf(clipped.x, viewport.x)
+                    val top = maxOf(clipped.y, viewport.y)
+                    val right = minOf(clipped.x + clipped.w, viewport.x + viewport.w)
+                    val bottom = minOf(clipped.y + clipped.h, viewport.y + viewport.h)
+                    clipped = Frame(
+                        x = left,
+                        y = top,
+                        w = maxOf(0f, right - left),
+                        h = maxOf(0f, bottom - top),
+                    )
+                    if (clipped.w <= 0f || clipped.h <= 0f) {
+                        return clipped
+                    }
+                }
+                if (parent === root) {
+                    break
+                }
+                parent = parent.parent
+            }
+            return clipped
+        }
+
         private fun frameOf(view: View, root: View): Frame {
             val rect = Rect(0, 0, view.width, view.height)
             if (view !== root && root is ViewGroup) {
@@ -317,6 +430,32 @@ class AutoskeletonSensor(
             if (elapsedMs > options.budgetMs) {
                 truncated = true
                 degraded.add(AutoskeletonDegradationFlag.BUDGET_EXCEEDED)
+                return true
+            }
+            return false
+        }
+
+        /** Hard depth bound, mirroring `dom-sensor.ts`'s `overDepth` and its
+         *  `MAX_TRAVERSAL_DEPTH`. Checked at the very top of `traverse()`,
+         *  beside `overBudget()`, and truncating through the same `truncated`
+         *  flag and `degraded` set, so a runaway subtree degrades exactly the
+         *  way every other limit here does: truncate and raise a flag the
+         *  caller can see, never throw.
+         *
+         *  `overBudget()` cannot stand in for this. It is TIME-based, so it
+         *  only ever stops FUTURE recursive calls — a tree deep enough to
+         *  overflow the call stack does so in far less than `budgetMs` of
+         *  wall-clock time, and the process dies before the budget is ever
+         *  consulted. Web grew this bound when unbounded recursion crashed the
+         *  renderer on a ~3000-level nested tree; both native sensors had the
+         *  same unbounded recursion and neither had the bound. */
+        fun overDepth(depth: Int): Boolean {
+            if (truncated) {
+                return true
+            }
+            if (depth > MAX_TRAVERSAL_DEPTH) {
+                truncated = true
+                degraded.add(AutoskeletonDegradationFlag.DEPTH_CAP_REACHED)
                 return true
             }
             return false

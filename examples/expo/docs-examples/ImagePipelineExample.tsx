@@ -90,16 +90,31 @@ function ProductCardInner({ productId }: { readonly productId: string }): React.
         }}
         onMetrics={setMetrics}
       >
-        {product !== null && (
-          <Image
-            source={{ uri: product.imageUrl }}
-            placeholder={{ blurhash: product.blurhash }}
-            placeholderContentFit="cover"
-            contentFit="cover"
-            style={{ width: '100%', height: '100%' }}
-            transition={200}
-          />
-        )}
+        {/* The slot is mounted UNCONDITIONALLY, sized, and opaque. That is
+            phase 1's whole input: the skeleton is derived from what is
+            actually rendered, so the natural spelling —
+            `{product !== null && <Image … />}` with nothing else inside — has
+            an EMPTY subtree while loading, measures zero shapes, and paints no
+            skeleton at all (verified on an Android emulator: `shapeCount: 0`).
+            A bare transparent wrapper does not rescue it either: the container
+            rule emits a container's own shape only when its subtree has no
+            detectable leaf AND it has a non-transparent background, which is
+            the only signal that distinguishes a content box from a spacer.
+            See `docs/image-pipeline.md` §3a for the full argument; the rule is
+            gated on all three sensors by the shared
+            `container-rule-sized-but-transparent` fixture. */}
+        <View style={{ width: '100%', height: '100%', backgroundColor: '#1f2430' }}>
+          {product !== null && (
+            <Image
+              source={{ uri: product.imageUrl }}
+              placeholder={{ blurhash: product.blurhash }}
+              placeholderContentFit="cover"
+              contentFit="cover"
+              style={{ width: '100%', height: '100%' }}
+              transition={200}
+            />
+          )}
+        </View>
       </AutoSkeleton>
       {metrics !== null && metrics.handoffReason === 'timeout' && (
         // Exactly the signal docs/image-pipeline.md tells consumers to

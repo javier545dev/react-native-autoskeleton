@@ -8,7 +8,8 @@
     "lint": "eslint .",
     "start": "react-native start",
     "test": "jest",
-    "boot-smoke": "react-native config >/dev/null && echo 'bare-rn: react-native.config.js resolves and CLI autolinking discovers the package'"
+    "boot-smoke": "react-native config >/dev/null && echo 'bare-rn: react-native.config.js resolves and CLI autolinking discovers the package'",
+    "postinstall": "node ../../scripts/unpin-local-tarball.mjs"
   },
   "dependencies": {
     "@react-native/new-app-screen": "0.87.1",

@@ -52,11 +52,24 @@ export function quantizeFontScale(scale: number): number {
 function escapeSegment(segment: string): string {
   // '%' must escape first so a literal '%7C' in user input is never
   // misinterpreted as an escaped '|' on the way back out.
-  return segment.replace(/%/g, '%25').replace(/\|/g, '%7C');
+  //
+  // The anchored '-' rule (adversarial-review defect, 2026-08-29) reserves
+  // `EMPTY_ITEM_TYPE_SEGMENT`. '|' is the separator and was ALREADY safe here;
+  // '-' is a SENTINEL drawn from the very alphabet it guards, so `itemType:
+  // '-'` composed the byte-identical key as `itemType: undefined` and parsed
+  // back as `undefined` — `composeCacheKey` was not injective and
+  // `parseCacheKey` was not its inverse. Closed at the alphabet level rather
+  // than by special-casing the one known input: the escaped output can only
+  // ever contain '%' as the head of '%25' or '%7C', so '%2D' is unreachable
+  // by escaping ANY input and cannot impersonate the sentinel. Anchored, so
+  // only a whole segment (which is all the sentinel can ever occupy) escapes
+  // — 'feed-card' and every other embedded '-' is untouched, and every key
+  // this function has ever produced is byte-identical.
+  return segment.replace(/%/g, '%25').replace(/\|/g, '%7C').replace(/^-$/, '%2D');
 }
 
 function unescapeSegment(segment: string): string {
-  return segment.replace(/%7C/g, '|').replace(/%25/g, '%');
+  return segment.replace(/^%2D$/, '-').replace(/%7C/g, '|').replace(/%25/g, '%');
 }
 
 /** Produces `v1|<skeletonKey>|<itemType|'-'>|<width>|<fontScale>|<dir>|<platform>`

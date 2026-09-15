@@ -133,8 +133,16 @@ final class AutoskeletonSensor {
 
     // MARK: - Traversal
 
-    private func traverse(_ view: UIView, root: UIView, ctx: AutoskeletonTraversalContext) -> [AutoskeletonShapeInfo] {
+    private func traverse(
+        _ view: UIView,
+        root: UIView,
+        ctx: AutoskeletonTraversalContext,
+        depth: Int = 0
+    ) -> [AutoskeletonShapeInfo] {
         if ctx.truncated {
+            return []
+        }
+        if ctx.overDepth(depth) {
             return []
         }
         // `<AutoSkeleton.Ignore>` bug fix: the sentinel marker (self-sufficient,
@@ -149,7 +157,20 @@ final class AutoskeletonSensor {
         // implementation-detail subviews (e.g. `UIScrollView`'s indicator views,
         // which start hidden/zero-alpha) out of the traversal without the sensor
         // needing to know their (private) class names.
-        if view.isHidden || view.alpha <= 0.01 {
+        // `depth > 0` — the ROOT is exempt, deliberately. This skip exists to
+        // keep incidental UIKit subviews out of the traversal, and the root is
+        // not something the sensor stumbled upon: it is the exact tree JS asked
+        // it to measure. Refusing it because the caller made it transparent is
+        // the sensor declining the job it was given.
+        //
+        // Web already behaves this way — `dom-sensor.ts` checks opacity per
+        // LEAF and records that "an `opacity: 0` CONTAINER still has its
+        // descendants shaped" — so this closes a platform divergence rather
+        // than creating one. It also makes "hide the wrapper while it is
+        // measured" a usable technique, which `AutoSkeleton.tsx` does NOT
+        // currently rely on (it covers the content instead), but which no
+        // longer silently produces an empty snapshot for anyone who tries.
+        if depth > 0, view.isHidden || view.alpha <= 0.01 {
             return []
         }
         if ctx.overBudget() {
@@ -165,7 +186,7 @@ final class AutoskeletonSensor {
             if ctx.truncated {
                 break
             }
-            collected.append(contentsOf: traverse(subview, root: root, ctx: ctx))
+            collected.append(contentsOf: traverse(subview, root: root, ctx: ctx, depth: depth + 1))
         }
 
         if !collected.isEmpty {
@@ -207,13 +228,55 @@ final class AutoskeletonSensor {
         return alpha > 0
     }
 
+    /// Intersects a leaf's frame with every scrolling ancestor's viewport.
+    ///
+    /// `convert(_:to:)` already accounts for a scroll view's `contentOffset`,
+    /// so a scrolled child arrives at the right POSITION — but at its full
+    /// size, even when most of it is past the fold. Without this the sensor
+    /// measured content nobody can see, and the cost was not only paint: those
+    /// shapes are charged against `maxShapes`, so a long list could spend its
+    /// budget below the fold and truncate the part actually on screen.
+    ///
+    /// Only scrolling ancestors are clipped against, not every view with
+    /// `clipsToBounds`. Clipping against every parent would be a much larger
+    /// behavioural change — a child that deliberately overflows its parent is
+    /// ordinary in React Native layouts — and this is the case with a real
+    /// symptom. `RCTScrollView` hosts a `UIScrollView`, so the platform type
+    /// covers both.
+    ///
+    /// Mirrors `clipToScrollAncestors` in `AutoskeletonSensor.kt` and
+    /// `computeClipBox`/`applyClip` in `src/web/dom-sensor.ts`. The invariant
+    /// is the same on all three: this is the ONLY place a leaf frame is
+    /// produced, so every shape has passed through it.
+    private static func clipToScrollAncestors(_ view: UIView, root: UIView, frame: CGRect) -> CGRect {
+        var clipped = frame
+        var parent = view.superview
+        while let current = parent {
+            if let scrollView = current as? UIScrollView {
+                clipped = clipped.intersection(scrollView.convert(scrollView.bounds, to: root))
+                if clipped.isNull || clipped.isEmpty {
+                    return .zero
+                }
+            }
+            if current === root {
+                break
+            }
+            parent = current.superview
+        }
+        return clipped
+    }
+
     private func leafShapes(
         for view: UIView,
         root: UIView,
         source: AutoskeletonShapeSource,
         ctx: AutoskeletonTraversalContext
     ) -> [AutoskeletonShapeInfo] {
-        let frame = view.convert(view.bounds, to: root)
+        let frame = Self.clipToScrollAncestors(view, root: root, frame: view.convert(view.bounds, to: root))
+        // A frame clipped entirely away arrives here empty and is dropped by
+        // the guard that was already here for degenerate views — the same
+        // shape as the web sensor, where a fully clipped frame becomes
+        // zero-area and `pushShape` refuses it.
         guard frame.width > 0, frame.height > 0 else {
             return []
         }
@@ -239,7 +302,15 @@ final class AutoskeletonSensor {
                     w: frame.width,
                     h: frame.height,
                     lineHeight: ctx.options.defaultLineHeight,
-                    lines: lineCount
+                    lines: lineCount,
+                    // Read off the VIEW, not off any JS-side flag: every other
+                    // frame this sensor emits already comes from the laid-out
+                    // view, and the anchor has to agree with that same layout
+                    // or the line lands beside the glyphs instead of over them.
+                    // `I18nManager.isRTL` is deliberately not consulted here —
+                    // it drives the cache key, and the two can legitimately
+                    // disagree (see `AutoSkeleton.tsx`'s `direction` comment).
+                    isRightToLeft: view.effectiveUserInterfaceLayoutDirection == .rightToLeft
                 )
             )
             guard ctx.reserveCapacity(lines.count) else {
@@ -268,6 +339,15 @@ final class AutoskeletonSensor {
 /// a class here (not a struct) so budget/cap bookkeeping is shared across the whole
 /// recursive traversal without threading `inout` through every call.
 final class AutoskeletonTraversalContext {
+    /// Deliberately the same 300 as `MAX_TRAVERSAL_DEPTH` in
+    /// `src/web/dom-sensor.ts` and `AutoskeletonSensor.kt`: generous headroom
+    /// over any realistically deep real-world view tree (nested comment
+    /// threads and recursive components rarely exceed a few dozen levels)
+    /// while staying far below stack-overflow risk. A fixed internal constant
+    /// rather than an `AutoskeletonSensorOptions` field, because it is a
+    /// safety bound, not a per-consumer tunable.
+    static let maxTraversalDepth = 300
+
     let options: AutoskeletonSensorOptions
     let startedAt: CFTimeInterval
     private(set) var shapeCount = 0
@@ -289,6 +369,32 @@ final class AutoskeletonTraversalContext {
         if elapsedMs > options.budgetMs {
             truncated = true
             degraded.insert(.budgetExceeded)
+            return true
+        }
+        return false
+    }
+
+    /// Hard depth bound, mirroring `dom-sensor.ts`'s `overDepth` and its
+    /// `MAX_TRAVERSAL_DEPTH`. Checked at the very top of `traverse()`, beside
+    /// `overBudget()`, and truncating through the same `truncated` flag and
+    /// `degraded` set, so a runaway subtree degrades exactly the way every
+    /// other limit here does: truncate and raise a flag the caller can see,
+    /// never throw.
+    ///
+    /// `overBudget()` cannot stand in for this. It is TIME-based, so it only
+    /// ever stops FUTURE recursive calls — a tree deep enough to overflow the
+    /// call stack does so in far less than `budgetMs` of wall-clock time, and
+    /// the process dies before the budget is ever consulted. Web grew this
+    /// bound when unbounded recursion crashed the renderer on a ~3000-level
+    /// nested tree; both native sensors had the same unbounded recursion and
+    /// neither had the bound.
+    func overDepth(_ depth: Int) -> Bool {
+        if truncated {
+            return true
+        }
+        if depth > AutoskeletonTraversalContext.maxTraversalDepth {
+            truncated = true
+            degraded.insert(.depthCapReached)
             return true
         }
         return false

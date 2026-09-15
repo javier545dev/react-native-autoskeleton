@@ -78,6 +78,77 @@ function cssAttributeValueEscape(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
+/** The two attributes that mark an element as SERVER-rendered by this
+ *  library: `<AutoSkeleton.SSR>`'s captured-key overlay carries the first,
+ *  `NeutralSkeletonBlock` (the uncaptured-key AND manifest/CSS-drift branch)
+ *  carries the second. Written as literals for the same reason the geometry
+ *  selector above writes `data-askl-ssr-key`/`data-askl-ssr-dir` as literals:
+ *  importing them would mean importing a `.tsx` module, dragging React and
+ *  JSX into this CLI's esbuild graph for two strings (the same trade
+ *  `neutral-geometry.ts` exists to avoid). */
+const SSR_OVERLAY_MARKERS = ['data-askl-ssr-key', 'data-askl-ssr-neutral'];
+
+/** REQ-A11Y-3 / spec §1.10 on the PRE-HYDRATION path.
+ *
+ *  The runtime web path already honours the preference, but it does so in
+ *  JavaScript: `AutoSkeleton.tsx`'s `reducedMotionPreferred()` reads
+ *  `matchMedia('(prefers-reduced-motion: reduce)')` and `css-renderer.ts`'s
+ *  `effectiveAnimation()` swaps `askl-anim-shimmer` for `askl-anim-pulse`.
+ *  None of that has run yet when a server-rendered skeleton first paints —
+ *  and it cannot be made to: `<AutoSkeleton.SSR>` and `NeutralSkeletonBlock`
+ *  are hook-free, DOM-read-free pure functions BY REQUIREMENT (REQ-SSR-4's
+ *  zero-hydration-mismatch mechanism is precisely that they read nothing that
+ *  could differ between server and client), so they hard-code
+ *  `askl-anim-shimmer` and a user who asked for reduced motion got a full
+ *  travelling sweep for the whole pre-hydration window.
+ *
+ *  CSS is therefore not a stylistic preference here, it is the only mechanism
+ *  that can express the degradation with zero JavaScript — which is the whole
+ *  point when nothing has hydrated.
+ *
+ *  Two deliberate scoping decisions:
+ *
+ *  1. It lives in the GENERATED SSR bundle, not in `buildShimmerStylesheet()`.
+ *     That function is shipped inside the `.` web entry and measured by
+ *     NFR-6; this bundle is a build artifact the consumer imports separately,
+ *     so the fix costs the runtime entry nothing. More importantly, the
+ *     runtime's authority over its own overlay stays with the JS path (which
+ *     also has to honour an explicit `animation` prop) instead of being split
+ *     across two mechanisms that could disagree.
+ *  2. The selectors are qualified by the SSR marker attributes, which makes
+ *     them (0,3,0) — strictly above the runtime stylesheet's (0,2,0)
+ *     `.askl-anim-shimmer .askl-shimmer-layer`. Source order between the two
+ *     is not knowable (the consumer imports `bundle.css` globally; the
+ *     runtime injects its `<style>` into `<head>` on first mount, i.e.
+ *     LATER), so relying on order would make this rule win or lose depending
+ *     on whether a live `<AutoSkeleton>` happened to mount first.
+ *
+ *  The degraded presentation is the opacity pulse rather than nothing at all,
+ *  matching `effectiveAnimation()`'s own choice exactly — the same
+ *  `askl-pulse` keyframes and the same `--askl-speed` custom property the
+ *  base stylesheet already defines, never a second animation implementation.
+ *
+ *  It targets `.askl-shimmer-layer` for the same reason the runtime rule in
+ *  `buildShimmerStylesheet()` does, and this block is where that defect was
+ *  originally COPIED from: it used to hide the shimmer layer and then pulse
+ *  `.askl-overlay-base`, an element with no background of any kind, so the
+ *  pre-hydration degradation was a perfectly-running animation over a
+ *  completely static block. Overriding `animation-name` (rather than hiding
+ *  one element and animating another) is also what keeps this a single
+ *  declaration that cannot half-apply: the sweep is replaced, not layered
+ *  over. */
+function reducedMotionBlock(): string {
+  const selectors = (child: string): string =>
+    SSR_OVERLAY_MARKERS.map((marker) => `.askl-overlay[${marker}] ${child}`).join(',');
+  return (
+    '@media (prefers-reduced-motion: reduce){' +
+    `${selectors('.askl-shimmer-layer')}{animation-name:askl-pulse;` +
+    'animation-timing-function:ease-in-out;animation-iteration-count:infinite;' +
+    'animation-duration:var(--askl-speed, 1400ms);transform:none;}' +
+    '}'
+  );
+}
+
 export interface BuildSsrCssBundleOptions {
   /** Substituted for any captured shape whose radius is `-1` ("rounded,
    *  amount unknown") — mirrors `buildClipPath`'s own `ClipPathOptions`. */
@@ -143,5 +214,8 @@ export function buildSsrCssBundle(manifest: AutoSkeletonSSRManifest, options: Bu
     `.askl-overlay[data-askl-ssr-key]:not([${SSR_BUILD_ATTRIBUTE}="${buildToken}"])` +
     `{height:${NEUTRAL_SKELETON_HEIGHT_PX}px;border-radius:${NEUTRAL_SKELETON_RADIUS_PX}px;clip-path:none;}`;
 
-  return [buildShimmerStylesheet(), tokenDeclaration, driftFallback, ...blocks].join('');
+  // `reducedMotionBlock()` goes LAST purely for readability — it wins on
+  // specificity (0,3,0 over the base stylesheet's 0,2,0), never on order, so
+  // an editor who inserts a new block above or below it cannot break it.
+  return [buildShimmerStylesheet(), tokenDeclaration, driftFallback, ...blocks, reducedMotionBlock()].join('');
 }

@@ -1,7 +1,11 @@
 package com.autoskeleton
 
 import android.content.res.Configuration
+import android.graphics.Color
+import android.view.View
+import android.view.ViewGroup
 import android.widget.FrameLayout
+import com.facebook.react.uimanager.BackgroundStyleApplicator
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -67,6 +71,22 @@ class AutoskeletonSensorTest {
         assertShapesMatch(measure("scrolled-ancestor"), "scrolled-ancestor")
     }
 
+    // MARK: - Scroll clipping
+    //
+    // The offset test above proves the sensor SUBTRACTS a scroll offset. It
+    // does not clip: a child scrolled past the viewport keeps its full frame
+    // and becomes a shape nobody can see. That is not only paint — those
+    // shapes are charged against `maxShapes`, so a long list can spend its
+    // whole budget below the fold and truncate the part actually on screen.
+    //
+    // The fixture holds all three cases on purpose. A fix that drops
+    // everything outside the viewport would pass with only the third leaf, and
+    // a fix that clips nothing would pass with only the first.
+    @Test
+    fun scrollContainerClipsChildrenToItsViewport() {
+        assertShapesMatch(measure("scroll-clipping"), "scroll-clipping")
+    }
+
     // MARK: - Container rule, both branches
 
     @Test
@@ -84,6 +104,65 @@ class AutoskeletonSensorTest {
         assertTrue(abs(shapes[0].y - expected[0].y) <= tolerance)
         assertTrue(abs(shapes[0].w - expected[0].w) <= tolerance)
         assertTrue(abs(shapes[0].h - expected[0].h) <= tolerance)
+    }
+
+    /**
+     * The container rule's THIRD branch, previously ungated on every platform
+     * even though all three implement it: a container that reserves real
+     * layout space but paints nothing of its own, and holds no detectable
+     * leaf, contributes NOTHING.
+     *
+     * Stated as a decision rather than an accident (2026-08-30). It was
+     * challenged as a possible defect, because a subtree written the natural
+     * way — `{data !== null && <Image />}` — is empty while loading, and its
+     * sized wrapper looks exactly like the thing a skeleton should cover. It
+     * is not a defect: a non-transparent background is the ONLY observable
+     * difference between a box that is content and a box that is structure,
+     * and transparent sized boxes are how every React Native layout expresses
+     * spacers, flex fillers, safe-area padding and gap shims. Emitting a shape
+     * for them would paint grey blocks over the gaps in every loading screen.
+     * The consumer-side answer is an always-mounted opaque slot, documented in
+     * `docs/image-pipeline.md`.
+     */
+    /**
+     * The iOS/Android parity case, and the one the null check could never see.
+     *
+     * `hasNonTransparentBackground` used to be `view.background != null`, justified
+     * by the fact that `BackgroundStyleApplicator.setBackgroundColor` collapses the
+     * drawable to null for a fully-transparent colour. That is true and it is
+     * incomplete: `setBorderRadius`, `setBorderWidth` and the ripple underlay ALSO
+     * create the composite drawable, with no fill whatsoever. So a
+     * `<View style={{ borderRadius: 12 }} />` spacer — no background at all —
+     * painted a grey block on Android and nothing on iOS, which reads
+     * `view.backgroundColor`'s alpha and correctly sees none.
+     *
+     * The existing `sizedButTransparent` fixture could not catch it: it goes
+     * through `setBackgroundColor`, so only the transparent-COLOUR half of the
+     * rule was ever pinned. This fixture sets a corner radius and no colour.
+     *
+     * The fixture is shared with `ios/Tests/SyntheticHierarchyBuilder.swift`, so
+     * the same JSON pins both platforms to the same answer.
+     */
+    @Test
+    fun roundedButUnfilledContainerWithNoLeavesEmitsNothing() {
+        val shapes = measure("container-rule-rounded-but-unfilled")
+        assertEquals(
+            "A rounded spacer with no fill paints nothing, so it must contribute no shape. " +
+                "RN gives it a non-null background drawable purely to carry the radius.",
+            0,
+            shapes.size,
+        )
+    }
+
+    @Test
+    fun sizedButTransparentContainerWithNoLeavesEmitsNothing() {
+        val shapes = measure("container-rule-sized-but-transparent")
+        assertEquals(
+            "A container that reserves layout space but paints nothing of its own, holding no " +
+                "detectable leaf, must contribute no shape — see this test's own doc comment.",
+            0,
+            shapes.size,
+        )
     }
 
     // MARK: - Ignore subtree
@@ -277,5 +356,112 @@ class AutoskeletonSensorTest {
         val sensor = AutoskeletonSensor()
         val result = sensor.measure(root)!!
         assertFalse(result.shapes.isNotEmpty() && result.shapes.any { it.source == AutoskeletonShapeSource.TEXT })
+    }
+
+    // MARK: - Depth cap (unbounded-recursion defect)
+
+    /** A singly-nested chain `depth` levels below `root`, where ONLY the deepest
+     *  view is paintable. Built programmatically rather than as a JSON fixture:
+     *  the interesting depths are in the hundreds, and a 400-level fixture file
+     *  would be unreadable and unmaintainable. Layout runs top-down in a second
+     *  pass, after the tree is assembled, because `addView` can reset a child's
+     *  bounds. */
+    private fun buildDeepChain(depth: Int): View {
+        val context = RuntimeEnvironment.getApplication()
+        val root = FrameLayout(context)
+        var current: ViewGroup = root
+        val chain = mutableListOf<View>(root)
+        for (i in 0 until depth) {
+            val child = FrameLayout(context)
+            current.addView(child)
+            chain.add(child)
+            current = child
+        }
+        BackgroundStyleApplicator.setBackgroundColor(current, Color.RED)
+        chain.forEach { it.layout(0, 0, 200, 200) }
+        return root
+    }
+
+    /** The defect: `traverse` recursed with no depth bound at all, so a deep
+     *  enough tree overflowed the stack before any other limit could stop it.
+     *  `overBudget()` cannot catch this — it is TIME-based, and a chain this
+     *  deep is traversed in well under the budget. Mirrors web's
+     *  `MAX_TRAVERSAL_DEPTH` contract: truncate and flag, never throw. */
+    @Test
+    fun depthCapReachedTruncatesAndFlagsDegraded() {
+        val root = buildDeepChain(400)
+        val sensor = AutoskeletonSensor()
+        val result = sensor.measure(root, AutoskeletonSensorOptions.defaults.copy(budgetMs = 1000.0))!!
+        assertTrue(
+            "expected DEPTH_CAP_REACHED, got ${result.degraded}",
+            result.degraded.contains(AutoskeletonDegradationFlag.DEPTH_CAP_REACHED),
+        )
+        // The one paintable view sits BELOW the cap, so truncation must drop it.
+        assertEquals(0, result.shapes.size)
+    }
+
+    /** Anti-vacuity for the test above: without this, a cap that fired on every
+     *  traversal — or a `buildDeepChain` that silently produced nothing
+     *  measurable — would still pass it. A chain well under the cap must
+     *  traverse to the bottom, flag nothing, and yield its one shape. */
+    @Test
+    fun depthUnderCapTraversesFullyAndFlagsNothing() {
+        val root = buildDeepChain(50)
+        val sensor = AutoskeletonSensor()
+        val result = sensor.measure(root, AutoskeletonSensorOptions.defaults.copy(budgetMs = 1000.0))!!
+        assertFalse(
+            "a 50-deep chain must not trip the depth cap, got ${result.degraded}",
+            result.degraded.contains(AutoskeletonDegradationFlag.DEPTH_CAP_REACHED),
+        )
+        assertEquals(1, result.shapes.size)
+    }
+
+    // MARK: - A transparent ROOT is still measurable
+
+    /** The hidden/transparent skip exists to keep incidental platform subviews
+     *  (a `ScrollView`'s indicators, which start hidden) out of the traversal.
+     *  It must not apply to the ROOT, because the root is not something the
+     *  sensor stumbled upon — it is the exact tree JS asked it to measure.
+     *
+     *  This is what lets a consumer hide the content WHILE it is measured,
+     *  which is the only way to stop the live content being on screen for the
+     *  frames before the skeleton exists (`test/native/mount-order.test.ts`
+     *  pins that sequence). Hiding it was previously self-defeating: the
+     *  traversal started at that same wrapper and refused it.
+     *
+     *  Web already behaves this way — `dom-sensor.ts` checks opacity per LEAF
+     *  and its comment records that "an `opacity: 0` CONTAINER still has its
+     *  descendants shaped" — so this also closes a platform divergence. */
+    @Test
+    fun aTransparentRootIsStillMeasured() {
+        val context = RuntimeEnvironment.getApplication()
+        val root = FrameLayout(context)
+        val child = FrameLayout(context)
+        root.addView(child)
+        BackgroundStyleApplicator.setBackgroundColor(child, Color.RED)
+        root.layout(0, 0, 200, 200)
+        child.layout(0, 0, 200, 200)
+        root.alpha = 0f
+
+        val result = AutoskeletonSensor().measure(root, AutoskeletonSensorOptions.defaults.copy(budgetMs = 1000.0))!!
+        assertEquals(1, result.shapes.size)
+    }
+
+    /** Anti-vacuity, and the other half of the rule: the exemption is for the
+     *  root ONLY. A transparent DESCENDANT contributes no visible pixels and
+     *  must still contribute no shape, or the skip would be gone entirely. */
+    @Test
+    fun aTransparentDescendantIsStillSkipped() {
+        val context = RuntimeEnvironment.getApplication()
+        val root = FrameLayout(context)
+        val child = FrameLayout(context)
+        root.addView(child)
+        BackgroundStyleApplicator.setBackgroundColor(child, Color.RED)
+        root.layout(0, 0, 200, 200)
+        child.layout(0, 0, 200, 200)
+        child.alpha = 0f
+
+        val result = AutoskeletonSensor().measure(root, AutoskeletonSensorOptions.defaults.copy(budgetMs = 1000.0))!!
+        assertEquals(0, result.shapes.size)
     }
 }

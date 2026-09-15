@@ -10,7 +10,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { decodeWire } from '../../src/core/wire';
-import { evictNativeShapes, fetchShapesOnce, JSI_SERIALIZATION_TRACE_SECTION } from '../../src/native/wire-bridge';
+import { fetchShapesOnce, JSI_SERIALIZATION_TRACE_SECTION } from '../../src/native/wire-bridge';
 
 function wireArrayFor(shapes: readonly (readonly [number, number, number, number, number])[]): number[] {
   const out: number[] = [1]; // WIRE_VERSION
@@ -96,16 +96,32 @@ describe('fetchShapesOnce (task 5.1 bridge)', () => {
   });
 });
 
-describe('evictNativeShapes (ADR-9 consistency)', () => {
-  it('forwards non-empty key lists to the native evictShapes method', () => {
-    const evictShapes = vi.fn();
-    evictNativeShapes({ evictShapes }, ['a', 'b']);
-    expect(evictShapes).toHaveBeenCalledWith(['a', 'b']);
+describe('fetchShapesOnce — a throwing native bridge fails OPEN (ADR-15 posture)', () => {
+  it('returns null instead of propagating a native getShapes exception', () => {
+    const getShapes = vi.fn(() => {
+      throw new Error('native traversal blew up');
+    });
+    expect(() => fetchShapesOnce({ getShapes }, 42, 'k' as never, CONFIG)).not.toThrow();
+    expect(fetchShapesOnce({ getShapes }, 42, 'k' as never, CONFIG)).toBeNull();
   });
 
-  it('does not call native evictShapes for an empty key list', () => {
-    const evictShapes = vi.fn();
-    evictNativeShapes({ evictShapes }, []);
-    expect(evictShapes).not.toHaveBeenCalled();
+  it('closes the JSI-serialization trace section even when the native call throws', () => {
+    const begin = vi.fn().mockReturnValue('token');
+    const end = vi.fn();
+    const getShapes = vi.fn(() => {
+      throw new Error('native traversal blew up');
+    });
+    fetchShapesOnce({ getShapes }, 1, 'k' as never, CONFIG, { begin, end });
+    expect(begin).toHaveBeenCalledWith(JSI_SERIALIZATION_TRACE_SECTION);
+    expect(end).toHaveBeenCalledWith(JSI_SERIALIZATION_TRACE_SECTION, 'token');
+  });
+
+  it('still fails open when the conversion of a hostile boxed payload throws', () => {
+    // `Float32Array.from` runs on a value that crossed the bridge. A boxed
+    // array whose element access throws is the same class of foreign-input
+    // hazard as the call itself, and must not escape either.
+    const hostile = { length: 2, get 0(): number { throw new Error('bad element'); } };
+    const getShapes = vi.fn().mockReturnValue(hostile as unknown as number[]);
+    expect(fetchShapesOnce({ getShapes }, 1, 'k' as never, CONFIG)).toBeNull();
   });
 });

@@ -200,6 +200,33 @@ test.describe('AutoSkeleton.SSR — RTL direction replay', () => {
     await page.waitForTimeout(200);
     expect(hydrationErrorsFrom(consoleTexts), consoleTexts.join('\n')).toEqual([]);
   });
+
+  // The assertion above proves the REPLAY is wired: the right snapshot is
+  // selected and hydration is clean. It says nothing about whether the page the
+  // skeleton stands in for is actually laid out right-to-left — and it was not.
+  //
+  // The route rendered an RTL skeleton over `<DashboardContent />`, the very same
+  // component the LTR route uses, with no writing direction anywhere. So the
+  // fallback was mirrored and the content that replaced it was not: the skeleton
+  // sat on the right, the real card appeared on the left. That is precisely the
+  // flash of wrong layout this library exists to prevent, demonstrated by the
+  // route whose job is to prove the opposite.
+  //
+  // The capture side was never in doubt — `cli/capture.ts` sets
+  // `document.documentElement.dir` before measuring, so the stored geometry is
+  // genuinely mirrored. Only the replay page forgot to adopt the direction it
+  // asked a skeleton for.
+  test('the content that replaces the RTL skeleton is itself laid out right-to-left', async ({ page }) => {
+    await page.goto(`${prodServer.baseURL}/dashboard-rtl`, { waitUntil: 'load' });
+    const heading = page.getByText('Q3 Revenue Dashboard');
+    await heading.waitFor({ state: 'visible', timeout: 5_000 });
+
+    const direction = await heading.evaluate((el) => getComputedStyle(el).direction);
+    expect(
+      direction,
+      'the skeleton replays mirrored geometry, so the content it hands over to must be mirrored too',
+    ).toBe('rtl');
+  });
 });
 
 test.describe('AutoSkeleton.SSR — ADR-12 uncaptured skeletonKey renders the SAME neutral block server AND client', () => {

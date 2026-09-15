@@ -1,26 +1,819 @@
+/* examples/next/app/globals.css
+ *
+ * The chrome's design tokens, and the one rule that shapes every value in it.
+ *
+ * THE RULE THAT OUTRANKS THE REST: the skeleton is the subject, so the chrome
+ * must recede and must never be mistaken for it. The library paints
+ * borderless, filled, neutral-grey, rounded, SHIMMERING rectangles (default
+ * ramp #e2e2e2 -> #f5f5f5). Therefore, in this app's chrome:
+ *
+ *   1. Never render a borderless filled grey block. Every chrome surface is
+ *      text, a hairline-bordered surface, or a small saturated-accent element.
+ *      The fill-without-a-border look is reserved for the library's output.
+ *   2. Chrome neutrals are tinted, never pure grey; dark surfaces are darker
+ *      than the page rather than a lighter grey card.
+ *   3. Never animate a gradient in chrome. Nothing shimmers on these pages
+ *      except the skeleton itself.
+ *   4. Every live demo area sits inside a bordered stage whose label names the
+ *      API under demonstration, so the reader always knows where "app" ends
+ *      and "library output" begins.
+ *   5. App chrome never declares --skl-* or --askl-*. Those namespaces belong
+ *      to the library; this file only ever writes --ui-*.
+ *
+ * SYNC PAIR: `examples/vite/src/styles/tokens.css` carries the same token
+ * block, duplicated by hand. The two apps have separate lockfiles and share no
+ * package, and twelve colours do not justify growing one — but they are one
+ * design system, so a value changed here must be changed there in the same
+ * commit.
+ *
+ * This app has no theme toggle (a toggle is a client component, and a client
+ * component is the one thing an app about server rendering should not need to
+ * change its colours), so the dark palette lives only under
+ * `prefers-color-scheme`. The vite app additionally redefines it under
+ * `html.dark`, where a toggle does exist.
+ */
+
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+  color-scheme: light dark;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  /* ---- Colour ------------------------------------------------------- */
+  --ui-bg: #f8f8f7;
+  --ui-surface: #ffffff;
+  --ui-stage: #ffffff;
+  --ui-ink: #1c1917;
+  --ui-ink-2: #57534e;
+  --ui-ink-3: #a8a29e;
+  --ui-line: #e7e5e4;
+  --ui-line-strong: #d6d3d1;
+  /* Violet is deliberate: far from both the skeleton's default grey ramp and
+     from every colour the theming demos paint, so nothing chrome-coloured is
+     ever read as a themed skeleton. */
+  --ui-accent: #7c3aed;
+  --ui-accent-soft: rgb(124 58 237 / 0.08);
+  --ui-code-bg: #f5f5f4;
+  --ui-danger: #b91c1c;
+
+  /* ---- Type --------------------------------------------------------- */
+  --ui-font-sans: system-ui, "Segoe UI", Roboto, sans-serif;
+  --ui-font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --ui-text-2xs: 0.6875rem; /* 11px — group labels, uppercase, +0.06em */
+  --ui-text-xs: 0.75rem; /*    12px — source code, readout values      */
+  --ui-text-sm: 0.8125rem; /*  13px — metrics, notes, nav items         */
+  --ui-text-md: 0.9375rem; /*  15px — body, claims                      */
+  --ui-text-lg: 1.25rem; /*    20px — demo titles                       */
+  --ui-text-xl: 1.5rem; /*     24px — group headers                     */
+  --ui-text-2xl: 2rem; /*      32px — hero h1, -0.02em                  */
+
+  --ui-leading-2xs: 1.4;
+  --ui-leading-xs: 1.5;
+  --ui-leading-sm: 1.55;
+  --ui-leading-md: 1.6;
+  --ui-leading-lg: 1.25;
+  --ui-leading-xl: 1.2;
+  --ui-leading-2xl: 1.15;
+
+  /* ---- Spacing (4px base) ------------------------------------------- */
+  --ui-sp-1: 4px;
+  --ui-sp-2: 8px;
+  --ui-sp-3: 12px;
+  --ui-sp-4: 16px;
+  --ui-sp-5: 24px;
+  --ui-sp-6: 32px;
+  --ui-sp-7: 48px;
+  --ui-sp-8: 64px;
+
+  /* ---- Radii -------------------------------------------------------- */
+  --ui-r-sm: 6px;
+  --ui-r-md: 10px;
+  --ui-r-lg: 14px;
+  --ui-r-pill: 999px;
+
+  /* The one measurement two places have to agree on: below it the sidebar is
+     hidden and the identity band becomes a sticky bar with a disclosure. CSS
+     custom properties cannot be used in a media query, so the number is
+     repeated literally at each `@media (min-width: 880px)` below — this token
+     exists so the intent has a name, not so the query can read it. */
+  --ui-sidebar-breakpoint: 880px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --ui-bg: #131316;
+    --ui-surface: #1b1b1f;
+    --ui-stage: #101013;
+    --ui-ink: #f4f4f5;
+    --ui-ink-2: #a1a1aa;
+    --ui-ink-3: #6f6f78;
+    --ui-line: #2a2a30;
+    --ui-line-strong: #3f3f46;
+    --ui-accent: #a78bfa;
+    --ui-accent-soft: rgb(167 139 250 / 0.14);
+    --ui-code-bg: #212127;
+    --ui-danger: #f87171;
   }
 }
 
+/* Tailwind's scale, remapped onto the tokens above rather than run alongside
+ * them. `inline` matters: it makes each utility emit `var(--ui-…)` instead of
+ * a snapshot of the light value, which is what lets one `prefers-color-scheme`
+ * block flip the whole app. Overriding the BUILT-IN names (`text-sm`,
+ * `rounded-lg`, `font-mono`) rather than adding parallel ones means the demo
+ * routes' existing utilities land on this scale without being rewritten to
+ * say the same thing in new words. */
+@theme inline {
+  --color-ui-bg: var(--ui-bg);
+  --color-ui-surface: var(--ui-surface);
+  --color-ui-stage: var(--ui-stage);
+  --color-ui-ink: var(--ui-ink);
+  --color-ui-ink-2: var(--ui-ink-2);
+  --color-ui-ink-3: var(--ui-ink-3);
+  --color-ui-line: var(--ui-line);
+  --color-ui-line-strong: var(--ui-line-strong);
+  --color-ui-accent: var(--ui-accent);
+  --color-ui-accent-soft: var(--ui-accent-soft);
+  --color-ui-code-bg: var(--ui-code-bg);
+  --color-ui-danger: var(--ui-danger);
+
+  --font-sans: var(--ui-font-sans);
+  --font-mono: var(--ui-font-mono);
+
+  --text-2xs: var(--ui-text-2xs);
+  --text-2xs--line-height: var(--ui-leading-2xs);
+  --text-xs: var(--ui-text-xs);
+  --text-xs--line-height: var(--ui-leading-xs);
+  --text-sm: var(--ui-text-sm);
+  --text-sm--line-height: var(--ui-leading-sm);
+  --text-md: var(--ui-text-md);
+  --text-md--line-height: var(--ui-leading-md);
+  --text-base: var(--ui-text-md);
+  --text-base--line-height: var(--ui-leading-md);
+  --text-lg: var(--ui-text-lg);
+  --text-lg--line-height: var(--ui-leading-lg);
+  --text-xl: var(--ui-text-xl);
+  --text-xl--line-height: var(--ui-leading-xl);
+  --text-2xl: var(--ui-text-2xl);
+  --text-2xl--line-height: var(--ui-leading-2xl);
+
+  --radius-sm: var(--ui-r-sm);
+  --radius-md: var(--ui-r-md);
+  --radius-lg: var(--ui-r-lg);
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--ui-bg);
+  color: var(--ui-ink);
+  font-family: var(--ui-font-sans);
+}
+
+/* Everything below is the app shell and the demo anatomy. It lives in
+ * `components` so a utility class on the same element still wins, and it is
+ * written as real CSS rather than as utility soup because the navigation is a
+ * CSS-ONLY `<details>` disclosure: this app ships no client component for
+ * navigation, so the open/closed states have to be expressible in a
+ * stylesheet. */
+@layer components {
+  /* ---- Shell -------------------------------------------------------- */
+  .ui-shell {
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+    flex: 1;
+  }
+
+  .ui-body {
+    display: flex;
+    align-items: flex-start;
+    flex: 1;
+  }
+
+  .ui-main {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .ui-page {
+    margin-inline: auto;
+    width: 100%;
+    max-width: 54rem;
+    padding: var(--ui-sp-7) var(--ui-sp-5) var(--ui-sp-8);
+  }
+
+  /* ---- Identity band ------------------------------------------------ */
+  /* `relative` at every width so the narrow-mode disclosure panel below can be
+     anchored to the band rather than to the viewport — which is what keeps the
+     summary that opened it visible, and therefore able to close it. */
+  .ui-band {
+    position: relative;
+    z-index: 40;
+    border-bottom: 1px solid var(--ui-line);
+    background: var(--ui-surface);
+  }
+
+  /* Below the sidebar breakpoint the band is the ONLY navigation on screen, so
+     it follows the reader down the page. Above it, the sidebar does that job
+     and a pinned band would only eat vertical room. */
+  @media (max-width: 879px) {
+    .ui-band {
+      position: sticky;
+      top: 0;
+    }
+  }
+
+  .ui-band-inner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ui-sp-3) var(--ui-sp-4);
+    padding: var(--ui-sp-3) var(--ui-sp-5);
+  }
+
+  .ui-brand {
+    display: flex;
+    align-items: center;
+    gap: var(--ui-sp-2);
+    font-size: var(--ui-text-sm);
+    line-height: var(--ui-leading-sm);
+    text-decoration: none;
+  }
+
+  /* The mark is static and stays static. §0's chrome rule forbids motion
+     anywhere the skeleton is not, and this one draws skeleton shapes of its
+     own, so a hover transform or a pulse here would be the exact confusion
+     that rule exists to prevent. */
+  .ui-brand-logo {
+    display: block;
+    flex: none;
+  }
+
+  /* Name and role keep their shared baseline; the logo is centred against the
+     pair rather than baseline-aligned. On a baseline the image's bottom edge
+     sits on the text baseline, so its box hangs above the line and grows the
+     band by more than its own height. */
+  .ui-brand-text {
+    display: flex;
+    align-items: baseline;
+    gap: var(--ui-sp-2);
+  }
+
+  .ui-brand-name {
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--ui-ink);
+  }
+
+  .ui-brand-role {
+    color: var(--ui-ink-3);
+  }
+
+  .ui-switcher {
+    display: flex;
+    align-items: center;
+    gap: var(--ui-sp-1);
+    margin-inline-start: auto;
+  }
+
+  .ui-switch {
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-r-pill);
+    padding: 3px 10px;
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-2xs);
+    line-height: var(--ui-leading-2xs);
+    color: var(--ui-ink-2);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .ui-switch:hover {
+    border-color: var(--ui-line-strong);
+    color: var(--ui-ink);
+  }
+
+  .ui-switch[aria-current="true"] {
+    border-color: var(--ui-accent);
+    background: var(--ui-accent-soft);
+    color: var(--ui-accent);
+  }
+
+  /* The local URL is stated rather than linked — neither sibling app can assume
+     the other's dev server is running. Dropped below the sidebar breakpoint,
+     where the band has to fit a brand, a disclosure and three pills. */
+  .ui-switch-note {
+    display: none;
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-2xs);
+    line-height: var(--ui-leading-2xs);
+    color: var(--ui-ink-3);
+    white-space: nowrap;
+  }
+
+  @media (min-width: 880px) {
+    .ui-switch-note {
+      display: inline;
+    }
+  }
+
+  /* ---- Grouped navigation ------------------------------------------- */
+  .ui-nav-group + .ui-nav-group {
+    margin-top: var(--ui-sp-5);
+  }
+
+  .ui-nav-group-title {
+    margin: 0 0 var(--ui-sp-2) 2px;
+    font-size: var(--ui-text-2xs);
+    line-height: var(--ui-leading-2xs);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ui-ink-3);
+  }
+
+  .ui-nav-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .ui-nav-link {
+    position: relative;
+    display: block;
+    padding: 6px var(--ui-sp-3);
+    border-radius: var(--ui-r-sm);
+    font-size: var(--ui-text-sm);
+    line-height: var(--ui-leading-sm);
+    color: var(--ui-ink-2);
+    text-decoration: none;
+  }
+
+  /* Colour only on hover — a grey fill behind a nav item is exactly the shape
+     the library paints, and §0.1 keeps that look for the skeleton. */
+  .ui-nav-link:hover {
+    color: var(--ui-ink);
+  }
+
+  .ui-nav-link[aria-current="page"] {
+    background: var(--ui-accent-soft);
+    color: var(--ui-ink);
+    font-weight: 600;
+  }
+
+  .ui-nav-link[aria-current="page"]::before {
+    content: "";
+    position: absolute;
+    inset-inline-start: 0;
+    top: 5px;
+    bottom: 5px;
+    width: 2px;
+    border-radius: 2px;
+    background: var(--ui-accent);
+  }
+
+  /* ---- Sidebar (>= 880px) ------------------------------------------- */
+  .ui-sidebar {
+    display: none;
+  }
+
+  @media (min-width: 880px) {
+    .ui-sidebar {
+      display: block;
+      flex: 0 0 15rem;
+      width: 15rem;
+      align-self: flex-start;
+      position: sticky;
+      top: 0;
+      max-height: 100vh;
+      overflow-y: auto;
+      padding: var(--ui-sp-6) var(--ui-sp-4);
+      border-inline-end: 1px solid var(--ui-line);
+    }
+  }
+
+  /* ---- Disclosure (< 880px) ----------------------------------------- */
+  .ui-disclosure {
+    position: static;
+  }
+
+  @media (min-width: 880px) {
+    .ui-disclosure {
+      display: none;
+    }
+  }
+
+  .ui-disclosure > summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    list-style: none;
+    cursor: pointer;
+    border: 1px solid var(--ui-line-strong);
+    border-radius: var(--ui-r-pill);
+    padding: 4px 12px;
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-2xs);
+    line-height: var(--ui-leading-2xs);
+    color: var(--ui-ink-2);
+  }
+
+  .ui-disclosure > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .ui-disclosure[open] > summary {
+    border-color: var(--ui-accent);
+    color: var(--ui-accent);
+  }
+
+  /* Anchored to the band (which is `position: relative`) rather than to the
+     viewport, so the summary that opened it stays visible and can close it.
+     The one shadow in this app: an overlay that scrolls over content needs to
+     read as being ABOVE it, and §4's flatness rule exempts exactly this. */
+  .ui-disclosure-panel {
+    position: absolute;
+    inset-inline: 0;
+    top: 100%;
+    max-height: calc(100dvh - 3.5rem);
+    overflow-y: auto;
+    padding: var(--ui-sp-5);
+    background: var(--ui-surface);
+    border-bottom: 1px solid var(--ui-line);
+    box-shadow: 0 12px 28px rgb(0 0 0 / 0.14);
+  }
+
+  /* ---- Demo anatomy ------------------------------------------------- */
+  .ui-kicker {
+    margin: 0;
+    font-size: var(--ui-text-2xs);
+    line-height: var(--ui-leading-2xs);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ui-ink-3);
+  }
+
+  .ui-title {
+    margin: var(--ui-sp-2) 0 0;
+    font-size: var(--ui-text-lg);
+    line-height: var(--ui-leading-lg);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--ui-ink);
+  }
+
+  .ui-path {
+    margin: var(--ui-sp-1) 0 0;
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-xs);
+    line-height: var(--ui-leading-xs);
+    color: var(--ui-ink-3);
+  }
+
+  .ui-claim {
+    margin: var(--ui-sp-3) 0 0;
+    max-width: 68ch;
+    font-size: var(--ui-text-md);
+    line-height: var(--ui-leading-md);
+    color: var(--ui-ink-2);
+  }
+
+  .ui-check {
+    margin: var(--ui-sp-4) 0 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: var(--ui-sp-2);
+    max-width: 68ch;
+  }
+
+  .ui-check > li {
+    position: relative;
+    padding-inline-start: var(--ui-sp-5);
+    font-size: var(--ui-text-sm);
+    line-height: var(--ui-leading-sm);
+    color: var(--ui-ink-2);
+  }
+
+  .ui-check > li::before {
+    content: "";
+    position: absolute;
+    inset-inline-start: 6px;
+    top: 0.55em;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--ui-accent);
+  }
+
+  .ui-control {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--ui-sp-2);
+    margin-top: var(--ui-sp-4);
+    border: 1px solid var(--ui-line-strong);
+    border-radius: var(--ui-r-pill);
+    padding: 7px 14px;
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-xs);
+    line-height: var(--ui-leading-xs);
+    color: var(--ui-ink);
+    text-decoration: none;
+  }
+
+  .ui-control:hover {
+    border-color: var(--ui-accent);
+    background: var(--ui-accent-soft);
+    color: var(--ui-accent);
+  }
+
+  .ui-control-hint {
+    color: var(--ui-ink-3);
+  }
+
+  /* ---- Stage -------------------------------------------------------- */
+  .ui-stage {
+    margin-top: var(--ui-sp-5);
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-r-lg);
+    background: var(--ui-stage);
+  }
+
+  .ui-stage + .ui-stage {
+    margin-top: var(--ui-sp-6);
+  }
+
+  .ui-stage-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--ui-sp-3);
+    padding: var(--ui-sp-3) var(--ui-sp-5);
+    border-bottom: 1px solid var(--ui-line);
+  }
+
+  .ui-stage-label {
+    margin: 0;
+    font-size: var(--ui-text-2xs);
+    line-height: var(--ui-leading-2xs);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ui-ink-2);
+  }
+
+  /* Names what is being demonstrated, so a screenshot of the stage is
+     self-explanatory about which side of the boundary it shows. */
+  .ui-stage-live {
+    flex: none;
+    border: 1px solid var(--ui-accent);
+    border-radius: var(--ui-r-pill);
+    padding: 1px 8px;
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-2xs);
+    line-height: var(--ui-leading-2xs);
+    color: var(--ui-accent);
+    white-space: nowrap;
+  }
+
+  .ui-stage-note {
+    margin: 0;
+    padding: var(--ui-sp-3) var(--ui-sp-5) 0;
+    max-width: 72ch;
+    font-size: var(--ui-text-sm);
+    line-height: var(--ui-leading-sm);
+    color: var(--ui-ink-2);
+  }
+
+  .ui-stage-body {
+    padding: var(--ui-sp-5);
+  }
+
+  /* ---- Readout ------------------------------------------------------ */
+  .ui-readout {
+    margin: var(--ui-sp-3) 0 0;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 2px var(--ui-sp-5);
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-r-md);
+    background: var(--ui-code-bg);
+    padding: var(--ui-sp-4);
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-xs);
+    line-height: var(--ui-leading-md);
+  }
+
+  @media (min-width: 640px) {
+    .ui-readout {
+      grid-template-columns: max-content 1fr;
+    }
+  }
+
+  .ui-readout dt {
+    color: var(--ui-ink-3);
+  }
+
+  .ui-readout dd {
+    margin: 0;
+    color: var(--ui-ink);
+    overflow-wrap: anywhere;
+  }
+
+  .ui-note {
+    margin: var(--ui-sp-5) 0 0;
+    max-width: 72ch;
+    font-size: var(--ui-text-sm);
+    line-height: var(--ui-leading-sm);
+    color: var(--ui-ink-2);
+  }
+
+  /* ---- Source ------------------------------------------------------- */
+  .ui-source {
+    margin-top: var(--ui-sp-8);
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-r-md);
+    background: var(--ui-surface);
+  }
+
+  .ui-source > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--ui-sp-3);
+    list-style: none;
+    cursor: pointer;
+    padding: var(--ui-sp-3) var(--ui-sp-4);
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-xs);
+    line-height: var(--ui-leading-xs);
+    color: var(--ui-ink-2);
+  }
+
+  .ui-source > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .ui-source[open] > summary {
+    border-bottom: 1px solid var(--ui-line);
+    color: var(--ui-ink);
+  }
+
+  .ui-source pre {
+    margin: 0;
+    max-height: 32rem;
+    overflow: auto;
+    padding: var(--ui-sp-4);
+    background: var(--ui-code-bg);
+    border-radius: 0 0 var(--ui-r-md) var(--ui-r-md);
+    font-size: var(--ui-text-xs);
+    line-height: var(--ui-leading-md);
+    color: var(--ui-ink);
+  }
+
+  /* ---- Index -------------------------------------------------------- */
+  .ui-hero-title {
+    margin: var(--ui-sp-3) 0 0;
+    font-size: var(--ui-text-2xl);
+    line-height: var(--ui-leading-2xl);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: var(--ui-ink);
+  }
+
+  .ui-lede {
+    margin: var(--ui-sp-4) 0 0;
+    max-width: 68ch;
+    font-size: var(--ui-text-md);
+    line-height: var(--ui-leading-md);
+    color: var(--ui-ink-2);
+  }
+
+  .ui-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ui-sp-3);
+    margin-top: var(--ui-sp-5);
+  }
+
+  /* Saturated, not grey: the one element on the index that is allowed to
+     compete for attention, and the fastest route to seeing the subject move. */
+  .ui-cta {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--ui-sp-2);
+    border: 1px solid var(--ui-accent);
+    border-radius: var(--ui-r-pill);
+    background: var(--ui-accent);
+    padding: 10px 18px;
+    font-size: var(--ui-text-sm);
+    line-height: var(--ui-leading-sm);
+    font-weight: 600;
+    color: var(--ui-bg);
+    text-decoration: none;
+  }
+
+  .ui-cta-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--ui-sp-2);
+    border: 1px solid var(--ui-line-strong);
+    border-radius: var(--ui-r-pill);
+    padding: 10px 18px;
+    font-size: var(--ui-text-sm);
+    line-height: var(--ui-leading-sm);
+    color: var(--ui-ink);
+    text-decoration: none;
+  }
+
+  .ui-cta-secondary:hover {
+    border-color: var(--ui-accent);
+    color: var(--ui-accent);
+  }
+
+  .ui-group {
+    margin-top: var(--ui-sp-7);
+  }
+
+  .ui-group-title {
+    margin: 0;
+    font-size: var(--ui-text-xl);
+    line-height: var(--ui-leading-xl);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--ui-ink);
+  }
+
+  .ui-group-lede {
+    margin: var(--ui-sp-2) 0 0;
+    max-width: 68ch;
+    font-size: var(--ui-text-sm);
+    line-height: var(--ui-leading-sm);
+    color: var(--ui-ink-2);
+  }
+
+  .ui-cards {
+    margin-top: var(--ui-sp-4);
+    display: grid;
+    gap: var(--ui-sp-3);
+  }
+
+  @media (min-width: 760px) {
+    .ui-cards {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  .ui-card {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-r-lg);
+    background: var(--ui-surface);
+    padding: var(--ui-sp-4);
+    text-decoration: none;
+  }
+
+  .ui-card:hover {
+    border-color: var(--ui-accent);
+  }
+
+  .ui-card-title {
+    margin: 0;
+    font-size: var(--ui-text-md);
+    line-height: var(--ui-leading-md);
+    font-weight: 600;
+    color: var(--ui-ink);
+  }
+
+  .ui-card-path {
+    margin: 2px 0 0;
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-2xs);
+    line-height: var(--ui-leading-2xs);
+    color: var(--ui-ink-3);
+  }
+
+  .ui-card-shows {
+    margin: var(--ui-sp-3) 0 0;
+    font-size: var(--ui-text-sm);
+    line-height: var(--ui-leading-sm);
+    color: var(--ui-ink-2);
+  }
+
+  .ui-card-control {
+    margin: var(--ui-sp-3) 0 0;
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-2xs);
+    line-height: var(--ui-leading-2xs);
+    color: var(--ui-accent);
+  }
+
+  .ui-footnote {
+    margin-top: var(--ui-sp-8);
+    border-top: 1px solid var(--ui-line);
+    padding-top: var(--ui-sp-5);
+  }
 }
